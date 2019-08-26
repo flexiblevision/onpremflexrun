@@ -2,14 +2,11 @@ apt update -y
 apt upgrade -y
 apt remove -y docker docker-engine docker.io containerd runc
 apt update -y
-apt-get install \
-    apt-transport-https \
-    ca-certificates \
-    curl \
-    gnupg-agent \
-    software-properties-common
+apt install apt-transport-https ca-certificates curl software-properties-common
 curl -fsSL https://download.docker.com/linux/ubuntu/gpg | apt-key add -
-apt-get install docker-ce docker-ce-cli containerd.io
+add-apt-repository "deb [arch=amd64] https://download.docker.com/linux/ubuntu bionic test"
+apt update
+apt install docker-ce
 docker volume ls -q -f driver=nvidia-docker | xargs -r -I{} -n1 docker ps -q -a -f volume={} | xargs -r docker rm -f
 curl -s -L https://nvidia.github.io/nvidia-docker/gpgkey | \
   apt-key add -
