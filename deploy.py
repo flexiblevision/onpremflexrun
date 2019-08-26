@@ -167,7 +167,6 @@ def main():
     time.sleep(2)
     if platform.system() == 'Linux':
         step_1()
-        containers_running()
         if check_connection():
             step_2()
             step_3()
