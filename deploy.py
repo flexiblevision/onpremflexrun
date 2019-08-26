@@ -93,7 +93,7 @@ def step_1():
     print("\033[0;33mChecking internet connection...\n")
     time.sleep(2)
     if check_connection():
-        print('\033[0;32mWi-Fi connected.')
+        print('\033[0;32mOnline.')
     else:
         setup_wifi()
     clear_text_color()
