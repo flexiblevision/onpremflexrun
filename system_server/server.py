@@ -9,6 +9,7 @@ from json import dumps
 import subprocess
 import os
 import datetime
+from auth import Auth
 
 from flask_cors import CORS
 from flask import jsonify
@@ -88,6 +89,7 @@ class CategoryIndex(Resource):
 #mock behavior of request route to get models data
 # --- will delete ----
 class Models(Resource):
+    @Auth.requires_auth
     def get(self):
         models = {
                     'test_model': ['1563658006967'],

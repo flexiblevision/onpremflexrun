@@ -1,7 +1,7 @@
 import json
 from functools import wraps
 
-from jose import jwt
+import jwt
 
 AUTH0_DOMAIN = 'dev-f5lvsxtw.auth0.com'
 ALGORITHMS = ["RS256"]
@@ -10,7 +10,7 @@ class Auth:
     def __init__(self):
         self.name = None
 
-    def get_token_auth_header():
+    def get_token_auth_header(self):
         """Obtains the Access Token from the Authorization Header
         """
         auth = request.headers.get("Authorization", None)
@@ -38,12 +38,12 @@ class Auth:
         token = parts[1]
         return token
 
-    def requires_auth(f):
+    def requires_auth(self, f):
         """Determines if the Access Token is valid
         """
         @wraps(f)
         def decorated(*args, **kwargs):
-            token = get_token_auth_header()
+            token = self.get_token_auth_header()
             jwks = None
             with open('./jwks.json') as data:
                 jwks = json.load(data)
