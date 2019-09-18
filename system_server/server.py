@@ -12,6 +12,7 @@ import os
 
 from flask_cors import CORS
 from flask import jsonify
+from Predict import run_inference_for_single_image as run_inference
 
 
 app = Flask(__name__)
@@ -64,11 +65,20 @@ class Networks(Resource):
         return os.system("nmcli dev wifi connect "+j['netName']+" password "+j['netPassword'])
 
 
+class Predict(Resource):
+    def post(self):
+        j = request.json
+        if 'image' in j:
+            return run_inference(j['image'])
+        return {}
+
+
 api.add_resource(Networks, '/networks')
 api.add_resource(AuthToken, '/auth_token')
 api.add_resource(Shutdown, '/shutdown')
 api.add_resource(Restart, '/restart')
 api.add_resource(Restart, '/upgrade')
+api.add_resource(Predict, '/predict')
 
 
 if __name__ == '__main__':
