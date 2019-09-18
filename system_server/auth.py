@@ -4,7 +4,6 @@ from functools import wraps
 from jose import jwt
 
 AUTH0_DOMAIN = 'dev-f5lvsxtw.auth0.com'
-API_AUDIENCE = YOUR_API_AUDIENCE
 ALGORITHMS = ["RS256"]
 
 class Auth:
