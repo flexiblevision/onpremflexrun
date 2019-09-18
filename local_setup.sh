@@ -30,8 +30,10 @@ docker run -p 0.0.0.0:80:3000 --restart unless-stopped \
     --name captureui -e CAPTURE_SERVER=http://capdev:5000 -d --network imagerie_nw \
      agoeckel/aarch64-onprem-frontend:latest
 
-docker run -p 8500:8500 -p 8501:8501 --runtime=nvidia --name localprediction  -d -e AWS_ACCESS_KEY_ID=imagerie -e AWS_SECRET_ACCESS_KEY=imagerie -e AWS_REGION=us-east-1 \
-    --restart unless-stopped --network imagerie_nw \
-    -t tensorflow/serving:1.12.0-gpu --model_config_file=/trained_models/model.config
+docker run -p 8500:8500 -p 8501:8501 --runtime=nvidia --name localprediction  -d -e AWS_ACCESS_KEY_ID=imagerie -e AWS_SECRET_ACCESS_KEY=imagerie -e AWS_REGION=us-east-1 -e MODEL_NAME=bottle_qc -e ENV_MODEL_BASE_PATH=/models/bottle_qc \
+    --restart unless-stopped --network imagerie_nw  \
+    -t localprediction:latest
+
+tensorflow_model_server --model_config_file=/models/model.config --model_config_poll_wait_seconds=60 --model_base_path=/models
 
 sh ./system_server.sh
