@@ -7,4 +7,5 @@ pip install Flask
 pip install Flask-RESTful
 pip install Flask-Cors
 pip install Flask-Jsonpify
-forever start -c python ./system_server/server.py
+python3  ./system_server/server.py
+

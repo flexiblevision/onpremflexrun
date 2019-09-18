@@ -6,29 +6,44 @@ from flask import Flask
 from flask_restful import Resource, Api
 import json
 from json import dumps
-
 import subprocess
 import os
+import datetime
 
 from flask_cors import CORS
 from flask import jsonify
+from pathlib import Path
 
+import os
+import sys
+import zipfile
+import base64
+import io
+import time
+from collections import defaultdict
+from io import StringIO
+from io import BytesIO
+sys.path.append("/home/fvonprem/Tensorflow/models/research")
+from object_detection.utils import label_map_util
 
 app = Flask(__name__)
 api = Api(app)
 
 CORS(app)
 
+BASE_PATH_TO_MODELS = '/xavier_ssd/models/' 
+NUM_CLASSES         = 99
+
 class Shutdown(Resource):
     def get(self):
         print('shutting down system')
-        os.system("power off")
+        os.system("shutdown -h now")
         return True
 
 class Restart(Resource):
     def get(self):
         print('restarting system')
-        os.system("reboot")
+        os.system("shudown -r now")
         return True
 
 class Upgrade(Resource):
@@ -36,7 +51,6 @@ class Upgrade(Resource):
         print('upgrading system')
         os.system("sh ./upgrade_system.sh")
         return True
-
 
 class AuthToken(Resource):
     def get(self):
@@ -63,13 +77,47 @@ class Networks(Resource):
         j = request.json
         return os.system("nmcli dev wifi connect "+j['netName']+" password "+j['netPassword'])
 
+class CategoryIndex(Resource):
+    def get(self, model, version):
+        path_to_model_labels = BASE_PATH_TO_MODELS + model + '/' + version + '/object-detection.pbtxt'
+        label_map            = label_map_util.load_labelmap(path_to_model_labels)
+        categories           = label_map_util.convert_label_map_to_categories(label_map, max_num_classes=NUM_CLASSES, use_display_name=True)
+        category_index       = label_map_util.create_category_index(categories)
+        return category_index
 
-api.add_resource(Networks, '/networks')
+#mock behavior of request route to get models data 
+# --- will delete ----
+class Models(Resource):
+    def get(self):
+        models = {
+                    'test_model': ['1563658006967'],
+                    'bottle_qc': ['1562884137051']
+                }
+        return models
+# --- will delete ---
+
+# mock download models behavior
+class DownloadModels(Resource):
+    def get(self):
+        # file_path will be replaced with a request to cloud server
+        file_path = '/xavier_ssd/models.zip'
+        with zipfile.ZipFile(file_path, 'r') as zip_ref:
+            zip_ref.extractall('/xavier_ssd')
+
+class PushModels(Resource):
+    def get(self):
+        os.system("docker cp /xavier_ssd/models localprediction:/")
+        return True 
+
 api.add_resource(AuthToken, '/auth_token')
+api.add_resource(Networks, '/networks')
 api.add_resource(Shutdown, '/shutdown')
 api.add_resource(Restart, '/restart')
-api.add_resource(Restart, '/upgrade')
-
+api.add_resource(Upgrade, '/upgrade')
+api.add_resource(CategoryIndex, '/category_index/<string:model>/<string:version>')
+api.add_resource(Models, '/models')
+api.add_resource(PushModels, '/push_models')
+api.add_resource(DownloadModels, '/download_models') 
 
 if __name__ == '__main__':
      app.run(host='0.0.0.0',port='5001')
