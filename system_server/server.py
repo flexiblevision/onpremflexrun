@@ -72,6 +72,22 @@ class Predict(Resource):
             return run_inference(j['image'])
         return {}
 
+class Stream(Resource):
+    def get(self,cam):
+        """
+        Streams the video from the designated camera.
+        """
+        print('calling stream for camera {}'.format(cam))
+        def kgen(cam):
+            """Video streaming generator function."""
+            while True:
+                frame = settings.camera.getstream(cam, request.host)
+
+                yield (b'--jpgboundary\r\n'
+                    b'Content-Type: image/jpeg\r\n\r\n' + bytearray(frame) + b'\r\n')
+        resp = Response(stream_with_context(kgen(cam)),mimetype='multipart/x-mixed-replace; boundary=--jpgboundary')
+        return resp
+
 
 api.add_resource(Networks, '/networks')
 api.add_resource(AuthToken, '/auth_token')
@@ -79,6 +95,7 @@ api.add_resource(Shutdown, '/shutdown')
 api.add_resource(Restart, '/restart')
 api.add_resource(Restart, '/upgrade')
 api.add_resource(Predict, '/predict')
+api.add_resource(Stream, '/stream/<int:cam>')
 
 
 if __name__ == '__main__':
