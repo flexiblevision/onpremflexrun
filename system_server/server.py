@@ -36,30 +36,35 @@ BASE_PATH_TO_MODELS = '/xavier_ssd/models/'
 NUM_CLASSES         = 99
 
 class Shutdown(Resource):
+    @auth.requires_auth
     def get(self):
         print('shutting down system')
         os.system("shutdown -h now")
         return True
 
 class Restart(Resource):
+    @auth.requires_auth
     def get(self):
         print('restarting system')
         os.system("shudown -r now")
         return True
 
 class Upgrade(Resource):
+    @auth.requires_auth
     def get(self):
         print('upgrading system')
         os.system("sh ./upgrade_system.sh")
         return True
 
 class AuthToken(Resource):
+    @auth.requires_auth
     def get(self):
         cmd = subprocess.Popen(['cat', 'creds.txt'], stdout=subprocess.PIPE)
         cmd_out, cmd_err = cmd.communicate()
         cleanStr = cmd_out.strip().decode("utf-8")
         if cleanStr: return cleanStr
 
+    @auth.requires_auth
     def post(self):
         j = request.json
         if j:
@@ -74,6 +79,7 @@ class Networks(Resource):
         for i,line in enumerate(networks.splitlines()): nets[i] = line.decode('utf-8')
         return nets
 
+    @auth.requires_auth
     def post(self):
         j = request.json
         return os.system("nmcli dev wifi connect "+j['netName']+" password "+j['netPassword'])
@@ -91,6 +97,7 @@ class CategoryIndex(Resource):
 class Models(Resource):
     @auth.requires_auth
     def get(self):
+        print(request.host)
         models = {
                     'test_model': ['1563658006967'],
                     'bottle_qc': ['1562884137051']
@@ -100,6 +107,7 @@ class Models(Resource):
 
 # mock download models behavior
 class DownloadModels(Resource):
+    @auth.requires_auth
     def get(self):
         # file_path will be replaced with a request to cloud server
         file_path = '/xavier_ssd/models.zip'
@@ -107,6 +115,7 @@ class DownloadModels(Resource):
             zip_ref.extractall('/xavier_ssd')
 
 class PushModels(Resource):
+    @auth.requires_auth
     def get(self):
         os.system("docker cp /xavier_ssd/models localprediction:/")
         return True

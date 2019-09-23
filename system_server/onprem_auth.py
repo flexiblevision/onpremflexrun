@@ -57,8 +57,14 @@ def requires_auth(f):
     @wraps(f)
     def decorated(*args, **kwargs):
         token = get_token_auth_header()
-        jsonurl = urlopen("http://localhost:5000/api/capture/auth/jwks")
+        #jwks = None
+        #with open('./jwks.json') as data:
+            #jwks = json.load(data)
+        jsonurl = urlopen("https://"+AUTH0_DOMAIN+"/.well-known/jwks.json")
         jwks = json.loads(jsonurl.read())
+        with open('jwks.json', 'w') as outfile:
+            json.dump(jwks, outfile)
+
         unverified_header = jwt.get_unverified_header(token)
         rsa_key = {}
         for key in jwks["keys"]:
