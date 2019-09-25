@@ -44,7 +44,7 @@ def clear_text_color():
     print("\033[0m")
 
 def containers_running():
-    containers = ['capdev', 'localprediction', 'captureui', 'gcs-s3']
+    containers = ['capdev', 'localprediction', 'captureui']
     running = []
     for container in containers:
         state = subprocess.Popen(

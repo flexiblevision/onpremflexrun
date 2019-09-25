@@ -1,10 +1,27 @@
 import json
 from functools import wraps
+from flask import Flask, request, jsonify, _request_ctx_stack
 
-import jwt
+from six.moves.urllib.request import urlopen
+from jose import jwt
 
 AUTH0_DOMAIN = 'dev-f5lvsxtw.auth0.com'
 ALGORITHMS = ["RS256"]
+CLIENT_ID  = 'h3m9VYXG5qR5RCuxr0JL4Qv1HJ5r1Pqi'
+
+APP = Flask(__name__)
+
+class AuthError(Exception):
+    def __init__(self, error, status_code):
+        self.error = error
+        self.status_code = status_code
+
+@APP.errorhandler(AuthError)
+def handle_auth_error(ex):
+    response = jsonify(ex.error)
+    response.status_code = ex.status_code
+
+    return response
 
 def get_token_auth_header():
     """Obtains the Access Token from the Authorization Header
@@ -40,10 +57,8 @@ def requires_auth(f):
     @wraps(f)
     def decorated(*args, **kwargs):
         token = get_token_auth_header()
-        jwks = None
-        with open('./jwks.json') as data:
-            jwks = json.load(data)
-        #jwks = json.loads(jsonurl.read())
+        jsonurl = urlopen("http://localhost:5000/api/capture/auth/jwks")
+        jwks = json.loads(jsonurl.read())
         unverified_header = jwt.get_unverified_header(token)
         rsa_key = {}
         for key in jwks["keys"]:
@@ -55,22 +70,20 @@ def requires_auth(f):
                     "n": key["n"],
                     "e": key["e"]
                 }
+        
         if rsa_key:
             try:
                 payload = jwt.decode(
                     token,
                     rsa_key,
                     algorithms=ALGORITHMS,
-                    issuer="https://"+AUTH0_DOMAIN+"/"
+                    audience=CLIENT_ID,
+                    issuer="https://"+AUTH0_DOMAIN+"/",
+                    options={'verify_exp': False}
                 )
             except jwt.ExpiredSignatureError:
                 raise AuthError({"code": "token_expired",
                                 "description": "token is expired"}, 401)
-            except jwt.JWTClaimsError:
-                raise AuthError({"code": "invalid_claims",
-                                "description":
-                                    "incorrect claims,"
-                                    "please check the audience and issuer"}, 401)
             except Exception:
                 raise AuthError({"code": "invalid_header",
                                 "description":
