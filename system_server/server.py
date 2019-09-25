@@ -24,8 +24,8 @@ import time
 from collections import defaultdict
 from io import StringIO
 from io import BytesIO
-sys.path.append("/home/fvonprem/Tensorflow/models/research")
-from object_detection.utils import label_map_util
+#sys.path.append("/home/fvonprem/Tensorflow/models/research")
+#from object_detection.utils import label_map_util
 
 app = Flask(__name__)
 api = Api(app)
@@ -90,10 +90,20 @@ class Networks(Resource):
 
 class CategoryIndex(Resource):
     def get(self, model, version):
-        path_to_model_labels = BASE_PATH_TO_MODELS + model + '/' + version + '/object-detection.pbtxt'
-        label_map            = label_map_util.load_labelmap(path_to_model_labels)
-        categories           = label_map_util.convert_label_map_to_categories(label_map, max_num_classes=NUM_CLASSES, use_display_name=True)
-        category_index       = label_map_util.create_category_index(categories)
+        path_to_model_labels = BASE_PATH_TO_MODELS + model + '/' + version + '/labels.json'
+        #label_map            = label_map_util.load_labelmap(path_to_model_labels)
+        #categories           = label_map_util.convert_label_map_to_categories(label_map, max_num_classes=NUM_CLASSES, use_display_name=True)
+        #category_index       = label_map_util.create_category_index(categories)
+        labels = None
+        with open(path_to_model_labels) as data:
+            labels = json.load(data)
+
+        category_index = {}
+        for label in labels:
+            label_id = labels[label]
+            category_index[label_id] = {"id": label_id, "name": label}
+
+        print(category_index)
         return category_index
 
 #mock behavior of request route to get models data
