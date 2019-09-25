@@ -78,7 +78,8 @@ def requires_auth(f):
                     rsa_key,
                     algorithms=ALGORITHMS,
                     audience=CLIENT_ID,
-                    issuer="https://"+AUTH0_DOMAIN+"/"
+                    issuer="https://"+AUTH0_DOMAIN+"/",
+                    options={'verify_exp': False}
                 )
             except jwt.ExpiredSignatureError:
                 raise AuthError({"code": "token_expired",

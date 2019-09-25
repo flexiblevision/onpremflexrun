@@ -31,9 +31,13 @@ app = Flask(__name__)
 api = Api(app)
 
 CORS(app)
-
-BASE_PATH_TO_MODELS = '/xavier_ssd/models/'
 NUM_CLASSES         = 99
+
+def base_path():
+    #mounted memory to ssd
+    xavier_ssd = '/xavier_ssd/'
+    return xavier_ssd if os.path.exists(xavier_ssd) else '/'
+BASE_PATH_TO_MODELS = base_path()+'models/'
 
 class Shutdown(Resource):
     @auth.requires_auth
@@ -110,14 +114,14 @@ class DownloadModels(Resource):
     @auth.requires_auth
     def get(self):
         # file_path will be replaced with a request to cloud server
-        file_path = '/xavier_ssd/models.zip'
+        file_path = base_path()+'models.zip'
         with zipfile.ZipFile(file_path, 'r') as zip_ref:
-            zip_ref.extractall('/xavier_ssd')
+            zip_ref.extractall(base_path())
 
 class PushModels(Resource):
     @auth.requires_auth
     def get(self):
-        os.system("docker cp /xavier_ssd/models localprediction:/")
+        os.system("docker cp "+base_path()+"models localprediction:/")
         return True
 
 api.add_resource(AuthToken, '/auth_token')
