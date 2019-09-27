@@ -103,7 +103,6 @@ class CategoryIndex(Resource):
             label_id = labels[label]
             category_index[label_id] = {"id": label_id, "name": label}
 
-        print(category_index)
         return category_index
 
 #mock behavior of request route to get models data
@@ -134,6 +133,13 @@ class PushModels(Resource):
         os.system("docker cp "+base_path()+"models localprediction:/")
         return True
 
+class SystemVersion(Resource):
+    def get(self): 
+        cmd = subprocess.Popen(['docker', 'inspect', "--format='{{.Config.Image}}'", 'capdev'], stdout=subprocess.PIPE)
+        cmd_out, cmd_err = cmd.communicate()
+        data = cmd_out.strip().decode("utf-8").split(':')[1].replace("'", "")
+        return data
+
 api.add_resource(AuthToken, '/auth_token')
 api.add_resource(Networks, '/networks')
 api.add_resource(Shutdown, '/shutdown')
@@ -143,6 +149,7 @@ api.add_resource(CategoryIndex, '/category_index/<string:model>/<string:version>
 api.add_resource(Models, '/models')
 api.add_resource(PushModels, '/push_models')
 api.add_resource(DownloadModels, '/download_models')
+api.add_resource(SystemVersion, '/system_version')
 
 if __name__ == '__main__':
      app.run(host='0.0.0.0',port='5001')
