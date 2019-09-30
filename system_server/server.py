@@ -31,7 +31,7 @@ api = Api(app)
 
 CORS(app)
 NUM_CLASSES = 99
-CONTAINERS  = ['capdev', 'captureui', 'localprediction']
+CONTAINERS  = {'backend':'capdev', 'frontend':'captureui', 'predict':'localprediction']
 
 def base_path():
     #mounted memory to ssd
@@ -47,12 +47,18 @@ def get_current_container_version(container):
 
 def parse_latest_tag(repo_tags, container):
     tags = []
-    for repo in repo_tags['results']: 
-        if repo['name'] != 'latest': tags.append(float(repo['name']))
+    if 'results' in repo_tags:
+        for repo in repo_tags['results']: 
+            if repo['name'] != 'latest': tags.append(float(repo['name']))
+    else:
+        print(container + ' version not found - returning true')
+        return True
 
     latest_version = sorted(tags,key=float,reverse=True)[0]
-    system_version = get_current_container_version(container)
-    return latest_version == system_version
+    system_version = get_current_container_version(CONTAINERS[container])
+    is_up_to_date  = latest_version == system_version
+    upgrade_to_version = latest_version if is_up_to_date==False else True
+    return (is_up_to_date, upgrade_to_version)
 
 def is_container_uptodate(container):
     repo_tags = requests.get('https://registry.hub.docker.com/v2/repositories/fvonprem/arm-'+container+'/tags/').json()
@@ -75,10 +81,10 @@ class Restart(Resource):
 class Upgrade(Resource):
     @auth.requires_auth
     def get(self):
-        cap_uptd   = is_container_uptodate('capdev')
-        capui_uptd = is_container_uptodate('captureui')
-        predict_uptd = is_container_uptodate('localprediction')
-        os.system("sh ./upgrade_system.sh cap_uptd capui_uptd prdict_uptd")
+        cap_uptd   = is_container_uptodate('backend')[1]
+        capui_uptd = is_container_uptodate('frontend')[1]
+        predict_uptd = is_container_uptodate('predict')[1]
+        os.system("sh ./upgrade_system.sh "+str(cap_uptd)+" "+str(capui_uptd)+" "+str(prdict_uptd))
 
 class AuthToken(Resource):
     @auth.requires_auth
@@ -162,7 +168,7 @@ class SystemVersions(Resource):
 
 class SystemIsUptodate(Resource):
     def get(self):
-        return all([is_container_uptodate('capdev'), is_container_uptodate('captureui'), is_container_uptodate('localprediction')])
+        return all([is_container_uptodate('capdev')[0], is_container_uptodate('captureui')[0], is_container_uptodate('localprediction')[0]])
 
 
 api.add_resource(AuthToken, '/auth_token')
