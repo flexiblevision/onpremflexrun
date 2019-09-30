@@ -4,6 +4,7 @@ apt-get -y install nodejs
 apt-get -y install npm
 apt-get -y install 
 npm install forever -g
+pip install requests
 pip install python-jose
 pip install Flask
 pip install Flask-RESTful
