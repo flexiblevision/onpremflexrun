@@ -78,7 +78,7 @@ class Upgrade(Resource):
         cap_uptd   = is_container_uptodate('capdev')
         capui_uptd = is_container_uptodate('captureui')
         predict_uptd = is_container_uptodate('localprediction')
-        os.system("sh ./upgrade_system.sh" cap_uptd capui_uptd prdict_uptd)
+        os.system("sh ./upgrade_system.sh cap_uptd capui_uptd prdict_uptd")
 
 class AuthToken(Resource):
     @auth.requires_auth
