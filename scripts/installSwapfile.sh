@@ -9,7 +9,7 @@ SWAPDIRECTORY="/mnt"
 # You can use 1 or 2 if need be
 SWAPSIZE=6
 AUTOMOUNT="Y"
-function usage
+usage()
 {
     echo "usage: installSwapFile [[[-d directory ] [-s size] -a] | [-h]]"
     echo "  -d | --dir <directoryname>   Directory to place swapfile ( default: /mnt)"
