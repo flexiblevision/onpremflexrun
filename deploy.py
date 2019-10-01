@@ -103,8 +103,8 @@ def step_2():
     print("\033[0;36mStep (2/3) Pulling latest software & creating enviornment.")
     clear_text_color()
     time.sleep(2)
-    backend_version = is_container_uptodate('frontend')[1]
-    frontend_version = is_container_uptodate('backend')[1]
+    backend_version = is_container_uptodate('backend')[1]
+    frontend_version = is_container_uptodate('frontend')[1]
     prediction_version = is_container_uptodate('prediction')[1]
     subprocess.call(["sh", "./scripts/local_setup.sh", backend_version, frontend_version, prediction_version])
 
