@@ -6,7 +6,7 @@ import http.client
 import json
 import time
 import platform
-from system_server.server import is_container_uptodate
+from version_check import is_container_uptodate
 
 # def deploy_local_cam():
 #     check_gcp_login()
