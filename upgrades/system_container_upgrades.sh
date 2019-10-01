@@ -5,8 +5,8 @@ SYSTEM_ARCH=$4
 
 if [ $CAP_UPTD != 'True' ]; then
     #copy user data to local device
-    docker cp capdev:/fvonprem/db.json /
-    docker cp capdev:/fvonprem/cameras.json /
+    docker cp capdev:/fvbackend/db.json /
+    docker cp capdev:/fvbackend/cameras.json /
 
     # update capdev
     docker stop capdev
@@ -16,8 +16,8 @@ if [ $CAP_UPTD != 'True' ]; then
         -d fvonprem/$4-backend:$CAP_UPTD
 
     #upload copied user data back to new container
-    docker cp /db.json capdev:/fvonprem/
-    docker cp /cameras.json capdev:/fvonprem/
+    docker cp /db.json capdev:/fvbackend/
+    docker cp /cameras.json capdev:/fvbackend/
 fi
 
 if [ $CAPUI_UPTD != 'True' ]; then
