@@ -40,7 +40,6 @@ def base_path():
     return xavier_ssd if os.path.exists(xavier_ssd) else '/'
 BASE_PATH_TO_MODELS = base_path()+'models/'
 
-
 class Shutdown(Resource):
     @auth.requires_auth
     def get(self):
