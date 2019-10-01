@@ -3,10 +3,10 @@ CAPUI_UPTD=$2
 PREDICT_UPTD=$3
 SYSTEM_ARCH=$4
 
-if [ ! CAP_UPTD=='True' ]; then
+if [ $CAP_UPTD != 'True' ]; then
     #copy user data to local device
-    docker cp capdev:/fvonprem/db.json /
-    docker cp capdev:/fvonprem/cameras.json /
+    docker cp capdev:/fvbackend/db.json /
+    docker cp capdev:/fvbackend/cameras.json /
 
     # update capdev
     docker stop capdev
@@ -16,11 +16,11 @@ if [ ! CAP_UPTD=='True' ]; then
         -d fvonprem/$4-backend:$CAP_UPTD
 
     #upload copied user data back to new container
-    docker cp /db.json capdev:/fvonprem/
-    docker cp /cameras.json capdev:/fvonprem/
+    docker cp /db.json capdev:/fvbackend/
+    docker cp /cameras.json capdev:/fvbackend/
 fi
 
-if [ ! CAPUI_UPTD=='True' ]; then
+if [ $CAPUI_UPTD != 'True' ]; then
     # update captureui
     docker stop captureui
     docker rm captureui
@@ -29,8 +29,8 @@ if [ ! CAPUI_UPTD=='True' ]; then
         fvonprem/$4-frontend:$CAPUI_UPTD
 fi
 
-if [ ! PREDICT_UPTD=='True' ]; then
-    update localprediction
+if [ $PREDICT_UPTD != 'True' ]; then
+    #update localprediction
     docker stop localprediction
     docker rm localprediction
     docker run -p 8500:8500 -p 8501:8501 --runtime=nvidia --name localprediction  -d -e AWS_ACCESS_KEY_ID=imagerie -e AWS_SECRET_ACCESS_KEY=imagerie -e AWS_REGION=us-east-1 \

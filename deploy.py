@@ -6,6 +6,7 @@ import http.client
 import json
 import time
 import platform
+from system_server.server import is_container_uptodate
 
 # def deploy_local_cam():
 #     check_gcp_login()
@@ -102,13 +103,16 @@ def step_2():
     print("\033[0;36mStep (2/3) Pulling latest software & creating enviornment.")
     clear_text_color()
     time.sleep(2)
-    subprocess.call(["sh", "./scripts/local_setup.sh"])
+    backend_version = is_container_uptodate('frontend')
+    frontend_version = is_container_uptodate('backend')
+    prediction_version = is_container_uptodate('prediction')
+    subprocess.call(["sh", "./scripts/local_setup.sh "+backend_version+" "+frontend_version+" "+prediction_version])
 
 def step_3():
     if containers_running():
         print("\033[0;36mStep (3/3) Launch application & setup device.")
         clear_text_color()
-        print("Launch - http://localhost:3000")
+        print("Launch - http://<host ip>")
     else:
         print("\033[0;31m Step 2 did not complete, please retry setup.")
         clear_text_color()
