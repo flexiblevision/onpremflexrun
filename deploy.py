@@ -103,10 +103,10 @@ def step_2():
     print("\033[0;36mStep (2/3) Pulling latest software & creating enviornment.")
     clear_text_color()
     time.sleep(2)
-    backend_version = is_container_uptodate('frontend')
-    frontend_version = is_container_uptodate('backend')
-    prediction_version = is_container_uptodate('prediction')
-    subprocess.call(["sh", "./scripts/local_setup.sh "+backend_version+" "+frontend_version+" "+prediction_version])
+    backend_version = is_container_uptodate('frontend')[1]
+    frontend_version = is_container_uptodate('backend')[1]
+    prediction_version = is_container_uptodate('prediction')[1]
+    subprocess.call(["sh", "./scripts/local_setup.sh", backend_version, frontend_version, prediction_version])
 
 def step_3():
     if containers_running():
@@ -120,7 +120,7 @@ def step_3():
 
 # WIFI LOGIC-----------------
 def display_connection_results():
-    print('\033[0;32mWi-Fi connected.') if check_connection() else print('\033[0;31mWi-Fi not connected.')
+    print('\033[0;32mInternet connected.') if check_connection() else print('\033[0;31mInternet not connected.')
     clear_text_color()
 
 def check_connection():

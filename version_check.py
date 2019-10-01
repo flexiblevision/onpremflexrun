@@ -1,13 +1,15 @@
 import requests
 import subprocess
 
+CONTAINERS  = {'backend':'capdev', 'frontend':'captureui', 'prediction':'localprediction'}
+
 def get_current_container_version(container):
     cmd = subprocess.Popen(['docker', 'inspect', "--format='{{.Config.Image}}'", container], stdout=subprocess.PIPE)
     cmd_out, cmd_err = cmd.communicate()
     if cmd_err:
         print(cmd_err)
         return False
-    base_data = cmd_out.strip.decode("utf-8")
+    base_data = cmd_out.strip().decode("utf-8")
     if not base_data: return False
     data = base_data.split(':')[1].replace("'", "")
     return data
@@ -21,7 +23,7 @@ def parse_latest_tag(repo_tags, container):
             if repo['name'] != 'latest': tags.append(repo['name'])
     else:
         print(container + ' version not found - returning true')
-        return (True,True)
+        return (True,str(True))
 
     latest_version = tags[0]
     system_version = get_current_container_version(CONTAINERS[container])
