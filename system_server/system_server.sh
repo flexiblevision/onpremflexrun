@@ -11,7 +11,8 @@ pip install Flask-RESTful
 pip install Flask-Cors
 pip install Flask-Jsonpify
 
-cp ./scripts/fv_system_server_start.sh /etc/init.d/
+chmod 777 ./fv_system_server_start.sh
+cp ./fv_system_server_start.sh /etc/init.d/
 update-rc.d fv_system_server_start.sh defaults
-forever start -c python3 ./system_server/server.py
+forever start -c python3 ./server.py
 
