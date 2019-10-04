@@ -11,8 +11,8 @@ pip install Flask-RESTful
 pip install Flask-Cors
 pip install Flask-Jsonpify
 
-chmod 777 ./fv_system_server_start.sh
-cp ./fv_system_server_start.sh /etc/init.d/
-update-rc.d fv_system_server_start.sh defaults
+echo "home=$HOME\n$(cat $HOME/flex-run/scripts/fv_system_server_start.sh)" > $HOME/flex-run/scripts/fv_system_server_start.sh
+chmod +x ../scripts/fv_system_server_start.sh
+echo '@reboot sudo sh '$HOME'/flex-run/scripts/fv_system_server_start.sh' | sudo crontab -u root -
 forever start -c python3 ./server.py
 
