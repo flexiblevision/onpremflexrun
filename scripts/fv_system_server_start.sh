@@ -1,1 +1,1 @@
-forever start -c python3 ./system_server/server.py
+forever start -c python3 $home/flex-run/system_server/server.py

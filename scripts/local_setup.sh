@@ -9,4 +9,5 @@ elif [ "$ARCH" = "x86_64" ]; then
     sh ./setup/system_setup.sh $1 $2 $3 'x86'
 fi
 
-sh ./system_server.sh
+chmod +x ./system_server/system_server.sh
+sh ./system_server/system_server.sh
