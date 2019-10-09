@@ -10,6 +10,8 @@ pip install Flask
 pip install Flask-RESTful
 pip install Flask-Cors
 pip install Flask-Jsonpify
+pip install redis
+pip install rq
 
 echo "home=$HOME\n$(cat $HOME/flex-run/scripts/fv_system_server_start.sh)" > $HOME/flex-run/scripts/fv_system_server_start.sh
 chmod +x ../scripts/fv_system_server_start.sh
