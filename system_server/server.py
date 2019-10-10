@@ -31,7 +31,6 @@ from worker_scripts.retrieve_models import retrieve_models
 from redis import Redis
 from rq import Queue, Worker, Connection
 from rq.job import Job
-#from worker_scripts.worker import conn
 
 app = Flask(__name__)
 api = Api(app)
@@ -102,33 +101,27 @@ class Networks(Resource):
 class CategoryIndex(Resource):
     def get(self, model, version):
         # category index will now be created from the job.json file 
-        # read in json file and parse the categories array to create the category_index 
+        # read in json file and parse the labelmap_dict to create the category_index 
 
-        path_to_model_labels = BASE_PATH_TO_MODELS + model + '/' + version + '/labels.json' 
+        path_to_model_labels = BASE_PATH_TO_MODELS + model + '/' + version + '/job.json' 
         labels = None
         with open(path_to_model_labels) as data:
-            labels = json.load(data)
-
+            labels = json.load(data)['labelmap_dict']
+        
         category_index = {}
-        for label in labels:
-            label_id = labels[label]
-            category_index[label_id] = {"id": label_id, "name": label}
+        for key in labels.keys():
+            _id = labels[key]
+            category_index[_id] = {"id": _id, "name": key}
 
         return category_index
 
 class DownloadModels(Resource):
     @auth.requires_auth
     def post(self):
-        data = request.json
-        job = job_queue.enqueue(retrieve_models, data, job_timeout=-1, result_ttl=-1)
-        print(job)
-        return True
-
-#class PushModels(Resource):
-    #@auth.requires_auth
-    #def get(self):
-        #os.system("docker cp "+base_path()+"models localprediction:/")
-        #return True
+        data           = request.json 
+        access_token   = request.headers.get('Access-Token')
+        job_queue.enqueue(retrieve_models, data, access_token, job_timeout=-1, result_ttl=-1)
+        return True 
 
 class SystemVersions(Resource):
     def get(self):
@@ -151,7 +144,6 @@ api.add_resource(Shutdown, '/shutdown')
 api.add_resource(Restart, '/restart')
 api.add_resource(Upgrade, '/upgrade')
 api.add_resource(CategoryIndex, '/category_index/<string:model>/<string:version>')
-#api.add_resource(PushModels, '/push_models')
 api.add_resource(DownloadModels, '/download_models')
 api.add_resource(SystemVersions, '/system_versions')
 api.add_resource(SystemIsUptodate, '/system_uptodate')

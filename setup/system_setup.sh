@@ -2,6 +2,12 @@ CAPDEV_VERSION=$1
 CAPTUREUI_VERSION=$2
 PREDICTION_VERSION=$3
 SYSTEM_ARCH=$4
+REDIS_VERSION='5.0.6'
+MONGO_VERSION='4.2'
+
+docker run -d -p 0.0.0.0:6379:6379 --restart unless-stopped --name redis redis:$REDIS_VERSION
+
+docker run -d -p 27017:27017 --name mongo mongo:$MONGO_VERSION
 
 docker run -d --name=capdev -p 0.0.0.0:5000:5000 --restart unless-stopped --privileged -v /dev:/dev -v /sys:/sys \
     --network imagerie_nw -e ACCESS_KEY=imagerie -e SECRET_KEY=imagerie \
