@@ -10,9 +10,19 @@ pip install Flask
 pip install Flask-RESTful
 pip install Flask-Cors
 pip install Flask-Jsonpify
+pip install redis
+pip install pymongo
+pip install rq
 
 echo "home=$HOME\n$(cat $HOME/flex-run/scripts/fv_system_server_start.sh)" > $HOME/flex-run/scripts/fv_system_server_start.sh
+echo "home=$HOME\n$(cat $HOME/flex-run/scripts/worker_server_start.sh)" > $HOME/flex-run/scripts/worker_server_start.sh
+
 chmod +x ../scripts/fv_system_server_start.sh
+chmod +x ../scripts/worker_server_start.sh
+
 echo '@reboot sudo sh '$HOME'/flex-run/scripts/fv_system_server_start.sh' | sudo crontab -u root -
+echo '@reboot sudo sh '$HOME'/flex-run/scripts/worker_server_start.sh' | sudo crontab -u root -
+
 forever start -c python3 ./server.py
+forever start -c python3 ./worker.py
 

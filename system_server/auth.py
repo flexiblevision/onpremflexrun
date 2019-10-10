@@ -5,9 +5,9 @@ from flask import Flask, request, jsonify, _request_ctx_stack
 from six.moves.urllib.request import urlopen
 from jose import jwt
 
-AUTH0_DOMAIN = 'dev-f5lvsxtw.auth0.com'
+AUTH0_DOMAIN = 'flexiblevision.auth0.com'
 ALGORITHMS = ["RS256"]
-CLIENT_ID  = 'h3m9VYXG5qR5RCuxr0JL4Qv1HJ5r1Pqi'
+CLIENT_ID  = '512rYG6XL32k3uiFg38HQ8fyubOOUUKf'
 
 APP = Flask(__name__)
 

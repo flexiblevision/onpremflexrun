@@ -18,7 +18,7 @@ from pathlib import Path
 
 import os
 import sys
-import zipfile
+import zipfile, io
 import base64
 import io
 import time
@@ -26,18 +26,26 @@ from collections import defaultdict
 from io import StringIO
 from io import BytesIO
 from version_check import *
+from worker_scripts.retrieve_models import retrieve_models
+
+from redis import Redis
+from rq import Queue, Worker, Connection
+from rq.job import Job
 
 app = Flask(__name__)
 api = Api(app)
 
 CORS(app)
 NUM_CLASSES = 99
+redis_con   = Redis('localhost', 6379, password=None)
+job_queue   = Queue('default', connection=redis_con)
 CONTAINERS  = {'backend':'capdev', 'frontend':'captureui', 'prediction':'localprediction'}
 
 def base_path():
     #mounted memory to ssd
     xavier_ssd = '/xavier_ssd/'
     return xavier_ssd if os.path.exists(xavier_ssd) else '/'
+
 BASE_PATH_TO_MODELS = base_path()+'models/'
 
 class Shutdown(Resource):
@@ -92,45 +100,28 @@ class Networks(Resource):
 
 class CategoryIndex(Resource):
     def get(self, model, version):
-        path_to_model_labels = BASE_PATH_TO_MODELS + model + '/' + version + '/labels.json' 
+        # category index will now be created from the job.json file 
+        # read in json file and parse the labelmap_dict to create the category_index 
+
+        path_to_model_labels = BASE_PATH_TO_MODELS + model + '/' + version + '/job.json' 
         labels = None
         with open(path_to_model_labels) as data:
-            labels = json.load(data)
-
+            labels = json.load(data)['labelmap_dict']
+        
         category_index = {}
-        for label in labels:
-            label_id = labels[label]
-            category_index[label_id] = {"id": label_id, "name": label}
+        for key in labels.keys():
+            _id = labels[key]
+            category_index[_id] = {"id": _id, "name": key}
 
         return category_index
 
-#mock behavior of request route to get models data
-# --- will delete ----
-class Models(Resource):
-    @auth.requires_auth
-    def get(self):
-        print(request.host)
-        models = {
-                    'test_model': ['1563658006967'],
-                    'bottle_qc': ['1562884137051']
-                }
-        return models
-# --- will delete ---
-
-# mock download models behavior
 class DownloadModels(Resource):
     @auth.requires_auth
-    def get(self):
-        # file_path will be replaced with a request to cloud server
-        file_path = base_path()+'models.zip'
-        with zipfile.ZipFile(file_path, 'r') as zip_ref:
-            zip_ref.extractall(base_path())
-
-class PushModels(Resource):
-    @auth.requires_auth
-    def get(self):
-        os.system("docker cp "+base_path()+"models localprediction:/")
-        return True
+    def post(self):
+        data           = request.json 
+        access_token   = request.headers.get('Access-Token')
+        job_queue.enqueue(retrieve_models, data, access_token, job_timeout=-1, result_ttl=-1)
+        return True 
 
 class SystemVersions(Resource):
     def get(self):
@@ -153,8 +144,6 @@ api.add_resource(Shutdown, '/shutdown')
 api.add_resource(Restart, '/restart')
 api.add_resource(Upgrade, '/upgrade')
 api.add_resource(CategoryIndex, '/category_index/<string:model>/<string:version>')
-api.add_resource(Models, '/models')
-api.add_resource(PushModels, '/push_models')
 api.add_resource(DownloadModels, '/download_models')
 api.add_resource(SystemVersions, '/system_versions')
 api.add_resource(SystemIsUptodate, '/system_uptodate')
