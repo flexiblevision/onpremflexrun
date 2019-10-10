@@ -88,7 +88,7 @@ def insert_job_ref(job_id):
         '_id': job_id,
         'type': 'model_download',
         'start_time': str(datetime.datetime.now()),
-        'status': 'downloading'
+        'status': 'running'
         })
 
 def delete_job_ref(job_id):
