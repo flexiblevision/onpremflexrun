@@ -13,7 +13,7 @@ REDIS_SERVER='172.18.0.1'
 REDIS_PORT='6379'
 DB_NAME='fvonprem'
 MONGO_SERVER='172.18.0.1'
-MONGO_PORT='27017:27017'
+MONGO_PORT='27017'
 GCP_FUNCTIONS_DOMAIN='https://us-central1-flexible-vision-staging.cloudfunctions.net/'
 
 docker run -d -p 0.0.0.0:$REDIS_PORT:$REDIS_PORT --restart unless-stopped --name redis redis:$REDIS_VERSION
