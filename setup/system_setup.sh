@@ -18,7 +18,7 @@ GCP_FUNCTIONS_DOMAIN='https://us-central1-flexible-vision-staging.cloudfunctions
 
 docker run -d -p 0.0.0.0:$REDIS_PORT:$REDIS_PORT --restart unless-stopped --name redis redis:$REDIS_VERSION
 
-docker run -d -p $MONGO_PORT:$MONGO_PORT --name mongo mongo:$MONGO_VERSION
+docker run -p $MONGO_PORT:$MONGO_PORT --restart unless-stopped  --name mongo -d mongo:$MONGO_VERSION
 
 docker run -d --name=capdev -p 0.0.0.0:5000:5000 --restart unless-stopped --privileged -v /dev:/dev -v /sys:/sys \
     --network imagerie_nw -e ACCESS_KEY=imagerie -e SECRET_KEY=imagerie \
