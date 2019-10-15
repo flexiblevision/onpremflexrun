@@ -11,6 +11,8 @@ import os
 import datetime
 import auth
 import requests
+import re
+import uuid
 
 from flask_cors import CORS
 from flask import jsonify
@@ -47,6 +49,18 @@ def base_path():
     return xavier_ssd if os.path.exists(xavier_ssd) else '/'
 
 BASE_PATH_TO_MODELS = base_path()+'models/'
+
+def system_info():
+    out = subprocess.Popen(['lshw', '-short'], stdout=subprocess.PIPE)
+    cmd = subprocess.Popen(['grep', 'system'], stdin=out.stdout, stdout=subprocess.PIPE)
+    cmd_out, cmd_err = cmd.communicate()
+    system = cmd_out.strip().decode("utf-8")
+    return system
+
+def system_arch():
+    cmd = subprocess.Popen(['arch'], stdout=subprocess.PIPE)
+    cmd_out, cmd_err = cmd.communicate()
+    return  cmd_out.strip().decode("utf-8")
 
 class Shutdown(Resource):
     @auth.requires_auth
@@ -137,6 +151,16 @@ class SystemIsUptodate(Resource):
     def get(self):
         return all([is_container_uptodate('capdev')[0], is_container_uptodate('captureui')[0], is_container_uptodate('localprediction')[0]])
 
+class DeviceInfo(Resource):
+    def get(self):
+        domain = request.headers.get('Host').split(':')[0]
+        info = {}
+        info['system']        = system_info()
+        info['arch']          = system_arch()
+        info['mac_id']        = ':'.join(re.findall('..', '%012x' % uuid.getnode()))
+        info['last_active']   = str(datetime.datetime.now())
+        info['last_known_ip'] = domain
+        return info
 
 api.add_resource(AuthToken, '/auth_token')
 api.add_resource(Networks, '/networks')
@@ -147,6 +171,7 @@ api.add_resource(CategoryIndex, '/category_index/<string:model>/<string:version>
 api.add_resource(DownloadModels, '/download_models')
 api.add_resource(SystemVersions, '/system_versions')
 api.add_resource(SystemIsUptodate, '/system_uptodate')
+api.add_resource(DeviceInfo, '/device_info')
 
 if __name__ == '__main__':
      app.run(host='0.0.0.0',port='5001')
