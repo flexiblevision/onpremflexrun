@@ -10,8 +10,10 @@ from collections import defaultdict
 from io import StringIO
 from io import BytesIO
 from pymongo import MongoClient
+import datetime
 
-client            = MongoClient("172.18.0.1",authMechanism='SCRAM-SHA-256')
+
+client            = MongoClient("172.18.0.1")
 job_collection    = client["fvonprem"]["jobs"]
 models_collection = client["fvonprem"]["models"]
 
@@ -81,7 +83,7 @@ def retrieve_models(data, token):
 
 def save_models_versions(models_versions):
     models_collection.drop()
-    models_collection.insertMany(models_versions)
+    models_collection.insert_many(models_versions)
 
 def insert_job_ref(job_id):
     job_collection.insert({
@@ -93,9 +95,9 @@ def insert_job_ref(job_id):
 
 def delete_job_ref(job_id):
     query = {'_id': job_id}
-    job_collection.deleteOne(query)
+    job_collection.delete_one(query)
 
 
 def failed_job_ref(job_id):
     query = {'_id': job_id}
-    job_collection.updateOne(query, {$set: {'status': 'failed'}})
+    job_collection.update_one(query, {'$set': {'status': 'failed'}})
