@@ -58,3 +58,6 @@ def system_arch():
     if arch == 'x86_64': arch = 'x86'
 
     return arch
+
+
+print(get_latest_container_version('backend'))
