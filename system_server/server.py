@@ -149,7 +149,7 @@ class SystemVersions(Resource):
 
 class SystemIsUptodate(Resource):
     def get(self):
-        return all([is_container_uptodate('capdev')[0], is_container_uptodate('captureui')[0], is_container_uptodate('localprediction')[0]])
+        return all([is_container_uptodate('backend')[0], is_container_uptodate('frontend')[0], is_container_uptodate('prediction')[0]])
 
 class DeviceInfo(Resource):
     def get(self):

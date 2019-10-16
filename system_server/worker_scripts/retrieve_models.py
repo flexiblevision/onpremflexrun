@@ -54,16 +54,18 @@ def retrieve_models(data, token):
         for version in versions:
             path = 'http://104.154.128.121/api/capture/models/download/'+str(project_id)+'/'+str(version) 
             res = os.system(f"curl -X GET {path} -H 'accept: application/json' -H 'Authorization: Bearer {token}' -o {model_folder}/model.zip")
-            try: 
-                with zipfile.ZipFile(model_folder+'/model.zip') as zf:
-                    zf.extractall(model_folder)
-                os.system("mv "+model_folder+"/job.json "+model_folder+"/"+str(version))
-                os.system("mv "+model_folder+"/object-detection.pbtxt "+model_folder+"/"+str(version))
-                model_data['versions'].append(version)
-            except zipfile.BadZipfile:
-                print('bad zipfile in '+model_folder)
+            
+            if os.path.exists(model_folder+'/model.zip'):
+                try: 
+                    with zipfile.ZipFile(model_folder+'/model.zip') as zf:
+                        zf.extractall(model_folder)
+                    os.system("mv "+model_folder+"/job.json "+model_folder+"/"+str(version))
+                    os.system("mv "+model_folder+"/object-detection.pbtxt "+model_folder+"/"+str(version))
+                    model_data['versions'].append(version)
+                except zipfile.BadZipfile:
+                    print('bad zipfile in '+model_folder)
 
-            os.system("rm -rf "+model_folder+'/model.zip')
+                os.system("rm -rf "+model_folder+'/model.zip')
 
         if model_data['versions']: models_versions.append(model_data)
     
