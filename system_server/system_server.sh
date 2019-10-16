@@ -2,7 +2,7 @@ apt update
 apt install -y python3-pip
 apt-get -y install nodejs
 apt-get -y install npm
-apt-get -y install 
+apt-get -y install curl
 npm install forever -g
 pip install requests
 pip install python-jose
@@ -17,11 +17,11 @@ pip install rq
 echo "home=$HOME\n$(cat $HOME/flex-run/scripts/fv_system_server_start.sh)" > $HOME/flex-run/scripts/fv_system_server_start.sh
 echo "home=$HOME\n$(cat $HOME/flex-run/scripts/worker_server_start.sh)" > $HOME/flex-run/scripts/worker_server_start.sh
 
-chmod +x ../scripts/fv_system_server_start.sh
-chmod +x ../scripts/worker_server_start.sh
+chmod +x $HOME/flex-run/scripts/fv_system_server_start.sh
+chmod +x $HOME/flex-run/scripts/worker_server_start.sh
 
-echo '@reboot sudo sh '$HOME'/flex-run/scripts/fv_system_server_start.sh' | sudo crontab -u root -
-echo '@reboot sudo sh '$HOME'/flex-run/scripts/worker_server_start.sh' | sudo crontab -u root -
+(sudo crontab -u root -l; echo '@reboot sudo sh '$HOME'/flex-run/scripts/fv_system_server_start.sh') | sudo crontab -u root -
+(sudo crontab -u root -l; echo '@reboot sudo sh '$HOME'/flex-run/scripts/worker_server_start.sh') | sudo crontab -u root -
 
 forever start -c python3 ./server.py
 forever start -c python3 ./worker.py
