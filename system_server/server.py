@@ -79,18 +79,11 @@ class Restart(Resource):
 class Upgrade(Resource):
     @auth.requires_auth
     def get(self):
-        cap_uptd     = is_container_uptodate('backend')
-        capui_uptd   = is_container_uptodate('frontend')
-        predict_uptd = is_container_uptodate('prediction')
+        cap_uptd     = is_container_uptodate('backend')[1]
+        capui_uptd   = is_container_uptodate('frontend')[1]
+        predict_uptd = is_container_uptodate('prediction')[1] 
 
-        cap_v     = cap_uptd[1] if not cap_uptd[0] else cap_uptd[0]
-        capui_v   = capui_uptd[1] if not capui_uptd[0] else capui_uptd[0]
-        predict_v = predict_uptd[1] if not predict_uptd[0] else predict_uptd[0]
-        
-        print(cap_v, capui_v, predict_v)
-
-
-        #os.system("sh ./upgrade_system.sh "+cap_uptd+" "+capui_uptd+" "+predict_uptd)
+        os.system("sh ./upgrade_system.sh "+cap_uptd+" "+capui_uptd+" "+predict_uptd)
 
 class AuthToken(Resource):
     @auth.requires_auth
