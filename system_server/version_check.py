@@ -26,9 +26,8 @@ def get_latest_container_version(image):
 def is_container_uptodate(container):
     system_version  = get_current_container_version(CONTAINERS[container])
     latest_version  = get_latest_container_version(container)
-    is_up_to_date   = latest_version == system_version
-   
-    print(system_version, latest_version, is_up_to_date)
+    is_up_to_date   = str(latest_version) == str(system_version)
+
     upgrade_to_version = latest_version if is_up_to_date==False else True
 
     return (is_up_to_date, str(upgrade_to_version))
