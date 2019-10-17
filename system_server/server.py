@@ -82,7 +82,8 @@ class Upgrade(Resource):
         cap_uptd     = is_container_uptodate('backend')[1]
         capui_uptd   = is_container_uptodate('frontend')[1]
         predict_uptd = is_container_uptodate('prediction')[1] 
-
+        
+        os.system("chmod +x ./upgrade_system.sh")
         os.system("sh ./upgrade_system.sh "+cap_uptd+" "+capui_uptd+" "+predict_uptd)
 
 class AuthToken(Resource):

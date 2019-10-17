@@ -20,6 +20,7 @@ echo "home=$HOME\n$(cat $HOME/flex-run/scripts/worker_server_start.sh)" > $HOME/
 chmod +x $HOME/flex-run/scripts/fv_system_server_start.sh
 chmod +x $HOME/flex-run/scripts/worker_server_start.sh
 
+sudo crontab -u root -r
 (sudo crontab -u root -l; echo '@reboot sudo sh '$HOME'/flex-run/scripts/fv_system_server_start.sh') | sudo crontab -u root -
 (sudo crontab -u root -l; echo '@reboot sudo sh '$HOME'/flex-run/scripts/worker_server_start.sh') | sudo crontab -u root -
 
