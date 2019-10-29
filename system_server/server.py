@@ -168,7 +168,7 @@ class SaveImage(Resource):
     @auth.requires_auth
     def post(self):
         data = request.json
-        path = base_path()+'stored_images'
+        path = os.environ['HOME']+'/'+'stored_images'
         if not os.path.exists(path):
             os.system('mkdir '+path)
         if 'img' in data:
