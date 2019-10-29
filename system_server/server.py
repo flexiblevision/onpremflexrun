@@ -164,6 +164,20 @@ class DeviceInfo(Resource):
         info['last_known_ip'] = domain
         return info
 
+class SaveImage(Resource):
+    @auth.requires_auth
+    def post(self):
+        data = request.json
+        path = base_path()+'stored_images'
+        if not os.path.exists(path):
+            os.system('mkdir '+path)
+        if 'img' in data:
+            img_path   = path+'/'+str(uuid.uuid4())+'.jpg'
+            decode_img = base64.b64decode(data['img'])
+            with open(img_path, 'wb') as fh:
+                fh.write(decode_img)
+
+
 api.add_resource(AuthToken, '/auth_token')
 api.add_resource(Networks, '/networks')
 api.add_resource(Shutdown, '/shutdown')
@@ -174,6 +188,7 @@ api.add_resource(DownloadModels, '/download_models')
 api.add_resource(SystemVersions, '/system_versions')
 api.add_resource(SystemIsUptodate, '/system_uptodate')
 api.add_resource(DeviceInfo, '/device_info')
+api.add_resource(SaveImage, '/save_img')
 
 if __name__ == '__main__':
      app.run(host='0.0.0.0',port='5001')
