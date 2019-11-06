@@ -16,8 +16,6 @@ MONGO_SERVER='172.17.0.1'
 MONGO_PORT='27017'
 GCP_FUNCTIONS_DOMAIN='https://us-central1-flexible-vision-staging.cloudfunctions.net/'
 
-docker run -d -p 0.0.0.0:$REDIS_PORT:$REDIS_PORT --restart unless-stopped --name redis redis:$REDIS_VERSION
-
 docker run -p $MONGO_PORT:$MONGO_PORT --restart unless-stopped  --name mongo -d mongo:$MONGO_VERSION
 
 if [ "$SYSTEM_ARCH" = "x86" ]; then
