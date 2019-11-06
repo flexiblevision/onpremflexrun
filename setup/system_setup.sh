@@ -20,6 +20,19 @@ docker run -d -p 0.0.0.0:$REDIS_PORT:$REDIS_PORT --restart unless-stopped --name
 
 docker run -p $MONGO_PORT:$MONGO_PORT --restart unless-stopped  --name mongo -d mongo:$MONGO_VERSION
 
+if [ "$SYSTEM_ARCH" = "x86" ]; then
+    docker volume ls -q -f driver=nvidia-docker | xargs -r -I{} -n1 docker ps -q -a -f volume={} | xargs -r docker rm -f
+    curl -s -L https://nvidia.github.io/nvidia-docker/gpgkey | \
+        apt-key add -
+    distribution=$(. /etc/os-release;echo $ID$VERSION_ID)
+    curl -s -L https://nvidia.github.io/nvidia-docker/$distribution/nvidia-docker.list | \
+        tee /etc/apt/sources.list.d/nvidia-docker.list
+    apt update
+    apt-get install -y nvidia-docker2
+    pkill -SIGHUP dockerd
+    docker run --runtime=nvidia --rm nvidia/cuda:9.0-base nvidia-smi
+fi
+
 docker run -d --name=capdev -p 0.0.0.0:5000:5000 --restart unless-stopped --privileged -v /dev:/dev -v /sys:/sys \
     --network imagerie_nw -e ACCESS_KEY=imagerie -e SECRET_KEY=imagerie \
     -e AUTH0_DOMAIN=$AUTH0_DOMAIN -e AUTH0_CLIENT_ID=$AUTH0_CID -e AUTH0_CLIENT_SECRET=$AUTH0_SID \

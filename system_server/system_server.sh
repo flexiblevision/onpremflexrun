@@ -24,6 +24,6 @@ sudo crontab -u root -r
 (sudo crontab -u root -l; echo '@reboot sudo sh '$HOME'/flex-run/scripts/fv_system_server_start.sh') | sudo crontab -u root -
 (sudo crontab -u root -l; echo '@reboot sudo sh '$HOME'/flex-run/scripts/worker_server_start.sh') | sudo crontab -u root -
 
-forever start -c python3 ./server.py
-forever start -c python3 ./worker.py
+forever start -c python3 $HOME/flex-run/system_server/server.py
+forever start -c python3 $HOME/flex-run/system_server/worker.py
 
