@@ -42,17 +42,17 @@ def retrieve_models(data, token):
     os.system("mkdir "+BASE_PATH_TO_MODELS)
 
     models_versions = []
-    for model_ref in data:
+    for model_ref in data.values():
         project_id   = model_ref['_id']
-        model_name   = model_ref['type']
-        versions     = model_ref['versions']
+        model_name   = model_ref['name']
+        versions     = model_ref['models']
         model_folder = BASE_PATH_TO_MODELS + model_name
         if len(versions) > 0: os.system("mkdir " + model_folder)
 
         model_data = {'type': model_name, 'versions': []}
         #iterate over the models data and request/extract model to models folder
         for version in versions:
-            path = 'http://104.154.128.121/api/capture/models/download/'+str(project_id)+'/'+str(version) 
+            path = 'https://clouddeploy.api.flexiblevision.com/api/capture/models/download/'+str(project_id)+'/'+str(version) 
             res = os.system(f"curl -X GET {path} -H 'accept: application/json' -H 'Authorization: Bearer {token}' -o {model_folder}/model.zip")
             
             if os.path.exists(model_folder+'/model.zip'):
@@ -76,6 +76,7 @@ def retrieve_models(data, token):
         os.system("docker exec localprediction rm -rf /models")
         print('pushing new models to localprediction')
         os.system("docker cp "+base_path()+"models localprediction:/")
+        os.system("docker restart localprediction")
         delete_job_ref(job_id)
         return True
     else: 
