@@ -33,6 +33,7 @@ from worker_scripts.retrieve_models import retrieve_models
 from redis import Redis
 from rq import Queue, Worker, Connection
 from rq.job import Job
+import socket
 
 app = Flask(__name__)
 api = Api(app)
@@ -42,6 +43,7 @@ NUM_CLASSES = 99
 redis_con   = Redis('localhost', 6379, password=None)
 job_queue   = Queue('default', connection=redis_con)
 CONTAINERS  = {'backend':'capdev', 'frontend':'captureui', 'prediction':'localprediction'}
+
 
 def base_path():
     #mounted memory to ssd
@@ -106,7 +108,20 @@ class Networks(Resource):
     def get(self):
         networks = subprocess.check_output(['nmcli', '-f', 'SSID', 'dev', 'wifi'])
         nets = {}
-        for i,line in enumerate(networks.splitlines()): nets[i] = line.decode('utf-8')
+        network_list = []
+        for i in networks.splitlines():
+            i = i.decode('utf-8').strip()
+            if i not in network_list and i != '' and i != 'SSID':
+                network_list.append(i)
+        
+        for i,line in enumerate(network_list): 
+            nets[i] = line
+        
+        cmd = subprocess.Popen(['hostname', '-I'], stdout=subprocess.PIPE)
+        cmd_out, cmd_err = cmd.communicate()
+        cleanStr = cmd_out.strip().decode("utf-8")
+
+        nets['ip'] = cleanStr.split(' ')[0]
         return nets
 
     @auth.requires_auth
@@ -155,13 +170,16 @@ class SystemIsUptodate(Resource):
 
 class DeviceInfo(Resource):
     def get(self):
-        domain = request.headers.get('Host').split(':')[0]
+        cmd = subprocess.Popen(['hostname', '-I'], stdout=subprocess.PIPE)
+        cmd_out, cmd_err = cmd.communicate()
+        cleanStr = cmd_out.strip().decode("utf-8")
+        ip = cleanStr.split(' ')[0]
         info = {}
         info['system']        = system_info()
         info['arch']          = system_arch()
         info['mac_id']        = ':'.join(re.findall('..', '%012x' % uuid.getnode()))
         info['last_active']   = str(datetime.datetime.now())
-        info['last_known_ip'] = domain
+        info['last_known_ip'] = ip
         return info
 
 class SaveImage(Resource):
