@@ -134,7 +134,7 @@ def connect_wifi(wifi, password):
     print("\n")
     print('\033[0;33mConnecting to ' + wifi)
     try:
-        os.system("nmcli dev Wi-Fi connect "+wifi+" password "+password)
+        os.system("nmcli dev wifi connect "+wifi+" password "+password)
         clear_text_color()
         time.sleep(3)
     except subprocess.CalledProcessError as e:

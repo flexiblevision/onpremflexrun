@@ -85,8 +85,8 @@ class Upgrade(Resource):
         capui_uptd   = is_container_uptodate('frontend')[1]
         predict_uptd = is_container_uptodate('prediction')[1] 
         
-        os.system("chmod +x ./upgrade_system.sh")
-        os.system("sh ./upgrade_system.sh "+cap_uptd+" "+capui_uptd+" "+predict_uptd)
+        os.system("chmod +x "+os.environ['HOME']+"/flex-run/system_server/upgrade_system.sh")
+        os.system("sh "+os.environ['HOME']+"/flex-run/system_server/upgrade_system.sh "+cap_uptd+" "+capui_uptd+" "+predict_uptd)
 
 class AuthToken(Resource):
     @auth.requires_auth
@@ -100,7 +100,8 @@ class AuthToken(Resource):
     def post(self):
         j = request.json
         if j:
-            os.system('echo '+j['refresh_token']+' > creds.txt')
+            print('write to creds with', j['refresh_token'])
+            os.system('echo '+j['refresh_token']+' > '+os.environ['HOME']+'/flex-run/system_server/creds.txt')
             return True
         return False
 
@@ -124,7 +125,6 @@ class Networks(Resource):
         nets['ip'] = cleanStr.split(' ')[0]
         return nets
 
-    @auth.requires_auth
     def post(self):
         j = request.json
         return os.system("nmcli dev wifi connect "+j['netName']+" password "+j['netPassword'])
@@ -170,16 +170,13 @@ class SystemIsUptodate(Resource):
 
 class DeviceInfo(Resource):
     def get(self):
-        cmd = subprocess.Popen(['hostname', '-I'], stdout=subprocess.PIPE)
-        cmd_out, cmd_err = cmd.communicate()
-        cleanStr = cmd_out.strip().decode("utf-8")
-        ip = cleanStr.split(' ')[0]
+        domain = request.headers.get('Host').split(':')[0]
         info = {}
         info['system']        = system_info()
         info['arch']          = system_arch()
         info['mac_id']        = ':'.join(re.findall('..', '%012x' % uuid.getnode()))
         info['last_active']   = str(datetime.datetime.now())
-        info['last_known_ip'] = ip
+        info['last_known_ip'] = domain
         return info
 
 class SaveImage(Resource):

@@ -19,7 +19,6 @@ GCP_FUNCTIONS_DOMAIN='https://us-central1-flexible-vision-staging.cloudfunctions
 docker run -p $MONGO_PORT:$MONGO_PORT --restart unless-stopped  --name mongo -d mongo:$MONGO_VERSION
 
 if [ "$SYSTEM_ARCH" = "x86" ]; then
-    apt-get install -y curl
     docker volume ls -q -f driver=nvidia-docker | xargs -r -I{} -n1 docker ps -q -a -f volume={} | xargs -r docker rm -f
     curl -s -L https://nvidia.github.io/nvidia-docker/gpgkey | \
         apt-key add -
