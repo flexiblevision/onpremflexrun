@@ -6,8 +6,8 @@ from six.moves.urllib.request import urlopen
 from jose import jwt
 
 AUTH0_DOMAIN = 'flexiblevision.auth0.com'
-ALGORITHMS = ["RS256"]
-CLIENT_ID  = '512rYG6XL32k3uiFg38HQ8fyubOOUUKf'
+ALGORITHMS   = ["RS256"]
+CLIENT_ID    = '512rYG6XL32k3uiFg38HQ8fyubOOUUKf'
 
 APP = Flask(__name__)
 
