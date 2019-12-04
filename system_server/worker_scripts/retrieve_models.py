@@ -11,11 +11,13 @@ from io import StringIO
 from io import BytesIO
 from pymongo import MongoClient
 import datetime
-
+import string
 
 client            = MongoClient("172.17.0.1")
 job_collection    = client["fvonprem"]["jobs"]
 models_collection = client["fvonprem"]["models"]
+
+CLOUD_DOMAIN = "https://clouddeploy.api.flexiblevision.com"
 
 def base_path():
     xavier_ssd = '/xavier_ssd/'
@@ -41,10 +43,10 @@ def retrieve_models(data, token):
     if os.path.exists(BASE_PATH_TO_MODELS): os.system("rm -rf "+BASE_PATH_TO_MODELS)
     os.system("mkdir "+BASE_PATH_TO_MODELS)
 
-    models_versions = []
+    models_versions = {}
     for model_ref in data.values():
         project_id   = model_ref['_id']
-        model_name   = model_ref['name']
+        model_name   = format_filename(model_ref['name'])
         versions     = model_ref['models']
         model_folder = BASE_PATH_TO_MODELS + model_name
         if len(versions) > 0: os.system("mkdir " + model_folder)
@@ -52,7 +54,7 @@ def retrieve_models(data, token):
         model_data = {'type': model_name, 'versions': []}
         #iterate over the models data and request/extract model to models folder
         for version in versions:
-            path = 'https://clouddeploy.api.flexiblevision.com/api/capture/models/download/'+str(project_id)+'/'+str(version) 
+            path = CLOUD_DOMAIN+'/api/capture/models/download/'+str(project_id)+'/'+str(version) 
             res = os.system(f"curl -X GET {path} -H 'accept: application/json' -H 'Authorization: Bearer {token}' -o {model_folder}/model.zip")
             
             if os.path.exists(model_folder+'/model.zip'):
@@ -67,11 +69,15 @@ def retrieve_models(data, token):
 
                 os.system("rm -rf "+model_folder+'/model.zip')
 
-        if model_data['versions']: models_versions.append(model_data)
+        if model_data['versions']: 
+            if model_name in models_versions:
+                models_versions[model_name]['versions'] += model_data['versions']
+            else:
+                models_versions[model_name] = model_data
     
     if models_versions:
-        create_config_file(models_versions)
-        save_models_versions(models_versions)
+        create_config_file(models_versions.values())
+        save_models_versions(models_versions.values())
         print('removing old models')
         os.system("docker exec localprediction rm -rf /models")
         print('pushing new models to localprediction')
@@ -104,3 +110,9 @@ def delete_job_ref(job_id):
 def failed_job_ref(job_id):
     query = {'_id': job_id}
     job_collection.update_one(query, {'$set': {'status': 'failed'}})
+
+def format_filename(s):
+    valid_chars = "-_.() %s%s" % (string.ascii_letters, string.digits)
+    filename = ''.join(c for c in s if c in valid_chars)
+    filename = filename.replace(' ','_') 
+    return filename

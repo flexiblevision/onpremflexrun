@@ -68,15 +68,13 @@ class Shutdown(Resource):
     @auth.requires_auth
     def get(self):
         print('shutting down system')
-        os.system("shutdown -h now")
-        return True
+        os.system("poweroff")
 
 class Restart(Resource):
     @auth.requires_auth
     def get(self):
         print('restarting system')
-        os.system("shudown -r now")
-        return True
+        os.system("reboot")
 
 class Upgrade(Resource):
     @auth.requires_auth
@@ -91,7 +89,7 @@ class Upgrade(Resource):
 class AuthToken(Resource):
     @auth.requires_auth
     def get(self):
-        cmd = subprocess.Popen(['cat', 'creds.txt'], stdout=subprocess.PIPE)
+        cmd = subprocess.Popen(['cat', './creds.txt'], stdout=subprocess.PIPE)
         cmd_out, cmd_err = cmd.communicate()
         cleanStr = cmd_out.strip().decode("utf-8")
         if cleanStr: return cleanStr
@@ -100,7 +98,6 @@ class AuthToken(Resource):
     def post(self):
         j = request.json
         if j:
-            print('write to creds with', j['refresh_token'])
             os.system('echo '+j['refresh_token']+' > '+os.environ['HOME']+'/flex-run/system_server/creds.txt')
             return True
         return False
@@ -118,11 +115,9 @@ class Networks(Resource):
         for i,line in enumerate(network_list): 
             nets[i] = line
         
-        cmd = subprocess.Popen(['hostname', '-I'], stdout=subprocess.PIPE)
-        cmd_out, cmd_err = cmd.communicate()
-        cleanStr = cmd_out.strip().decode("utf-8")
+        wlp = subprocess.Popen(['ifconfig', 'wlp3s0'], stdout=subprocess.PIPE).communicate()[0].decode('utf-8')
 
-        nets['ip'] = cleanStr.split(' ')[0]
+        nets['ip'] = wlp.split('inet')[1].split(' ')[1]
         return nets
 
     def post(self):
@@ -180,7 +175,7 @@ class DeviceInfo(Resource):
         return info
 
 class SaveImage(Resource):
-    @auth.requires_auth
+    #@auth.requires_auth
     def post(self):
         data = request.json
         path = os.environ['HOME']+'/'+'stored_images'
@@ -192,6 +187,71 @@ class SaveImage(Resource):
             with open(img_path, 'wb') as fh:
                 fh.write(decode_img)
 
+class ExportImage(Resource):
+    #@auth.requires_auth
+    def post(self):
+        data = request.json
+        path = os.environ['HOME']+'/usb_images'
+        if not os.path.exists(path):
+            os.system('mkdir '+path)
+        
+        usb_list = subprocess.Popen(['sudo', 'fdisk', '-l'], stdout=subprocess.PIPE)
+        usb = usb_list.communicate()[0].decode('utf-8').split('dev/')[-1].split(' ')[0]
+
+        if usb[0] == 's':
+            os.system('sudo mount /dev/' + usb + ' ' + path)
+                        
+            if 'img' and 'model' and 'version'  in data:
+                img_path = path + '/flexible_vision/' + data['model'] + '/' + data['version']
+                
+                if not os.path.exists(img_path):
+                    os.system('sudo mkdir -p ' + img_path)
+            
+                img_path   = img_path + '/'+ data['timestamp'].replace(' ', '_').replace('.', '_').replace(':', '-') +'.jpg'
+                decode_img = base64.b64decode(data['img'])
+                
+                with open(img_path, 'wb') as fh:
+                    fh.write(decode_img)
+
+class GetCameraUID(Resource):
+    def get(self, idx):
+        out = subprocess.Popen(['udevadm', 'info', '--query=all', '/dev/video'+idx], stdout=subprocess.PIPE)
+        cmd = subprocess.Popen(['grep', 'VENDOR_ID\|MODEL_ID\|SERIAL_SHORT'], stdin=out.stdout, stdout=subprocess.PIPE)
+        cmd_out, cmd_err = cmd.communicate()
+        uid = cmd_out.strip().decode("utf-8")
+        msv = uid.splitlines()
+        uid = ''
+        for i,did in enumerate(msv):
+            uid += did.split('=')[-1]
+            if i < len(msv)-1: uid += ':'
+        # model : serial : vendor
+        return uid
+
+class UpdateIp(Resource):
+    @auth.requires_auth
+    def post(self):
+        data = request.json
+        ifconfig = subprocess.Popen(['ifconfig'], stdout=subprocess.PIPE).communicate()[0].decode('utf-8')
+        
+        if 'eth0' in ifconfig:
+            interface_name = 'eth0'
+        elif 'enp' in ifconfig:
+            interface_name = 'enp' + ifconfig.split('enp')[1][:3]
+        else:
+            return 'ethernet interface not found'
+
+        interface = subprocess.Popen(['ifconfig', interface_name], stdout=subprocess.PIPE).communicate()[0].decode('utf-8')
+        
+        if data['ip'] != '':
+            os.system('sudo ifconfig ' + interface_name + ' '  + data['ip'] + ' netmask 255.255.255.0')
+            interface = subprocess.Popen(['ifconfig', interface_name], stdout=subprocess.PIPE).communicate()[0].decode('utf-8')
+        
+        if 'inet' in interface:
+            ip = interface.split('inet')[1].split(' ')[1]
+        else:
+            ip = 'LAN IP not assigned'
+
+        return ip
 
 api.add_resource(AuthToken, '/auth_token')
 api.add_resource(Networks, '/networks')
@@ -204,6 +264,9 @@ api.add_resource(SystemVersions, '/system_versions')
 api.add_resource(SystemIsUptodate, '/system_uptodate')
 api.add_resource(DeviceInfo, '/device_info')
 api.add_resource(SaveImage, '/save_img')
+api.add_resource(ExportImage, '/export_img')
+api.add_resource(UpdateIp, '/update_ip')
+api.add_resource(GetCameraUID, '/camera_uid/<string:idx>')
 
 if __name__ == '__main__':
-     app.run(host='0.0.0.0',port='5001')
+    app.run(host='0.0.0.0',port='5001')

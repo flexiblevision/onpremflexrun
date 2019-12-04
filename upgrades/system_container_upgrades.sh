@@ -6,15 +6,15 @@ SYSTEM_ARCH=$4
 REDIS_VERSION='5.0.6'
 MONGO_VERSION='4.2'
 
-AUTH0_DOMAIN='flexiblevision.auth0.com'
+AUTH0_DOMAIN='auth.flexiblevision.com'
 AUTH0_CID='512rYG6XL32k3uiFg38HQ8fyubOOUUKf'
-AUTH0_SID='KWvgMpahqmugFQJm-n4KRxZ1roTgzrZa8uR7hBvM6t-AmifSJ-UctFUzH7CA1UBK'
 REDIS_URL='redis://localhost:6379'
 REDIS_SERVER='172.17.0.1'
 REDIS_PORT='6379'
 DB_NAME='fvonprem'
 MONGO_SERVER='172.17.0.1'
 MONGO_PORT='27017'
+CLOUD_DOMAIN='https://clouddeploy.api.flexiblevision.com'
 GCP_FUNCTIONS_DOMAIN='https://us-central1-flexible-vision-staging.cloudfunctions.net/'
 
 if [ $CAP_UPTD != 'True' ]; then
@@ -26,10 +26,10 @@ if [ $CAP_UPTD != 'True' ]; then
     docker rm capdev
     docker run -d --name=capdev -p 0.0.0.0:5000:5000 --restart unless-stopped --privileged -v /dev:/dev -v /sys:/sys \
         --network imagerie_nw -e ACCESS_KEY=imagerie -e SECRET_KEY=imagerie \
-	-e AUTH0_DOMAIN=$AUTH0_DOMAIN -e AUTH0_CLIENT_ID=$AUTH0_CID -e AUTH0_CLIENT_SECRET=$AUTH0_SID \
+	-e AUTH0_DOMAIN=$AUTH0_DOMAIN -e AUTH0_CLIENT_ID=$AUTH0_CID \
     	-e REDIS_URL=$REDIS_URL -e REDIS_SERVER=$REDIS_SERVER -e REDIS_PORT=$REDIS_PORT \
     	-e DB_NAME=$DB_NAME -e MONGO_SERVER=$MONGO_SERVER -e MONGO_PORT=$MONGO_PORT \
-    	-e GCP_FUNCTIONS_DOMAIN=$GCP_FUNCTIONS_DOMAIN \
+    	-e GCP_FUNCTIONS_DOMAIN=$GCP_FUNCTIONS_DOMAIN -e CLOUD_DOMAIN=$CLOUD_DOMAIN \
         -d fvonprem/$4-backend:$CAP_UPTD
 
     #upload camera data back to new container
