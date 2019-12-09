@@ -81,8 +81,8 @@ class Upgrade(Resource):
     def get(self):
         cap_uptd     = is_container_uptodate('backend')[1]
         capui_uptd   = is_container_uptodate('frontend')[1]
-        predict_uptd = is_container_uptodate('prediction')[1] 
-        
+        predict_uptd = is_container_uptodate('prediction')[1]
+
         os.system("chmod +x "+os.environ['HOME']+"/flex-run/system_server/upgrade_system.sh")
         os.system("sh "+os.environ['HOME']+"/flex-run/system_server/upgrade_system.sh "+cap_uptd+" "+capui_uptd+" "+predict_uptd)
 
@@ -98,7 +98,8 @@ class AuthToken(Resource):
     def post(self):
         j = request.json
         if j:
-            os.system('echo '+j['refresh_token']+' > '+os.environ['HOME']+'/flex-run/system_server/creds.txt')
+            os.system('echo '+j['refresh_token']+' > ./creds.txt')
+            #os.system('echo '+j['refresh_token']+' > '+os.environ['HOME']+'/flex-run/system_server/creds.txt')
             return True
         return False
 
@@ -111,10 +112,10 @@ class Networks(Resource):
             i = i.decode('utf-8').strip()
             if i not in network_list and i != '' and i != 'SSID':
                 network_list.append(i)
-        
-        for i,line in enumerate(network_list): 
+
+        for i,line in enumerate(network_list):
             nets[i] = line
-        
+
         wlp = subprocess.Popen(['ifconfig', 'wlp3s0'], stdout=subprocess.PIPE).communicate()[0].decode('utf-8')
 
         nets['ip'] = wlp.split('inet')[1].split(' ')[1]
@@ -126,14 +127,14 @@ class Networks(Resource):
 
 class CategoryIndex(Resource):
     def get(self, model, version):
-        # category index will now be created from the job.json file 
-        # read in json file and parse the labelmap_dict to create the category_index 
+        # category index will now be created from the job.json file
+        # read in json file and parse the labelmap_dict to create the category_index
 
-        path_to_model_labels = BASE_PATH_TO_MODELS + model + '/' + version + '/job.json' 
+        path_to_model_labels = BASE_PATH_TO_MODELS + model + '/' + version + '/job.json'
         labels = None
         with open(path_to_model_labels) as data:
             labels = json.load(data)['labelmap_dict']
-        
+
         category_index = {}
         for key in labels.keys():
             _id = labels[key]
@@ -144,10 +145,10 @@ class CategoryIndex(Resource):
 class DownloadModels(Resource):
     @auth.requires_auth
     def post(self):
-        data           = request.json 
+        data           = request.json
         access_token   = request.headers.get('Access-Token')
         job_queue.enqueue(retrieve_models, data, access_token, job_timeout=-1, result_ttl=-1)
-        return True 
+        return True
 
 class SystemVersions(Resource):
     def get(self):
@@ -194,22 +195,22 @@ class ExportImage(Resource):
         path = os.environ['HOME']+'/usb_images'
         if not os.path.exists(path):
             os.system('mkdir '+path)
-        
+
         usb_list = subprocess.Popen(['sudo', 'fdisk', '-l'], stdout=subprocess.PIPE)
         usb = usb_list.communicate()[0].decode('utf-8').split('dev/')[-1].split(' ')[0]
 
         if usb[0] == 's':
             os.system('sudo mount /dev/' + usb + ' ' + path)
-                        
+
             if 'img' and 'model' and 'version'  in data:
                 img_path = path + '/flexible_vision/' + data['model'] + '/' + data['version']
-                
+
                 if not os.path.exists(img_path):
                     os.system('sudo mkdir -p ' + img_path)
-            
+
                 img_path   = img_path + '/'+ data['timestamp'].replace(' ', '_').replace('.', '_').replace(':', '-') +'.jpg'
                 decode_img = base64.b64decode(data['img'])
-                
+
                 with open(img_path, 'wb') as fh:
                     fh.write(decode_img)
 
@@ -232,7 +233,7 @@ class UpdateIp(Resource):
     def post(self):
         data = request.json
         ifconfig = subprocess.Popen(['ifconfig'], stdout=subprocess.PIPE).communicate()[0].decode('utf-8')
-        
+
         if 'eth0' in ifconfig:
             interface_name = 'eth0'
         elif 'enp' in ifconfig:
@@ -241,11 +242,11 @@ class UpdateIp(Resource):
             return 'ethernet interface not found'
 
         interface = subprocess.Popen(['ifconfig', interface_name], stdout=subprocess.PIPE).communicate()[0].decode('utf-8')
-        
+
         if data['ip'] != '':
             os.system('sudo ifconfig ' + interface_name + ' '  + data['ip'] + ' netmask 255.255.255.0')
             interface = subprocess.Popen(['ifconfig', interface_name], stdout=subprocess.PIPE).communicate()[0].decode('utf-8')
-        
+
         if 'inet' in interface:
             ip = interface.split('inet')[1].split(' ')[1]
         else:

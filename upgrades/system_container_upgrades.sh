@@ -14,7 +14,7 @@ REDIS_PORT='6379'
 DB_NAME='fvonprem'
 MONGO_SERVER='172.17.0.1'
 MONGO_PORT='27017'
-CLOUD_DOMAIN='https://clouddeploy.api.flexiblevision.com'
+CLOUD_DOMAIN='https://v1.cloud.flexiblevision.com'
 GCP_FUNCTIONS_DOMAIN='https://us-central1-flexible-vision-staging.cloudfunctions.net/'
 
 if [ $CAP_UPTD != 'True' ]; then
@@ -52,4 +52,4 @@ if [ $PREDICT_UPTD != 'True' ]; then
     docker run -p 8500:8500 -p 8501:8501 --runtime=nvidia --name localprediction  -d -e AWS_ACCESS_KEY_ID=imagerie -e AWS_SECRET_ACCESS_KEY=imagerie -e AWS_REGION=us-east-1 \
         --restart unless-stopped --network imagerie_nw  \
         -t fvonprem/$4-prediction:$PREDICT_UPTD
-fi 
+fi
