@@ -44,6 +44,9 @@ def retrieve_models(data, token):
     os.system("mkdir "+BASE_PATH_TO_MODELS)
 
     models_versions = {}
+    if not data.values():
+        failed_job_ref(job_id)
+        return False
     for model_ref in data.values():
         project_id   = model_ref['_id']
         model_name   = format_filename(model_ref['name'])
@@ -54,11 +57,11 @@ def retrieve_models(data, token):
         model_data = {'type': model_name, 'versions': []}
         #iterate over the models data and request/extract model to models folder
         for version in versions:
-            path = CLOUD_DOMAIN+'/api/capture/models/download/'+str(project_id)+'/'+str(version) 
+            path = CLOUD_DOMAIN+'/api/capture/models/download/'+str(project_id)+'/'+str(version)
             res = os.system(f"curl -X GET {path} -H 'accept: application/json' -H 'Authorization: Bearer {token}' -o {model_folder}/model.zip")
-            
+
             if os.path.exists(model_folder+'/model.zip'):
-                try: 
+                try:
                     with zipfile.ZipFile(model_folder+'/model.zip') as zf:
                         zf.extractall(model_folder)
                     os.system("mv "+model_folder+"/job.json "+model_folder+"/"+str(version))
@@ -69,12 +72,12 @@ def retrieve_models(data, token):
 
                 os.system("rm -rf "+model_folder+'/model.zip')
 
-        if model_data['versions']: 
+        if model_data['versions']:
             if model_name in models_versions:
                 models_versions[model_name]['versions'] += model_data['versions']
             else:
                 models_versions[model_name] = model_data
-    
+
     if models_versions:
         create_config_file(models_versions.values())
         save_models_versions(models_versions.values())
@@ -85,10 +88,10 @@ def retrieve_models(data, token):
         os.system("docker restart localprediction")
         delete_job_ref(job_id)
         return True
-    else: 
+    else:
         failed_job_ref(job_id)
         return False
-        
+
 
 def save_models_versions(models_versions):
     models_collection.drop()
@@ -114,5 +117,5 @@ def failed_job_ref(job_id):
 def format_filename(s):
     valid_chars = "-_.() %s%s" % (string.ascii_letters, string.digits)
     filename = ''.join(c for c in s if c in valid_chars)
-    filename = filename.replace(' ','_') 
+    filename = filename.replace(' ','_')
     return filename
