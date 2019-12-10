@@ -4,6 +4,7 @@ apt-get -y install nodejs
 apt-get -y install npm
 apt-get -y install curl
 apt-get -y install hostapd
+apt install -y redis-server
 make install $HOME/flex-run/scripts/create_ap
 npm install forever -g
 pip3 install requests
