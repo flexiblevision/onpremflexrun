@@ -5,7 +5,7 @@ from flask import Flask, request, jsonify, _request_ctx_stack
 from six.moves.urllib.request import urlopen
 from jose import jwt
 
-AUTH0_DOMAIN = 'flexiblevision.auth0.com'
+AUTH0_DOMAIN = 'auth.flexiblevision.com'
 ALGORITHMS   = ["RS256"]
 CLIENT_ID    = '512rYG6XL32k3uiFg38HQ8fyubOOUUKf'
 
@@ -70,7 +70,7 @@ def requires_auth(f):
                     "n": key["n"],
                     "e": key["e"]
                 }
-        
+
         if rsa_key:
             try:
                 payload = jwt.decode(

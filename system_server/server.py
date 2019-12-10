@@ -89,7 +89,7 @@ class Upgrade(Resource):
 class AuthToken(Resource):
     @auth.requires_auth
     def get(self):
-        cmd = subprocess.Popen(['cat', './creds.txt'], stdout=subprocess.PIPE)
+        cmd = subprocess.Popen(['cat', os.environ['HOME']+'/flex-run/system_server/creds.txt'], stdout=subprocess.PIPE)
         cmd_out, cmd_err = cmd.communicate()
         cleanStr = cmd_out.strip().decode("utf-8")
         if cleanStr: return cleanStr
@@ -98,8 +98,7 @@ class AuthToken(Resource):
     def post(self):
         j = request.json
         if j:
-            os.system('echo '+j['refresh_token']+' > ./creds.txt')
-            #os.system('echo '+j['refresh_token']+' > '+os.environ['HOME']+'/flex-run/system_server/creds.txt')
+            os.system('echo '+j['refresh_token']+' > '+os.environ['HOME']+'/flex-run/system_server/creds.txt')
             return True
         return False
 
