@@ -1,0 +1,105 @@
+import threading
+import time
+import requests
+from ctypes import *
+from pymongo import MongoClient
+import datetime
+import string
+
+client   = MongoClient("172.17.0.1")
+io_ref   = client["fvonprem"]["io_presets"]
+util_ref = client["fvonprem"]["utils"]
+pin_state_ref = client["fvonprem"]["pin_state"]
+
+so_file = "/home/visioncell/gpio/gpio.so"
+functions = CDLL(so_file)
+
+#(<direction>,<pin_index>,<value>)
+# direction - IN  = 0
+# direction - OUT = 1
+
+# value - HIGH = 1
+# value - LOW  = 0
+
+class GPIO:
+    def __init__(self):
+        self.state_query      = {'type': 'gpio_pin_state'}
+        self.cur_pin_state    = pin_state_ref.find_one(self.state_query)
+        self.last_input_state = {} 
+
+
+    def run_inference(self, cameraId, modelName, modelVersion, ioVal, pin):
+        res     = util_ref.find_one({'type': 'id_token'}, {'_id': 0})
+        token   = res['token']
+        host    = 'http://172.17.0.1'
+        port    = '5000'
+        path    = '/api/capture/predict/snap/'+modelName+'/'+modelVersion+'/'+str(cameraId)+'?workstation='+ioVal
+        url     = host+':'+port+path
+        headers = {'Authorization': 'Bearer '+ token}
+        res = requests.get(url, headers=headers)
+        self.pin_switch_inference_end(pin)
+
+    def pin_switch_inference_start(self, pin):
+        functions.set_gpio(1, 2, 1)        # ready OFF
+        functions.set_gpio(1, 3, 0)        # system busy
+        self.cur_pin_state['GPO2'] = False # ready pin OFF - RED
+        self.cur_pin_state['GPO3'] = True  # busy pin ON - RED
+        self.cur_pin_state['GPI'+str(pin)] = True
+        pin_state_ref.update_one(self.state_query, {'$set': self.cur_pin_state}, True)
+
+    def pin_switch_inference_end(self, pin):
+        functions.set_gpio(1, 1, 1) # Process complete
+        self.cur_pin_state['GPO1'] = True
+        pin_state_ref.update_one(self.state_query, {'$set': self.cur_pin_state}, True)
+        time.sleep(.5)
+        functions.set_gpio(1, 1, 0) # Process complete
+        functions.set_gpio(1, 2, 0) # System Ready
+        functions.set_gpio(1, 3, 1) # Not Busy
+        self.cur_pin_state['GPO1'] = False # GPO Process Complete Pin OFF - GREEN
+        self.cur_pin_state['GPO2'] = True  # Ready Pin ON - GREEN
+        self.cur_pin_state['GPO3'] = False # Busy Pin OFF - ORANGE
+        self.cur_pin_state['GPI'+str(pin)] = False
+        pin_state_ref.update_one(self.state_query, {'$set': self.cur_pin_state}, True)
+
+    def allow_inference(self, cur_input_state_high, pin_num):
+        run_inference = False
+        if pin_num not in self.last_input_state: self.last_input_state[pin_num] = True
+        last_input_state_high = self.last_input_state[pin_num]
+        
+        # HIGH / LOW
+        if last_input_state_high and not cur_input_state_high:
+            run_inference = True
+            self.last_input_state[pin_num] = False
+        # LOW / HIGH
+        if not last_input_state_high and cur_input_state_high:
+            run_inference = False
+            self.last_input_state[pin_num] = True
+
+        return run_inference
+
+    def run(self):
+        while True:
+            time.sleep(.1)
+            for pin in range(1,9):
+                pin_high = functions.read_gpi(pin)
+                if self.allow_inference(pin_high, pin):
+                    self.pin_switch_inference_start(pin)
+                    query = {'ioVal': 'GPI'+str(pin)}
+                    presets = io_ref.find(query)
+                    for preset in presets:
+                        inference_args = (preset['cameraId'], preset['modelName'], preset['modelVersion'], preset['ioVal'], pin)
+                        
+                        thread = threading.Thread(target=self.run_inference, args=inference_args, daemon=True)
+                        thread.start()
+
+init_gpio = GPIO()
+init_gpio.run()
+
+            
+# print("input on pin 1 is low - TURNING ON LIGHT")
+# print(functions.set_gpio(1, 1, 0))
+
+# # input high - TURN OFF
+# print("input on pin 1 is high - TURNING OFF LIGHT")
+# print(functions.set_gpio(1, 1, 1))
+

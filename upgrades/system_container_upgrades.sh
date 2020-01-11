@@ -6,7 +6,7 @@ SYSTEM_ARCH=$4
 REDIS_VERSION='5.0.6'
 MONGO_VERSION='4.2'
 
-AUTH0_DOMAIN='auth.flexiblevision.com'
+AUTH0_DOMAIN='flexiblevision.auth0.com'
 AUTH0_CID='512rYG6XL32k3uiFg38HQ8fyubOOUUKf'
 REDIS_URL='redis://localhost:6379'
 REDIS_SERVER='172.17.0.1'
@@ -14,7 +14,7 @@ REDIS_PORT='6379'
 DB_NAME='fvonprem'
 MONGO_SERVER='172.17.0.1'
 MONGO_PORT='27017'
-CLOUD_DOMAIN='https://v1.cloud.flexiblevision.com'
+CLOUD_DOMAIN='https://clouddeploy.api.flexiblevision.com'
 GCP_FUNCTIONS_DOMAIN='https://us-central1-flexible-vision-staging.cloudfunctions.net/'
 
 if [ $CAP_UPTD != 'True' ]; then
@@ -53,3 +53,6 @@ if [ $PREDICT_UPTD != 'True' ]; then
         --restart unless-stopped --network imagerie_nw  \
         -t fvonprem/$4-prediction:$PREDICT_UPTD
 fi
+
+sh $HOME/flex-run/upgrades/install_dependencies.sh
+sh $HOME/flex-run/upgrades/start_servers.sh

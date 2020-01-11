@@ -29,6 +29,7 @@ from io import StringIO
 from io import BytesIO
 from version_check import *
 from worker_scripts.retrieve_models import retrieve_models
+from gpio.gpio_helper import toggle_pin
 
 from redis import Redis
 from rq import Queue, Worker, Connection
@@ -75,6 +76,16 @@ class Restart(Resource):
     def get(self):
         print('restarting system')
         os.system("reboot")
+
+class TogglePin(Resource):
+    #@auth.requires_auth
+    def put(self):
+        j = request.json
+        if 'pin_num' in j:
+            toggle_pin(j['pin_num'])
+            return True
+        else:
+            return False
 
 class Upgrade(Resource):
     @auth.requires_auth
@@ -267,6 +278,7 @@ api.add_resource(SaveImage, '/save_img')
 api.add_resource(ExportImage, '/export_img')
 api.add_resource(UpdateIp, '/update_ip')
 api.add_resource(GetCameraUID, '/camera_uid/<string:idx>')
+api.add_resource(TogglePin, '/toggle_pin')
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0',port='5001')
