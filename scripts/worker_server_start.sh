@@ -1,2 +1,1 @@
-home=/home/visioncell
-forever start -c python3 $home/flex-run/system_server/worker.py
+forever start -c python3 $HOME/flex-run/system_server/worker.py

@@ -17,10 +17,11 @@ pip3 install redis
 pip3 install pymongo
 pip3 install rq
 
-echo "home=$HOME\n$(cat $HOME/flex-run/scripts/fv_system_server_start.sh)" > $HOME/flex-run/scripts/fv_system_server_start.sh
-echo "home=$HOME\n$(cat $HOME/flex-run/scripts/worker_server_start.sh)" > $HOME/flex-run/scripts/worker_server_start.sh
-echo "home=$HOME\n$(cat $HOME/flex-run/scripts/tcp_server_start.sh)" > $HOME/flex-run/scripts/tcp_server_start.sh
-echo "home=$HOME\n$(cat $HOME/flex-run/scripts/gpio_server_start.sh)" > $HOME/flex-run/scripts/gpio_server_start.sh
+# -------------moved flex-run into root - no longer necessary ------------
+# echo "home=$HOME\n$(cat $HOME/flex-run/scripts/fv_system_server_start.sh)" > $HOME/flex-run/scripts/fv_system_server_start.sh
+# echo "home=$HOME\n$(cat $HOME/flex-run/scripts/worker_server_start.sh)" > $HOME/flex-run/scripts/worker_server_start.sh
+# echo "home=$HOME\n$(cat $HOME/flex-run/scripts/tcp_server_start.sh)" > $HOME/flex-run/scripts/tcp_server_start.sh
+# echo "home=$HOME\n$(cat $HOME/flex-run/scripts/gpio_server_start.sh)" > $HOME/flex-run/scripts/gpio_server_start.sh
 
 chmod +x $HOME/flex-run/scripts/fv_system_server_start.sh
 chmod +x $HOME/flex-run/scripts/worker_server_start.sh

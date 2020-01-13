@@ -1,10 +1,5 @@
 forever stopall
 
-echo "home=$HOME\n$(cat $HOME/flex-run/scripts/fv_system_server_start.sh)" > $HOME/flex-run/scripts/fv_system_server_start.sh
-echo "home=$HOME\n$(cat $HOME/flex-run/scripts/worker_server_start.sh)" > $HOME/flex-run/scripts/worker_server_start.sh
-echo "home=$HOME\n$(cat $HOME/flex-run/scripts/tcp_server_start.sh)" > $HOME/flex-run/scripts/tcp_server_start.sh
-echo "home=$HOME\n$(cat $HOME/flex-run/scripts/gpio_server_start.sh)" > $HOME/flex-run/scripts/gpio_server_start.sh
-
 chmod +x $HOME/flex-run/scripts/fv_system_server_start.sh
 chmod +x $HOME/flex-run/scripts/worker_server_start.sh
 chmod +x $HOME/flex-run/scripts/redis_server_start.sh
