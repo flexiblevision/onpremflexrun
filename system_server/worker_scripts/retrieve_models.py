@@ -17,7 +17,7 @@ client            = MongoClient("172.17.0.1")
 job_collection    = client["fvonprem"]["jobs"]
 models_collection = client["fvonprem"]["models"]
 
-CLOUD_DOMAIN = "https://clouddeploy.api.flexiblevision.com"
+CLOUD_DOMAIN = "https://v1.cloud.flexiblevision.com"
 
 def base_path():
     xavier_ssd = '/xavier_ssd/'

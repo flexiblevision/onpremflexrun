@@ -1,4 +1,5 @@
 import threading
+import os
 import time
 import requests
 from ctypes import *
@@ -11,7 +12,7 @@ io_ref   = client["fvonprem"]["io_presets"]
 util_ref = client["fvonprem"]["utils"]
 pin_state_ref = client["fvonprem"]["pin_state"]
 
-so_file = "/home/visioncell/gpio/gpio.so"
+so_file = os.environ['HOME']+"/flex-run/system_server/gpio/gpio.so"
 functions = CDLL(so_file)
 
 #(<direction>,<pin_index>,<value>)
@@ -25,8 +26,8 @@ class GPIO:
     def __init__(self):
         self.state_query      = {'type': 'gpio_pin_state'}
         self.cur_pin_state    = pin_state_ref.find_one(self.state_query)
-        self.last_input_state = {} 
-
+        self.last_input_state = {}
+        self.debounce_delay   = .05
 
     def run_inference(self, cameraId, modelName, modelVersion, ioVal, pin):
         res     = util_ref.find_one({'type': 'id_token'}, {'_id': 0})
@@ -37,6 +38,7 @@ class GPIO:
         url     = host+':'+port+path
         headers = {'Authorization': 'Bearer '+ token}
         res = requests.get(url, headers=headers)
+        print(res, '-----------------------')
         self.pin_switch_inference_end(pin)
 
     def pin_switch_inference_start(self, pin):
@@ -65,7 +67,7 @@ class GPIO:
         run_inference = False
         if pin_num not in self.last_input_state: self.last_input_state[pin_num] = True
         last_input_state_high = self.last_input_state[pin_num]
-        
+
         # HIGH / LOW
         if last_input_state_high and not cur_input_state_high:
             run_inference = True
@@ -79,10 +81,15 @@ class GPIO:
 
     def run(self):
         while True:
-            time.sleep(.1)
             for pin in range(1,9):
+                pin_debounce = functions.read_gpi(pin)
+                time.sleep(self.debounce_delay)
                 pin_high = functions.read_gpi(pin)
-                if self.allow_inference(pin_high, pin):
+                #check to make sure pin reading is still the same
+                #if it is, move into allow_inference logic
+                #if not, pass - false reading
+                bounced = pin_debounce != pin_high
+                if not bounced and self.allow_inference(pin_high, pin):
                     self.pin_switch_inference_start(pin)
                     query = {'ioVal': 'GPI'+str(pin)}
                     presets = io_ref.find(query)
@@ -102,4 +109,3 @@ init_gpio.run()
 # # input high - TURN OFF
 # print("input on pin 1 is high - TURNING OFF LIGHT")
 # print(functions.set_gpio(1, 1, 1))
-

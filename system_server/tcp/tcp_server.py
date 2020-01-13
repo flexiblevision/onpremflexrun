@@ -59,7 +59,7 @@ while True:
                             data_bytes = json.dumps(data).encode('utf-8')
                             packet_header = b''
                             if config['packet_header']:
-                                packet_header = b'\x01'+hex(len(data_bytes))
+                                packet_header = b'\x01'+str(len(data_bytes)).encode('utf-8')
                             data_bytes = packet_header+b'\x02'+data_bytes+b'\x03'+b'\x0d'
                             try:
                                 connections.sendall(data_bytes)
