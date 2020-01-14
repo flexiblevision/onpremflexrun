@@ -45,7 +45,7 @@ def is_container_uptodate(container):
     print(f'is up to date {is_up_to_date}')
     print(f'system version {system_version}')
     print(f'lastest stable version {stable_version}')
-    upgrade_to_version = stable_version if is_up_to_date==False else True
+    upgrade_to_version = stable_version if not is_up_to_date else True
 
     return (is_up_to_date, str(upgrade_to_version))
 
@@ -58,6 +58,3 @@ def system_arch():
     if arch == 'x86_64': arch = 'x86'
 
     return arch
-
-
-print(is_container_uptodate('frontend'))
