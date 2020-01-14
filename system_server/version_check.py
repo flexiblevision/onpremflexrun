@@ -15,22 +15,37 @@ def get_current_container_version(container):
     return data
 
 
-def get_latest_container_version(image):
+def get_latest_image_versions(image):
     data    = {"arch": system_arch(), "image": image}
     headers = {"Content-Type": "application/json"} 
-    res     = requests.post(CLOUD_FUNCTIONS_BASE+'container_versions', json=data, headers=headers)
+    res     = requests.post(CLOUD_FUNCTIONS_BASE+'container_versions_list', json=data, headers=headers)
+    
+    if res:
+        return res.json()
+
+def latest_stable_image_version(image):
+    data    = {"arch": system_arch(), "image": image}
+    headers = {"Content-Type": "application/json"} 
+    res     = requests.post(CLOUD_FUNCTIONS_BASE+'latest_stable_version', json=data, headers=headers)
     
     if res:
         return res.json()
 
 def is_container_uptodate(container):
     system_version  = get_current_container_version(CONTAINERS[container])
-    latest_version  = get_latest_container_version(container)
-    is_up_to_date   = str(latest_version) == str(system_version)
+    image_versions  = get_latest_image_versions(container)
+    stable_version  = latest_stable_image_version(container)
+
+    if str(stable_version) not in image_versions:
+        #if stable version does not exist - Do not prompt for upgrade
+        return (True,'True')
+    
+    is_up_to_date = str(stable_version) == str(system_version)
+    
     print(f'is up to date {is_up_to_date}')
-    print(f'syetem version {system_version}')
-    print(f' lastest version {latest_version}')
-    upgrade_to_version = latest_version if is_up_to_date==False else True
+    print(f'system version {system_version}')
+    print(f'lastest stable version {stable_version}')
+    upgrade_to_version = stable_version if is_up_to_date==False else True
 
     return (is_up_to_date, str(upgrade_to_version))
 
@@ -44,3 +59,5 @@ def system_arch():
 
     return arch
 
+
+print(is_container_uptodate('frontend'))
