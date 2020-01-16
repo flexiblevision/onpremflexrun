@@ -34,7 +34,7 @@ class GPIO:
         token   = res['token']
         host    = 'http://172.17.0.1'
         port    = '5000'
-        path    = '/api/capture/predict/snap/'+modelName+'/'+modelVersion+'/'+str(cameraId)+'?workstation='+ioVal
+        path    = '/api/capture/predict/snap/'+str(modelName)+'/'+str(modelVersion)+'/'+str(cameraId)+'?workstation='+str(ioVal)
         url     = host+':'+port+path
         headers = {'Authorization': 'Bearer '+ token}
         res = requests.get(url, headers=headers)
