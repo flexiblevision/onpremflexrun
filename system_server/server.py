@@ -244,18 +244,16 @@ class UpdateIp(Resource):
         data = request.json
         ifconfig = subprocess.Popen(['ifconfig'], stdout=subprocess.PIPE).communicate()[0].decode('utf-8')
 
-        if 'eth0' in ifconfig:
-            interface_name = 'eth0'
-        elif 'enp' in ifconfig:
-            interface_name = 'enp' + ifconfig.split('enp')[1][:3]
+        if 'enp' in ifconfig:
+            interface_name = 'enp' + ifconfig.split('enp')[1].split(':')[0]
         else:
             return 'ethernet interface not found'
-
-        interface = subprocess.Popen(['ifconfig', interface_name], stdout=subprocess.PIPE).communicate()[0].decode('utf-8')
+        
 
         if data['ip'] != '':
             os.system('sudo ifconfig ' + interface_name + ' '  + data['ip'] + ' netmask 255.255.255.0')
-            interface = subprocess.Popen(['ifconfig', interface_name], stdout=subprocess.PIPE).communicate()[0].decode('utf-8')
+
+        interface = subprocess.Popen(['ifconfig', interface_name], stdout=subprocess.PIPE).communicate()[0].decode('utf-8')
 
         if 'inet' in interface:
             ip = interface.split('inet')[1].split(' ')[1]
