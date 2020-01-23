@@ -126,10 +126,14 @@ class Networks(Resource):
         for i,line in enumerate(network_list):
             nets[i] = line
 
-        wlp = subprocess.Popen(['ifconfig', 'wlp3s0'], stdout=subprocess.PIPE).communicate()[0].decode('utf-8')
+        ifconfig = subprocess.Popen(['ifconfig'], stdout=subprocess.PIPE).communicate()[0].decode('utf-8')
+        
+        interface = 'wlp' + ifconfig.split('wlp')[1].split(':')[0]
 
+        wlp = subprocess.Popen(['ifconfig', interface], stdout=subprocess.PIPE).communicate()[0].decode('utf-8')
         nets['ip'] = wlp.split('inet')[1].split(' ')[1]
         return nets
+
 
     def post(self):
         j = request.json
