@@ -46,7 +46,7 @@ while True:
                         token   = res['token']
                         host    = 'http://172.17.0.1'
                         port    = '5000'
-                        path    = '/api/capture/predict/snap/'+preset['modelName']+'/'+str(preset['modelVersion'])+'/'+str(preset['cameraId'])+'?workstation='+'TCP: '+client_address[0]+' '+preset['ioVal']
+                        path    = '/api/capture/predict/snap/'+preset['modelName']+'/'+str(preset['modelVersion'])+'/'+str(preset['cameraId'])+'?workstation='+'TCP: '+client_address[0]+':'+preset['ioVal']+'&preset_id='+str(preset['presetId'])
                         url     = host+':'+port+path
                         headers = {'Authorization': 'Bearer '+ token}
                         resp    = requests.get(url, headers=headers)

@@ -29,12 +29,12 @@ class GPIO:
         self.last_input_state = {}
         self.debounce_delay   = .05
 
-    def run_inference(self, cameraId, modelName, modelVersion, ioVal, pin):
+    def run_inference(self, cameraId, modelName, modelVersion, ioVal, pin, presetId):
         res     = util_ref.find_one({'type': 'id_token'}, {'_id': 0})
         token   = res['token']
         host    = 'http://172.17.0.1'
         port    = '5000'
-        path    = '/api/capture/predict/snap/'+str(modelName)+'/'+str(modelVersion)+'/'+str(cameraId)+'?workstation='+str(ioVal)
+        path    = '/api/capture/predict/snap/'+str(modelName)+'/'+str(modelVersion)+'/'+str(cameraId)+'?workstation='+str(ioVal)+'&preset_id='+str(presetId)
         url     = host+':'+port+path
         headers = {'Authorization': 'Bearer '+ token}
         res = requests.get(url, headers=headers)
@@ -94,7 +94,7 @@ class GPIO:
                     query = {'ioVal': 'GPI'+str(pin)}
                     presets = io_ref.find(query)
                     for preset in presets:
-                        inference_args = (preset['cameraId'], preset['modelName'], preset['modelVersion'], preset['ioVal'], pin)
+                        inference_args = (preset['cameraId'], preset['modelName'], preset['modelVersion'], preset['ioVal'], pin, preset['presetId'])
                         
                         thread = threading.Thread(target=self.run_inference, args=inference_args, daemon=True)
                         thread.start()
