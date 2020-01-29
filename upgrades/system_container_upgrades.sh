@@ -54,5 +54,4 @@ if [ $PREDICT_UPTD != 'True' ]; then
         -t fvonprem/$4-prediction:$PREDICT_UPTD
 fi
 
-sh $HOME/flex-run/upgrades/install_dependencies.sh
-sh $HOME/flex-run/upgrades/start_servers.sh
+sh $HOME/flex-run/upgrades/upgrade_flex_run.sh
