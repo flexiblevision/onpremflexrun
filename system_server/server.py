@@ -77,6 +77,12 @@ class Restart(Resource):
         print('restarting system')
         os.system("reboot")
 
+class RestartBackend(Resource):
+    @auth.requires_auth
+    def get(self):
+        print('restarting capdev...')
+        os.system("docker restart capdev")
+
 class TogglePin(Resource):
     #@auth.requires_auth
     def put(self):
@@ -281,6 +287,7 @@ api.add_resource(ExportImage, '/export_img')
 api.add_resource(UpdateIp, '/update_ip')
 api.add_resource(GetCameraUID, '/camera_uid/<string:idx>')
 api.add_resource(TogglePin, '/toggle_pin')
+api.add_resource(RestartBackend, '/refresh_backend')
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0',port='5001')
