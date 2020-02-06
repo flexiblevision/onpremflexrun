@@ -137,8 +137,14 @@ class Networks(Resource):
         interface = 'wlp' + ifconfig.split('wlp')[1].split(':')[0]
 
         wlp = subprocess.Popen(['ifconfig', interface], stdout=subprocess.PIPE).communicate()[0].decode('utf-8')
-        nets['ip'] = wlp.split('inet')[1].split(' ')[1]
+        
+        if 'inet' in wlp:
+            nets['ip'] = wlp.split('inet')[1].split(' ')[1]
+        else:
+            nets['ip'] = 'Wi-Fi not connected'
+
         return nets
+
 
 
     def post(self):
