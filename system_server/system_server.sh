@@ -4,18 +4,18 @@ apt-get -y install nodejs
 apt-get -y install npm
 apt-get -y install curl
 apt-get -y install hostapd
-apt install -y redis-server
+apt install -y redis-server=4.0.9
 make install $HOME/flex-run/scripts/create_ap
-npm install forever -g
-pip3 install requests
-pip3 install python-jose
-pip3 install Flask
-pip3 install Flask-RESTful
-pip3 install Flask-Cors
-pip3 install Flask-Jsonpify
-pip3 install redis
-pip3 install pymongo
-pip3 install rq
+npm install forever@2.0.0 -g
+pip3 install 'requests==2.18.4'
+pip3 install 'python-jose==3.1.0'
+pip3 install 'Flask==1.1.1'
+pip3 install 'Flask-RESTful==0.3.7'
+pip3 install 'Flask-Cors==3.0.8'
+pip3 install 'Flask-Jsonpify==1.5.0'
+pip3 install 'redis==3.3.11'
+pip3 install 'pymongo==3.10.1'
+pip3 install 'rq==1.2.0'
 
 # -------------moved flex-run into root - no longer necessary ------------
 # echo "home=$HOME\n$(cat $HOME/flex-run/scripts/fv_system_server_start.sh)" > $HOME/flex-run/scripts/fv_system_server_start.sh

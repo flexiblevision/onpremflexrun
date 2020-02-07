@@ -167,7 +167,7 @@ class DownloadModels(Resource):
     def post(self):
         data           = request.json
         access_token   = request.headers.get('Access-Token')
-        job_queue.enqueue(retrieve_models, data, access_token, job_timeout=-1, result_ttl=-1)
+        job_queue.enqueue(retrieve_models, data, access_token, job_timeout=99999999, result_ttl=-1)
         return True
 
 class SystemVersions(Resource):
