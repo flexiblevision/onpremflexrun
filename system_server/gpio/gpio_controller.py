@@ -6,11 +6,14 @@ from ctypes import *
 from pymongo import MongoClient
 import datetime
 import string
+import json
+from bson import json_util, ObjectId
 
 client   = MongoClient("172.17.0.1")
 io_ref   = client["fvonprem"]["io_presets"]
 util_ref = client["fvonprem"]["utils"]
 pin_state_ref = client["fvonprem"]["pin_state"]
+pass_fail_ref = client["fvonprem"]["pass_fail"]
 
 so_file = os.environ['HOME']+"/flex-run/system_server/gpio/gpio.so"
 functions = CDLL(so_file)
@@ -29,6 +32,13 @@ class GPIO:
         self.last_input_state = {}
         self.debounce_delay   = .05
 
+    def get_pass_fail_entry(self, model, version):
+        query = {'modelName': model, 'modelVersion': version}
+        res   = pass_fail_ref.find(query)
+        data  = json.loads(json_util.dumps(res))
+        if not data: return False
+        return data[0]
+
     def run_inference(self, cameraId, modelName, modelVersion, ioVal, pin, presetId):
         res     = util_ref.find_one({'type': 'id_token'}, {'_id': 0})
         token   = res['token']
@@ -37,10 +47,36 @@ class GPIO:
         path    = '/api/capture/predict/snap/'+str(modelName)+'/'+str(modelVersion)+'/'+str(cameraId)+'?workstation='+str(ioVal)+'&preset_id='+str(presetId)
         url     = host+':'+port+path
         headers = {'Authorization': 'Bearer '+ token}
-        res = requests.get(url, headers=headers)
-        print(res, '-----------------------')
+        res  = requests.get(url, headers=headers)
+        data = res.json()
+        print(data, '-----------------------')
+        #self.set_pass_fail_pins(modelName, modelVersion, data['tags'])
+        self.set_pass_fail_pins(data)
         self.pin_switch_inference_end(pin)
 
+    def set_pass_fail_pins(self, data):
+        if 'pass_fail' in data:
+            print(data['pass_fail'], ' <======================')
+            if data['pass_fail'] == 'PASS':
+                #set pass pin
+                functions.set_gpio(1, 5, 0)
+                self.cur_pin_state['GPO5'] = True
+            if data['pass_fail'] == 'FAIL':
+                #set fail pin
+                functions.set_gpio(1, 6, 0)
+                self.cur_pin_state['GPO6'] = True
+
+            pin_state_ref.update_one(self.state_query, {'$set': self.cur_pin_state}, True)
+            time.sleep(.3)
+
+            functions.set_gpio(1, 5, 1)
+            functions.set_gpio(1, 6, 1)
+            self.cur_pin_state['GPO5'] = False
+            self.cur_pin_state['GPO6'] = False
+            pin_state_ref.update_one(self.state_query, {'$set': self.cur_pin_state}, True)
+            return data['pass_fail']
+        return 
+            
     def pin_switch_inference_start(self, pin):
         functions.set_gpio(1, 2, 1)        # ready OFF
         functions.set_gpio(1, 3, 0)        # system busy
@@ -53,7 +89,7 @@ class GPIO:
         functions.set_gpio(1, 1, 1) # Process complete
         self.cur_pin_state['GPO1'] = True
         pin_state_ref.update_one(self.state_query, {'$set': self.cur_pin_state}, True)
-        time.sleep(.5)
+        time.sleep(.3)
         functions.set_gpio(1, 1, 0) # Process complete
         functions.set_gpio(1, 2, 0) # System Ready
         functions.set_gpio(1, 3, 1) # Not Busy
