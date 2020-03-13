@@ -58,21 +58,20 @@ class GPIO:
         if 'pass_fail' in data:
             print(data['pass_fail'], ' <======================')
             if data['pass_fail'] == 'PASS':
+                functions.set_gpio(1, 6, 1)
+                self.cur_pin_state['GPO6'] = False
                 #set pass pin
                 functions.set_gpio(1, 5, 0)
                 self.cur_pin_state['GPO5'] = True
+
+
             if data['pass_fail'] == 'FAIL':
+                functions.set_gpio(1, 5, 1)
+                self.cur_pin_state['GPO5'] = False
                 #set fail pin
                 functions.set_gpio(1, 6, 0)
                 self.cur_pin_state['GPO6'] = True
 
-            pin_state_ref.update_one(self.state_query, {'$set': self.cur_pin_state}, True)
-            time.sleep(.3)
-
-            functions.set_gpio(1, 5, 1)
-            functions.set_gpio(1, 6, 1)
-            self.cur_pin_state['GPO5'] = False
-            self.cur_pin_state['GPO6'] = False
             pin_state_ref.update_one(self.state_query, {'$set': self.cur_pin_state}, True)
             return data['pass_fail']
         return 
