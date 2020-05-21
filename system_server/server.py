@@ -28,7 +28,10 @@ from collections import defaultdict
 from io import StringIO
 from io import BytesIO
 from version_check import *
+
 from worker_scripts.retrieve_models import retrieve_models
+from worker_scripts.retrieve_programs import retrieve_programs
+from worker_scripts.retrieve_masks import retrieve_masks
 from gpio.gpio_helper import toggle_pin
 
 from redis import Redis
@@ -173,7 +176,11 @@ class DownloadModels(Resource):
     def post(self):
         data           = request.json
         access_token   = request.headers.get('Access-Token')
-        job_queue.enqueue(retrieve_models, data, access_token, job_timeout=99999999, result_ttl=-1)
+        
+        #job_queue.enqueue(retrieve_models, data, access_token, job_timeout=99999999, result_ttl=-1)
+
+        job_queue.enqueue(retrieve_masks, data, access_token, job_timeout=99999999, result_ttl=-1)
+        job_queue.enqueue(retrieve_programs, data, access_token, job_timeout=9999999, result_ttl=-1) 
         return True
 
 class SystemVersions(Resource):
@@ -278,6 +285,26 @@ class UpdateIp(Resource):
 
         return ip
 
+class GetLanIps(Resource):
+    def get(self):
+        lanIps   = {'LAN1': 'not assigned', 'LAN2': 'not assigned'}
+        ifconfig = subprocess.Popen(['ifconfig'], stdout=subprocess.PIPE).communicate()[0].decode('utf-8')
+
+        for index, lan_port in enumerate(lanIps.keys()):
+            config_port = 'enp'+str(index)
+            if config_port in ifconfig:
+                interface = subprocess.Popen(['ifconfig', config_port], stdout=subprocess.PIPE).communicate()[0].decode('utf-8')
+                if 'inet' in interface:
+                    ip = interface.split('inet')[1].split(' ')[1]
+                else:
+                    ip = 'LAN IP not assigned'
+                lanIps[lan_port] = ip
+            else:
+                lanIps[lan_port] = 'ethernet interface not found'
+            
+
+        return lanIps
+
 api.add_resource(AuthToken, '/auth_token')
 api.add_resource(Networks, '/networks')
 api.add_resource(Shutdown, '/shutdown')
@@ -291,6 +318,7 @@ api.add_resource(DeviceInfo, '/device_info')
 api.add_resource(SaveImage, '/save_img')
 api.add_resource(ExportImage, '/export_img')
 api.add_resource(UpdateIp, '/update_ip')
+api.add_resource(GetLanIps, '/get_lan_ips')
 api.add_resource(GetCameraUID, '/camera_uid/<string:idx>')
 api.add_resource(TogglePin, '/toggle_pin')
 api.add_resource(RestartBackend, '/refresh_backend')

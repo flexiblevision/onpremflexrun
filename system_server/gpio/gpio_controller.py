@@ -30,7 +30,7 @@ class GPIO:
         self.state_query      = {'type': 'gpio_pin_state'}
         self.cur_pin_state    = pin_state_ref.find_one(self.state_query)
         self.last_input_state = {}
-        self.debounce_delay   = .05
+        self.debounce_delay   = .001
 
     def get_pass_fail_entry(self, model, version):
         query = {'modelName': model, 'modelVersion': version}
@@ -67,7 +67,7 @@ class GPIO:
                 self.cur_pin_state['GPO6'] = True
 
             pin_state_ref.update_one(self.state_query, {'$set': self.cur_pin_state}, True)
-            time.sleep(.3)
+            time.sleep(.1)
 
             functions.set_gpio(1, 5, 1)
             functions.set_gpio(1, 6, 1)
@@ -86,11 +86,11 @@ class GPIO:
         pin_state_ref.update_one(self.state_query, {'$set': self.cur_pin_state}, True)
 
     def pin_switch_inference_end(self, pin):
-        functions.set_gpio(1, 1, 1) # Process complete
+        functions.set_gpio(1, 1, 0) # Process complete
         self.cur_pin_state['GPO1'] = True
         pin_state_ref.update_one(self.state_query, {'$set': self.cur_pin_state}, True)
-        time.sleep(.3)
-        functions.set_gpio(1, 1, 0) # Process complete
+        time.sleep(.1)
+        functions.set_gpio(1, 1, 1) # Process complete
         functions.set_gpio(1, 2, 0) # System Ready
         functions.set_gpio(1, 3, 1) # Not Busy
         self.cur_pin_state['GPO1'] = False # GPO Process Complete Pin OFF - GREEN
