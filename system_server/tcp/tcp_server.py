@@ -15,6 +15,15 @@ io_ref   = client["fvonprem"]["io_presets"]
 util_ref = client["fvonprem"]["utils"]
 config_ref = client['fvonprem']['io_configs']
 
+def take_action(actions):
+    params = ''
+    for key in actions.keys():
+        if key == 'did':
+            params+='&did='+str(actions[key])
+
+    return params 
+
+
 sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 server_name    = '0.0.0.0'
 server_address = (server_name, 5300)
@@ -35,18 +44,28 @@ while True:
         for preset in presets: valid_commands[preset['ioVal']] = preset
         while True:
             try:
-                data = connections.recv(10)
+                data = connections.recv(100)
                 print('received: ', data)
                 if data:
                     incoming_command = data.decode('utf-8')
-                    if incoming_command in valid_commands.keys():
-                        
-                        preset  = valid_commands[incoming_command]
+                    command          = None
+                    actions          = None
+                    params           = ''
+                    try:
+                        incoming_command = json.loads(incoming_command)
+                        command          = list(incoming_command.keys())[0]
+                        actions          = incoming_command[command]
+                        params           = take_action(actions)
+                    except:
+                        print('INVALID COMMAND PARSE')
+
+                    if command in valid_commands.keys():
+                        preset  = valid_commands[command]
                         res     = util_ref.find_one({'type': 'id_token'}, {'_id': 0})
                         token   = res['token']
                         host    = 'http://172.17.0.1'
                         port    = '5000'
-                        path    = '/api/capture/predict/snap/'+preset['modelName']+'/'+str(preset['modelVersion'])+'/'+str(preset['cameraId'])+'?workstation='+'TCP: '+client_address[0]+':'+preset['ioVal']+'&preset_id='+str(preset['presetId'])
+                        path    = '/api/capture/predict/snap/'+preset['modelName']+'/'+str(preset['modelVersion'])+'/'+str(preset['cameraId'])+'?workstation='+'TCP: '+client_address[0]+':'+preset['ioVal']+'&preset_id='+str(preset['presetId'])+params
                         url     = host+':'+port+path
                         headers = {'Authorization': 'Bearer '+ token}
                         resp    = requests.get(url, headers=headers)

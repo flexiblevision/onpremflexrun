@@ -59,40 +59,54 @@ class GPIO:
             print(data['pass_fail'], ' <======================')
             if data['pass_fail'] == 'PASS':
                 #set pass pin
-                functions.set_gpio(1, 5, 0)
+                #time.sleep(.1)
+                print(functions.set_gpio(1, 5, 0), 'PASS PIN ON')
+                #time.sleep(.1)
                 self.cur_pin_state['GPO5'] = True
             if data['pass_fail'] == 'FAIL':
                 #set fail pin
-                functions.set_gpio(1, 6, 0)
+                #time.sleep(.1)
+                print(functions.set_gpio(1, 6, 0), 'FAIL PIN ON')
+                #time.sleep(.1)
                 self.cur_pin_state['GPO6'] = True
 
             pin_state_ref.update_one(self.state_query, {'$set': self.cur_pin_state}, True)
-            time.sleep(.1)
+            time.sleep(.5)
 
-            functions.set_gpio(1, 5, 1)
-            functions.set_gpio(1, 6, 1)
+            print(functions.set_gpio(1, 5, 1), 'PASS PIN OFF')
+            #time.sleep(.1)
+            print(functions.set_gpio(1, 6, 1), 'FAIL PIN OFF')
+            #time.sleep(.1)
             self.cur_pin_state['GPO5'] = False
             self.cur_pin_state['GPO6'] = False
             pin_state_ref.update_one(self.state_query, {'$set': self.cur_pin_state}, True)
             return data['pass_fail']
-        return 
-            
+        return
+
     def pin_switch_inference_start(self, pin):
+        #time.sleep(.1)
         functions.set_gpio(1, 2, 1)        # ready OFF
+        #time.sleep(.1)
         functions.set_gpio(1, 3, 0)        # system busy
+        #time.sleep(.1)
         self.cur_pin_state['GPO2'] = False # ready pin OFF - RED
         self.cur_pin_state['GPO3'] = True  # busy pin ON - RED
         self.cur_pin_state['GPI'+str(pin)] = True
         pin_state_ref.update_one(self.state_query, {'$set': self.cur_pin_state}, True)
 
     def pin_switch_inference_end(self, pin):
+        #time.sleep(.1)
         functions.set_gpio(1, 1, 0) # Process complete
+        #time.sleep(.1)
         self.cur_pin_state['GPO1'] = True
         pin_state_ref.update_one(self.state_query, {'$set': self.cur_pin_state}, True)
-        time.sleep(.1)
+        time.sleep(.3)
         functions.set_gpio(1, 1, 1) # Process complete
+        #time.sleep(.1)
         functions.set_gpio(1, 2, 0) # System Ready
+        #time.sleep(.1)
         functions.set_gpio(1, 3, 1) # Not Busy
+        #time.sleep(.1)
         self.cur_pin_state['GPO1'] = False # GPO Process Complete Pin OFF - GREEN
         self.cur_pin_state['GPO2'] = True  # Ready Pin ON - GREEN
         self.cur_pin_state['GPO3'] = False # Busy Pin OFF - ORANGE
@@ -131,17 +145,19 @@ class GPIO:
                     presets = io_ref.find(query)
                     for preset in presets:
                         inference_args = (preset['cameraId'], preset['modelName'], preset['modelVersion'], preset['ioVal'], pin, preset['presetId'])
-                        
+                        print('STARTING THREAD ------------------------')
                         thread = threading.Thread(target=self.run_inference, args=inference_args, daemon=True)
                         thread.start()
+                        time.sleep(2)
 
 init_gpio = GPIO()
 init_gpio.run()
 
-            
+
 # print("input on pin 1 is low - TURNING ON LIGHT")
 # print(functions.set_gpio(1, 1, 0))
 
 # # input high - TURN OFF
 # print("input on pin 1 is high - TURNING OFF LIGHT")
 # print(functions.set_gpio(1, 1, 1))
+                                      
