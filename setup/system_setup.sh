@@ -13,7 +13,7 @@ REDIS_PORT='6379'
 DB_NAME='fvonprem'
 MONGO_SERVER='172.17.0.1'
 MONGO_PORT='27017'
-CLOUD_DOMAIN='https://v1.cloud.flexiblevision.com'
+CLOUD_DOMAIN="$(cat ../cloud_domain.txt)"
 GCP_FUNCTIONS_DOMAIN='https://us-central1-flexible-vision-staging.cloudfunctions.net/'
 
 docker run -p $MONGO_PORT:$MONGO_PORT --restart unless-stopped  --name mongo -d mongo:$MONGO_VERSION

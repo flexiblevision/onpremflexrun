@@ -18,6 +18,8 @@ job_collection    = client["fvonprem"]["jobs"]
 masks_collection  = client["fvonprem"]["masks"]
 
 CLOUD_DOMAIN = "https://clouddeploy.api.flexiblevision.com"
+with open('../../cloud_domain.txt', 'r') as file:
+    CLOUD_DOMAIN = file.read().replace('\n', '')
 
 def retrieve_masks(resp_data, token):
     job_id = str(uuid.uuid4())

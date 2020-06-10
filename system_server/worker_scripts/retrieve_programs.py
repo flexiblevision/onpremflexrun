@@ -18,6 +18,9 @@ job_collection      = client["fvonprem"]["jobs"]
 programs_collection = client["fvonprem"]["programs"]
 
 CLOUD_DOMAIN = "https://clouddeploy.api.flexiblevision.com"
+with open('../../cloud_domain.txt', 'r') as file: 
+    CLOUD_DOMAIN = file.read().replace('\n', '')
+
 
 def retrieve_programs(resp_data, token):
     job_id = str(uuid.uuid4())
