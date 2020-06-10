@@ -177,8 +177,7 @@ class DownloadModels(Resource):
         data           = request.json
         access_token   = request.headers.get('Access-Token')
         
-        #job_queue.enqueue(retrieve_models, data, access_token, job_timeout=99999999, result_ttl=-1)
-
+        job_queue.enqueue(retrieve_models, data, access_token, job_timeout=99999999, result_ttl=-1)
         job_queue.enqueue(retrieve_masks, data, access_token, job_timeout=99999999, result_ttl=-1)
         job_queue.enqueue(retrieve_programs, data, access_token, job_timeout=9999999, result_ttl=-1) 
         return True
