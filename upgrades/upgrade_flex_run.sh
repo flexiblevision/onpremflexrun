@@ -1,4 +1,4 @@
-git clone git://github.com/flexiblevision/onpremflexrun.git ~/flex-run-temp
+git clone --single-branch --branch "$(cat ../flex_run_branch.txt)" git://github.com/flexiblevision/onpremflexrun.git ~/flex-run-temp
 cp -r ~/flex-run-temp/* ~/flex-run/
 rm -rf ~/flex-run-temp
 
