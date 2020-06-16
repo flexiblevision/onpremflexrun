@@ -9,6 +9,15 @@ AUTH0_DOMAIN = 'auth.flexiblevision.com'
 ALGORITHMS   = ["RS256"]
 CLIENT_ID    = '512rYG6XL32k3uiFg38HQ8fyubOOUUKf'
 
+auth0_domain_path = os.path.expanduser('~/flex-run/setup_constants/auth0_domain.txt')
+with open(auth0_domain_path, 'r') as file:
+    AUTH0_DOMAIN = file.read().replace('\n', '')
+
+auth0_cid_path = os.path.expanduser('~/flex-run/setup_constants/auth0_CID.txt')
+with open(auth0_cid_path, 'r') as file:
+    CLIENT_ID = file.read().replace('\n', '')
+
+
 APP = Flask(__name__)
 
 class AuthError(Exception):

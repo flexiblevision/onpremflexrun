@@ -18,7 +18,8 @@ job_collection    = client["fvonprem"]["jobs"]
 models_collection = client["fvonprem"]["models"]
 
 CLOUD_DOMAIN = "https://clouddeploy.api.flexiblevision.com"
-with open('../../cloud_domain.txt', 'r') as file: 
+cloud_path   = os.path.expanduser('~/flex-run/setup_constants/cloud_domain.txt')
+with open(cloud_path, 'r') as file: 
     CLOUD_DOMAIN = file.read().replace('\n', '')
 
 def base_path():

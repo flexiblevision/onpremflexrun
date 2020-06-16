@@ -1,0 +1,1 @@
+latest_stable_version_dev

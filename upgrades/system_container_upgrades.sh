@@ -14,8 +14,8 @@ REDIS_PORT='6379'
 DB_NAME='fvonprem'
 MONGO_SERVER='172.17.0.1'
 MONGO_PORT='27017'
-CLOUD_DOMAIN="$(cat ../cloud_domain.txt)"
-GCP_FUNCTIONS_DOMAIN='https://us-central1-flexible-vision-staging.cloudfunctions.net/'
+CLOUD_DOMAIN="$(cat ~/flex-run/setup_constants/cloud_domain.txt)"
+GCP_FUNCTIONS_DOMAIN="$(cat ~/flex-run/setup_constants/gcp_functions_domain.txt)"
 
 if [ $CAP_UPTD != 'True' ]; then
     #copy camera data to local device
