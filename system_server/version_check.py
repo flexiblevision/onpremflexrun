@@ -1,5 +1,6 @@
 import requests
 import subprocess
+import os
 
 CONTAINERS  = {'backend':'capdev', 'frontend':'captureui', 'prediction':'localprediction'}
 CLOUD_FUNCTIONS_BASE = 'https://us-central1-flexible-vision-staging.cloudfunctions.net/'
