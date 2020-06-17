@@ -34,9 +34,8 @@ def get_latest_image_versions(image):
 
 def latest_stable_image_version(image):
     data    = {"arch": system_arch(), "image": image}
-    headers = {"Content-Type": "application/json"} 
+    headers = {"Content-Type": "application/json"}
     res     = requests.post(CLOUD_FUNCTIONS_BASE+LATEST_STABLE_REF, json=data, headers=headers)
-    
     if res:
         return res.json()
 
