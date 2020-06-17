@@ -286,13 +286,16 @@ class UpdateIp(Resource):
 
 class GetLanIps(Resource):
     def get(self):
+        lanIds   = [0,3]
         lanIps   = {'LAN1': 'not assigned', 'LAN2': 'not assigned'}
         ifconfig = subprocess.Popen(['ifconfig'], stdout=subprocess.PIPE).communicate()[0].decode('utf-8')
 
         for index, lan_port in enumerate(lanIps.keys()):
-            config_port = 'enp'+str(index)
+            config_port = 'enp'+str(lanIds[index])
+
             if config_port in ifconfig:
-                interface = subprocess.Popen(['ifconfig', config_port], stdout=subprocess.PIPE).communicate()[0].decode('utf-8')
+                interface_name = config_port + ifconfig.split(config_port)[1].split(':')[0]
+                interface = subprocess.Popen(['ifconfig', interface_name], stdout=subprocess.PIPE).communicate()[0].decode('utf-8')
                 if 'inet' in interface:
                     ip = interface.split('inet')[1].split(' ')[1]
                 else:
@@ -300,9 +303,10 @@ class GetLanIps(Resource):
                 lanIps[lan_port] = ip
             else:
                 lanIps[lan_port] = 'ethernet interface not found'
-            
+
 
         return lanIps
+
 
 api.add_resource(AuthToken, '/auth_token')
 api.add_resource(Networks, '/networks')
