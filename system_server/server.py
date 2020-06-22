@@ -295,10 +295,16 @@ class GetLanIps(Resource):
             if config_port in ifconfig:
                 interface_name = config_port + ifconfig.split(config_port)[1].split(':')[0]
                 interface = subprocess.Popen(['ifconfig', interface_name], stdout=subprocess.PIPE).communicate()[0].decode('utf-8')
+                
+                ip6 = None
+                if 'inet6' in interface:
+                    ip6 = interface.split('inet6')[1].split(' ')[1]
                 if 'inet' in interface:
                     ip = interface.split('inet')[1].split(' ')[1]
                 else:
                     ip = 'LAN IP not assigned'
+
+                if ip6 and ip6 == ip: ip = 'LAN IP not assigned'
                 lanIps[lan_port] = ip
             else:
                 lanIps[lan_port] = 'ethernet interface not found'
