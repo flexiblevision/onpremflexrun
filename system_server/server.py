@@ -286,13 +286,12 @@ class UpdateIp(Resource):
 
 class GetLanIps(Resource):
     def get(self):
-        lanIds   = [0,3]
+        lanIds   = [3,0]
         lanIps   = {'LAN1': 'not assigned', 'LAN2': 'not assigned'}
         ifconfig = subprocess.Popen(['ifconfig'], stdout=subprocess.PIPE).communicate()[0].decode('utf-8')
 
         for index, lan_port in enumerate(lanIps.keys()):
             config_port = 'enp'+str(lanIds[index])
-
             if config_port in ifconfig:
                 interface_name = config_port + ifconfig.split(config_port)[1].split(':')[0]
                 interface = subprocess.Popen(['ifconfig', interface_name], stdout=subprocess.PIPE).communicate()[0].decode('utf-8')
