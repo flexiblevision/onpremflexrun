@@ -56,6 +56,11 @@ def base_path():
 
 BASE_PATH_TO_MODELS = base_path()+'models/'
 
+def get_mac_id():
+    cmd = subprocess.Popen(['cat', '/sys/class/net/wlp2s0/address'], stdout=subprocess.PIPE)
+    cmd_out, cmd_err = cmd.communicate()
+    return  cmd_out.strip().decode("utf-8")
+
 def system_info():
     out = subprocess.Popen(['lshw', '-short'], stdout=subprocess.PIPE)
     cmd = subprocess.Popen(['grep', 'system'], stdin=out.stdout, stdout=subprocess.PIPE)
@@ -67,6 +72,10 @@ def system_arch():
     cmd = subprocess.Popen(['arch'], stdout=subprocess.PIPE)
     cmd_out, cmd_err = cmd.communicate()
     return  cmd_out.strip().decode("utf-8")
+
+class MacId(Resource):
+    def get(self):
+        return get_mac_id()
 
 class Shutdown(Resource):
     @auth.requires_auth
@@ -315,6 +324,7 @@ class GetLanIps(Resource):
 
 api.add_resource(AuthToken, '/auth_token')
 api.add_resource(Networks, '/networks')
+api.add_resource(MacId, '/mac_id')
 api.add_resource(Shutdown, '/shutdown')
 api.add_resource(Restart, '/restart')
 api.add_resource(Upgrade, '/upgrade')
