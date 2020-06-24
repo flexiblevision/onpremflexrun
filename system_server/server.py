@@ -158,7 +158,12 @@ class AuthToken(Resource):
 
 class Networks(Resource):
     def get(self):
-        networks = subprocess.check_output(['nmcli', '-f', 'SSID', 'dev', 'wifi'])
+        try:
+            networks = subprocess.check_output(['nmcli', '-f', 'SSID', 'dev', 'wifi'])
+        except:
+            print('ERROR - NETWORK MANAGER NOT FOUND')
+            restart_network_manager()
+            return 
         nets = {}
         network_list = []
         for i in networks.splitlines():
