@@ -56,6 +56,28 @@ def base_path():
 
 BASE_PATH_TO_MODELS = base_path()+'models/'
 
+def is_valid_ip(ip):
+    if not ip: return False
+    m = re.match(r"^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$", ip)
+    return bool(m) and all(map(lambda n: 0 <= int(n) <= 255, m.groups()))
+
+def set_static_ips(network = None):
+    ips = ['192.168.0.10/24']
+    if is_valid_ip(network):
+        ips.append(network+'/24')
+
+    ip_string = '['
+    for ip in ips: ip_string += (ip+', ') 
+    ip_string = ip_string + ']'
+
+    with open ('/etc/netplan/fv-net-init.yaml', 'w') as f:
+        f.write('network:\n')
+        f.write('  version: 2\n')
+        f.write('  ethernets:\n')
+        f.write('    enp0s31f6:\n')
+        f.write('      dhcp4: false\n')
+        f.write('      addresses: '+ip_string)
+
 def get_mac_id():
     cmd = subprocess.Popen(['cat', '/sys/class/net/wlp2s0/address'], stdout=subprocess.PIPE)
     cmd_out, cmd_err = cmd.communicate()
@@ -72,6 +94,9 @@ def system_arch():
     cmd = subprocess.Popen(['arch'], stdout=subprocess.PIPE)
     cmd_out, cmd_err = cmd.communicate()
     return  cmd_out.strip().decode("utf-8")
+
+def restart_network_manager():
+    os.system("service network-manager restart")
 
 class MacId(Resource):
     def get(self):
@@ -211,7 +236,7 @@ class DeviceInfo(Resource):
         info = {}
         info['system']        = system_info()
         info['arch']          = system_arch()
-        info['mac_id']        = ':'.join(re.findall('..', '%012x' % uuid.getnode()))
+        info['mac_id']        = get_mac_id()
         info['last_active']   = str(datetime.datetime.now())
         info['last_known_ip'] = domain
         return info
@@ -280,8 +305,8 @@ class UpdateIp(Resource):
         else:
             return 'ethernet interface not found'
         
-
-        if data['ip'] != '':
+        if data['ip'] != '' and is_valid_ip(data['ip']):
+            set_static_ips(data['ip'])
             os.system('sudo ifconfig ' + interface_name + ' '  + data['ip'] + ' netmask 255.255.255.0')
 
         interface = subprocess.Popen(['ifconfig', interface_name], stdout=subprocess.PIPE).communicate()[0].decode('utf-8')
