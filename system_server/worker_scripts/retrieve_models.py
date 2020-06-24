@@ -133,8 +133,8 @@ def insert_job_ref(job_id):
 
 def delete_job_ref(job_id):
     query = {'_id': job_id}
-    job_collection.drop()
     job_collection.delete_one(query)
+    job_collection.drop()
 
 
 def failed_job_ref(job_id):
