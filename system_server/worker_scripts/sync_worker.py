@@ -106,7 +106,7 @@ def sync_device():
         time.sleep(5)
         check_and_cleanup()
 
-# time.sleep(60)
+time.sleep(120)
 
 while True:
     time.sleep(1)
