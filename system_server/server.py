@@ -61,8 +61,28 @@ def is_valid_ip(ip):
     m = re.match(r"^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$", ip)
     return bool(m) and all(map(lambda n: 0 <= int(n) <= 255, m.groups()))
 
+def get_static_ip_ref():
+    static_ip  = '192.168.0.10'
+    path_ref   = os.path.expanduser('~/flex-run/setup_constants/static_ip.txt')
+    try:
+        with open(path_ref, 'r') as file:
+            static_ip = file.read().replace('\n', '')
+    except: return static_ip
+    return static_ip
+
+def get_interface_name_ref():
+    interface_name  = 'enp0s31f6'
+    path_ref        = os.path.expanduser('~/flex-run/setup_constants/interface_name.txt')
+    try:
+        with open(path_ref, 'r') as file:
+            interface_name = file.read().replace('\n', '')
+    except: return interface_name
+    return interface_name
+
 def set_static_ips(network = None):
-    ips = ['192.168.0.10/24']
+    static_ip      = get_static_ip_ref()
+    ips            = [static_ip+'/24']
+    interface_name = get_interface_name_ref()
     if is_valid_ip(network):
         ips.append(network+'/24')
 
@@ -74,7 +94,7 @@ def set_static_ips(network = None):
         f.write('network:\n')
         f.write('  version: 2\n')
         f.write('  ethernets:\n')
-        f.write('    enp0s31f6:\n')
+        f.write('    '+interface_name+':\n')
         f.write('      dhcp4: false\n')
         f.write('      addresses: '+ip_string)
 
