@@ -81,11 +81,12 @@ def get_interface_name_ref():
 
 def set_static_ips(network = None):
     static_ip      = get_static_ip_ref()
-    ips            = [static_ip+'/24']
+    ips            = []
     interface_name = get_interface_name_ref()
     if is_valid_ip(network):
         ips.append(network+'/24')
 
+    ips.append(static_ip+'/24') #append static ip
     ip_string = '['
     for ip in ips: ip_string += (ip+', ') 
     ip_string = ip_string + ']'
