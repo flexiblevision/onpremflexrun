@@ -52,6 +52,13 @@ if [ $PREDICT_UPTD != 'True' ]; then
     docker run -p 8500:8500 -p 8501:8501 --runtime=nvidia --name localprediction  -d -e AWS_ACCESS_KEY_ID=imagerie -e AWS_SECRET_ACCESS_KEY=imagerie -e AWS_REGION=us-east-1 \
         --restart unless-stopped --network imagerie_nw  \
         -t fvonprem/$4-prediction:$PREDICT_UPTD
+
+    DIR=$HOME"/../models"
+    if [ -d "$DIR" ]; then
+    	docker cp $DIR localprediction:/
+	docker restart localprediction
+    fi
+
 fi
 
 sh $HOME/flex-run/upgrades/upgrade_flex_run.sh
