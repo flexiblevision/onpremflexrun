@@ -39,8 +39,8 @@ def refresh_tokens():
     url = HOST+':'+PORT+path
     res = s.post(url, headers=headers, json=data)
     tokens = res.json()
-    if 'id_token' in tokens:
-        return tokens['id_token']
+    if 'id_token' in tokens and 'access_token' in tokens:
+        return {'id_token':tokens['id_token'], 'access_token': tokens['access_token']}
     return False
 
 def decode_base64(data, altchars='+/'):
@@ -62,15 +62,16 @@ def token_is_valid(token):
         return True
 
 def get_auth_token():
-    res   = util_ref.find_one({'type': 'id_token'}, {'_id': 0})
-    token = res['token']
-    if token_is_valid(token):
-        return token
+    id_token_obj     = util_ref.find_one({'type': 'id_token'}, {'_id': 0})
+    access_token_obj = util_ref.find_one({'type': 'access_token'}, {'_id': 0})
+    access_token = access_token_obj['token']
+    id_token = id_token_obj['token']
+    if token_is_valid(id_token) and token_is_valid(access_token):
+        return {'access_token': access_token, 'id_token': id_token}
     else:
         print('REFRESHING TOKENS ')
-        # GET ACCESS TOKEN HERE
-        token = refresh_tokens()
-        return token
+        tokens = refresh_tokens()
+        return tokens
 
     return None
 
@@ -81,26 +82,26 @@ def can_sync():
     return res.json()
 
 def check_and_cleanup():
-    path  = '/api/capture/system/will_purge_analytics'
-    url   = HOST+':'+PORT+path
-    token = get_auth_token()
-    if token:
+    path   = '/api/capture/system/will_purge_analytics'
+    url    = HOST+':'+PORT+path
+    tokens = get_auth_token()
+    if tokens:
         headers = {
             'Accept': 'application/json',
             'Content-Type': 'application/json',
-            'Authorization': 'Bearer ' + token
+            'Authorization': 'Bearer ' + tokens['id_token']
         }
         res = s.post(url, headers=headers)
         print('CLEANUP RESPONSE: ',res)
 
 def sync_device():
-    path  = '/api/capture/system/sync_db'
-    url   = HOST+':'+PORT+path
-    token = get_auth_token()
-    if can_sync() and get_auth_token():
+    path   = '/api/capture/system/sync_db'
+    url    = HOST+':'+PORT+path
+    tokens = get_auth_token()
+    if can_sync() and tokens:
         print('SYNCING FROM WORKER ----------------', datetime.datetime.now())
-        headers = {'Authorization': 'Bearer '+token,
-                  'Access-Token': token
+        headers = {'Authorization': 'Bearer '+tokens['id_token'],
+                  'Access-Token': token['access_token']
                 }
         res     = s.get(url, headers=headers)
         time.sleep(5)
