@@ -101,7 +101,7 @@ def sync_device():
     if can_sync() and tokens:
         print('SYNCING FROM WORKER ----------------', datetime.datetime.now())
         headers = {'Authorization': 'Bearer '+tokens['id_token'],
-                  'Access-Token': token['access_token']
+                  'Access-Token': tokens['access_token']
                 }
         res     = s.get(url, headers=headers)
         time.sleep(5)
