@@ -100,7 +100,9 @@ def set_static_ips(network = None):
         f.write('      addresses: '+ip_string)
 
 def get_mac_id():
-    cmd = subprocess.Popen(['cat', '/sys/class/net/wlp2s0/address'], stdout=subprocess.PIPE)
+    ifconfig  = subprocess.Popen(['ifconfig'], stdout=subprocess.PIPE).communicate()[0].decode('utf-8')
+    interface = 'wlp' + ifconfig.split('wlp')[1].split(':')[0]
+    cmd = subprocess.Popen(['cat', '/sys/class/net/'+interface+'/address'], stdout=subprocess.PIPE)
     cmd_out, cmd_err = cmd.communicate()
     return  cmd_out.strip().decode("utf-8")
 
