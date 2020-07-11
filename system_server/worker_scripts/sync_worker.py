@@ -124,7 +124,7 @@ def sync_device():
             print('Failed to sync')
             time.sleep(5)
         
-#time.sleep(120)
+time.sleep(120)
 
 while True:
     time.sleep(1)
