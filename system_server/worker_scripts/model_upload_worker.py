@@ -46,21 +46,12 @@ def create_config_file():
 
 
 def upload_model(temp_model_path, filename):
-    time.sleep(5)
-    print(temp_model_path)
-    print(filename)
-    print('------------------')
-
     if os.path.exists(temp_model_path) and filename:
         split_fname    = filename.split('#')
         model_name     = split_fname[0]
         version        = split_fname[1].split('.')[0]
         model_path     = '/models/'+model_name
         version_path   = '/models/'+model_name+'/'+version
-
-        print(version_path)
-        print(model_path)
-
         model_exists   = os.path.exists(model_path)
         version_exists = os.path.exists(version_path)
 
