@@ -32,12 +32,17 @@ from version_check import *
 from worker_scripts.retrieve_models import retrieve_models
 from worker_scripts.retrieve_programs import retrieve_programs
 from worker_scripts.retrieve_masks import retrieve_masks
+from worker_scripts.model_upload_worker import upload_model
+
 from gpio.gpio_helper import toggle_pin
 
 from redis import Redis
 from rq import Queue, Worker, Connection
 from rq.job import Job
 import socket
+
+from werkzeug import secure_filename
+import tempfile
 
 app = Flask(__name__)
 api = Api(app)
@@ -374,6 +379,35 @@ class GetLanIps(Resource):
 
         return lanIps
 
+class UploadModel(Resource):
+    #@auth.requires_auth
+    def post(self):
+        fl = request.files['file']
+        if not fl: return False 
+
+        split_fname = fl.filename.split('#')
+        model_name  = split_fname[0]
+        version     = split_fname[1].split('.')[0]
+
+        #Temporarily write folder to root directory
+        path = "/"+model_name
+        os.system("mkdir "+path)
+        fn = secure_filename(tempfile.gettempdir() + 'model.zip')
+        fl.save(fn)
+
+        try:
+            print('EXTRACTING ZIP FILE')
+            with zipfile.ZipFile(fn) as zf:
+                zf.extractall(path)
+
+            os.system("mv "+path+"/job.json "+path+"/"+str(version))
+            os.system("mv "+path+"/object-detection.pbtxt "+path+"/"+str(version))
+            os.system("rm -rf "+fn)
+
+            job_queue.enqueue(upload_model, str(path), str(fl.filename), job_timeout=99999999, result_ttl=-1)
+        except zipfile.BadZipfile:
+            print('bad zipfile in ',fn)
+
 
 api.add_resource(AuthToken, '/auth_token')
 api.add_resource(Networks, '/networks')
@@ -393,6 +427,7 @@ api.add_resource(GetLanIps, '/get_lan_ips')
 api.add_resource(GetCameraUID, '/camera_uid/<string:idx>')
 api.add_resource(TogglePin, '/toggle_pin')
 api.add_resource(RestartBackend, '/refresh_backend')
+api.add_resource(UploadModel, '/upload_model')
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0',port='5001')

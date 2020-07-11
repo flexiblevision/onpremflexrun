@@ -37,10 +37,14 @@ def refresh_tokens():
     }
     data   = {'refresh_token': refresh_token}
     url = HOST+':'+PORT+path
-    res = s.post(url, headers=headers, json=data)
-    tokens = res.json()
-    if 'id_token' in tokens and 'access_token' in tokens:
-        return {'id_token':tokens['id_token'], 'access_token': tokens['access_token']}
+    try:
+        res = s.post(url, headers=headers, json=data)
+        tokens = res.json()
+        if 'id_token' in tokens and 'access_token' in tokens:
+            return {'id_token':tokens['id_token'], 'access_token': tokens['access_token']}
+    except:
+        print('Failed to refresh token')
+
     return False
 
 def decode_base64(data, altchars='+/'):
@@ -78,7 +82,13 @@ def get_auth_token():
 def can_sync():
     path = '/api/capture/system/can_sync'
     url  = HOST+':'+PORT+path
-    res  = s.get(url)
+    try:
+        res  = s.get(url)
+    except:
+        print('Failed to request sync')
+        time.sleep(5)
+        return False
+
     return res.json()
 
 def check_and_cleanup():
@@ -91,8 +101,11 @@ def check_and_cleanup():
             'Content-Type': 'application/json',
             'Authorization': 'Bearer ' + tokens['id_token']
         }
-        res = s.post(url, headers=headers)
-        print('CLEANUP RESPONSE: ',res)
+        try:
+            res = s.post(url, headers=headers)
+            print('CLEANUP RESPONSE: ',res)
+        except:
+            print('Failed to cleanup')
 
 def sync_device():
     path   = '/api/capture/system/sync_db'
@@ -103,11 +116,15 @@ def sync_device():
         headers = {'Authorization': 'Bearer '+tokens['id_token'],
                   'Access-Token': tokens['access_token']
                 }
-        res     = s.get(url, headers=headers)
-        time.sleep(5)
-        check_and_cleanup()
-
-time.sleep(120)
+        try:
+            res = s.get(url, headers=headers)
+            time.sleep(5)
+            check_and_cleanup()
+        except:
+            print('Failed to sync')
+            time.sleep(5)
+        
+#time.sleep(120)
 
 while True:
     time.sleep(1)
