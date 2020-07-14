@@ -28,13 +28,19 @@ from collections import defaultdict
 from io import StringIO
 from io import BytesIO
 from version_check import *
+
 from worker_scripts.retrieve_models import retrieve_models
+from worker_scripts.retrieve_programs import retrieve_programs
+from worker_scripts.retrieve_masks import retrieve_masks
+from worker_scripts.model_upload_worker import upload_model
+
 from gpio.gpio_helper import toggle_pin
 
 from redis import Redis
 from rq import Queue, Worker, Connection
 from rq.job import Job
 import socket
+import tempfile
 
 app = Flask(__name__)
 api = Api(app)
@@ -53,6 +59,56 @@ def base_path():
 
 BASE_PATH_TO_MODELS = base_path()+'models/'
 
+def is_valid_ip(ip):
+    if not ip: return False
+    m = re.match(r"^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$", ip)
+    return bool(m) and all(map(lambda n: 0 <= int(n) <= 255, m.groups()))
+
+def get_static_ip_ref():
+    static_ip  = '192.168.0.10'
+    path_ref   = os.path.expanduser('~/flex-run/setup_constants/static_ip.txt')
+    try:
+        with open(path_ref, 'r') as file:
+            static_ip = file.read().replace('\n', '')
+    except: return static_ip
+    return static_ip
+
+def get_interface_name_ref():
+    interface_name  = 'enp0s31f6'
+    path_ref        = os.path.expanduser('~/flex-run/setup_constants/interface_name.txt')
+    try:
+        with open(path_ref, 'r') as file:
+            interface_name = file.read().replace('\n', '')
+    except: return interface_name
+    return interface_name
+
+def set_static_ips(network = None):
+    static_ip      = get_static_ip_ref()
+    ips            = []
+    interface_name = get_interface_name_ref()
+    if is_valid_ip(network):
+        ips.append(network+'/24')
+
+    ips.append(static_ip+'/24') #append static ip
+    ip_string = '['
+    for ip in ips: ip_string += (ip+', ') 
+    ip_string = ip_string + ']'
+
+    with open ('/etc/netplan/fv-net-init.yaml', 'w') as f:
+        f.write('network:\n')
+        f.write('  version: 2\n')
+        f.write('  ethernets:\n')
+        f.write('    '+interface_name+':\n')
+        f.write('      dhcp4: false\n')
+        f.write('      addresses: '+ip_string)
+
+def get_mac_id():
+    ifconfig  = subprocess.Popen(['ifconfig'], stdout=subprocess.PIPE).communicate()[0].decode('utf-8')
+    interface = 'wlp' + ifconfig.split('wlp')[1].split(':')[0]
+    cmd = subprocess.Popen(['cat', '/sys/class/net/'+interface+'/address'], stdout=subprocess.PIPE)
+    cmd_out, cmd_err = cmd.communicate()
+    return  cmd_out.strip().decode("utf-8")
+
 def system_info():
     out = subprocess.Popen(['lshw', '-short'], stdout=subprocess.PIPE)
     cmd = subprocess.Popen(['grep', 'system'], stdin=out.stdout, stdout=subprocess.PIPE)
@@ -64,6 +120,13 @@ def system_arch():
     cmd = subprocess.Popen(['arch'], stdout=subprocess.PIPE)
     cmd_out, cmd_err = cmd.communicate()
     return  cmd_out.strip().decode("utf-8")
+
+def restart_network_manager():
+    os.system("service network-manager restart")
+
+class MacId(Resource):
+    def get(self):
+        return get_mac_id()
 
 class Shutdown(Resource):
     @auth.requires_auth
@@ -121,7 +184,12 @@ class AuthToken(Resource):
 
 class Networks(Resource):
     def get(self):
-        networks = subprocess.check_output(['nmcli', '-f', 'SSID', 'dev', 'wifi'])
+        try:
+            networks = subprocess.check_output(['nmcli', '-f', 'SSID', 'dev', 'wifi'])
+        except:
+            print('ERROR - NETWORK MANAGER NOT FOUND')
+            restart_network_manager()
+            return 
         nets = {}
         network_list = []
         for i in networks.splitlines():
@@ -173,7 +241,10 @@ class DownloadModels(Resource):
     def post(self):
         data           = request.json
         access_token   = request.headers.get('Access-Token')
+        
         job_queue.enqueue(retrieve_models, data, access_token, job_timeout=99999999, result_ttl=-1)
+        job_queue.enqueue(retrieve_masks, data, access_token, job_timeout=99999999, result_ttl=-1)
+        job_queue.enqueue(retrieve_programs, data, access_token, job_timeout=9999999, result_ttl=-1) 
         return True
 
 class SystemVersions(Resource):
@@ -196,7 +267,7 @@ class DeviceInfo(Resource):
         info = {}
         info['system']        = system_info()
         info['arch']          = system_arch()
-        info['mac_id']        = ':'.join(re.findall('..', '%012x' % uuid.getnode()))
+        info['mac_id']        = get_mac_id()
         info['last_active']   = str(datetime.datetime.now())
         info['last_known_ip'] = domain
         return info
@@ -265,8 +336,8 @@ class UpdateIp(Resource):
         else:
             return 'ethernet interface not found'
         
-
-        if data['ip'] != '':
+        if data['ip'] != '' and is_valid_ip(data['ip']):
+            set_static_ips(data['ip'])
             os.system('sudo ifconfig ' + interface_name + ' '  + data['ip'] + ' netmask 255.255.255.0')
 
         interface = subprocess.Popen(['ifconfig', interface_name], stdout=subprocess.PIPE).communicate()[0].decode('utf-8')
@@ -278,8 +349,67 @@ class UpdateIp(Resource):
 
         return ip
 
+class GetLanIps(Resource):
+    def get(self):
+        lanIds   = [3,0]
+        lanIps   = {'LAN1': 'not assigned', 'LAN2': 'not assigned'}
+        ifconfig = subprocess.Popen(['ifconfig'], stdout=subprocess.PIPE).communicate()[0].decode('utf-8')
+
+        for index, lan_port in enumerate(lanIps.keys()):
+            config_port = 'enp'+str(lanIds[index])
+            if config_port in ifconfig:
+                interface_name = config_port + ifconfig.split(config_port)[1].split(':')[0]
+                interface = subprocess.Popen(['ifconfig', interface_name], stdout=subprocess.PIPE).communicate()[0].decode('utf-8')
+                
+                ip6 = None
+                if 'inet6' in interface:
+                    ip6 = interface.split('inet6')[1].split(' ')[1]
+                if 'inet' in interface:
+                    ip = interface.split('inet')[1].split(' ')[1]
+                else:
+                    ip = 'LAN IP not assigned'
+
+                if ip6 and ip6 == ip: ip = 'LAN IP not assigned'
+                lanIps[lan_port] = ip
+            else:
+                lanIps[lan_port] = 'ethernet interface not found'
+
+
+        return lanIps
+
+class UploadModel(Resource):
+    #@auth.requires_auth
+    def post(self):
+        fl = request.files['file']
+        if not fl: return False 
+
+        split_fname = fl.filename.split('#')
+        model_name  = split_fname[0]
+        version     = split_fname[1].split('.')[0]
+
+        #Temporarily write folder to root directory
+        path = "/"+model_name
+        os.system("mkdir "+path)
+        fn = tempfile.gettempdir() + 'model.zip'
+        fl.save(fn)
+
+        try:
+            print('EXTRACTING ZIP FILE')
+            with zipfile.ZipFile(fn) as zf:
+                zf.extractall(path)
+
+            os.system("mv "+path+"/job.json "+path+"/"+str(version))
+            os.system("mv "+path+"/object-detection.pbtxt "+path+"/"+str(version))
+            os.system("rm -rf "+fn)
+
+            job_queue.enqueue(upload_model, str(path), str(fl.filename), job_timeout=99999999, result_ttl=-1)
+        except zipfile.BadZipfile:
+            print('bad zipfile in ',fn)
+
+
 api.add_resource(AuthToken, '/auth_token')
 api.add_resource(Networks, '/networks')
+api.add_resource(MacId, '/mac_id')
 api.add_resource(Shutdown, '/shutdown')
 api.add_resource(Restart, '/restart')
 api.add_resource(Upgrade, '/upgrade')
@@ -291,9 +421,11 @@ api.add_resource(DeviceInfo, '/device_info')
 api.add_resource(SaveImage, '/save_img')
 api.add_resource(ExportImage, '/export_img')
 api.add_resource(UpdateIp, '/update_ip')
+api.add_resource(GetLanIps, '/get_lan_ips')
 api.add_resource(GetCameraUID, '/camera_uid/<string:idx>')
 api.add_resource(TogglePin, '/toggle_pin')
 api.add_resource(RestartBackend, '/refresh_backend')
+api.add_resource(UploadModel, '/upload_model')
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0',port='5001')

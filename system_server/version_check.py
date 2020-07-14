@@ -1,8 +1,17 @@
 import requests
 import subprocess
+import os
 
 CONTAINERS  = {'backend':'capdev', 'frontend':'captureui', 'prediction':'localprediction'}
 CLOUD_FUNCTIONS_BASE = 'https://us-central1-flexible-vision-staging.cloudfunctions.net/'
+gcp_functions_path   = os.path.expanduser('~/flex-run/setup_constants/gcp_functions_domain.txt')
+with open(gcp_functions_path, 'r') as file:
+    CLOUD_FUNCTIONS_BASE = file.read().replace('\n', '')
+
+LATEST_STABLE_REF  = 'latest_stable_version'
+latest_stable_path = os.path.expanduser('~/flex-run/setup_constants/latest_stable_ref.txt')
+with open(latest_stable_path, 'r') as file:
+    LATEST_STABLE_REF = file.read().replace('\n', '')
 
 def get_current_container_version(container):
     cmd = subprocess.Popen(['docker', 'inspect', "--format='{{.Config.Image}}'", container], stdout=subprocess.PIPE)
@@ -25,9 +34,8 @@ def get_latest_image_versions(image):
 
 def latest_stable_image_version(image):
     data    = {"arch": system_arch(), "image": image}
-    headers = {"Content-Type": "application/json"} 
-    res     = requests.post(CLOUD_FUNCTIONS_BASE+'latest_stable_version', json=data, headers=headers)
-    
+    headers = {"Content-Type": "application/json"}
+    res     = requests.post(CLOUD_FUNCTIONS_BASE+LATEST_STABLE_REF, json=data, headers=headers)
     if res:
         return res.json()
 

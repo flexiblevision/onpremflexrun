@@ -14,8 +14,8 @@ REDIS_PORT='6379'
 DB_NAME='fvonprem'
 MONGO_SERVER='172.17.0.1'
 MONGO_PORT='27017'
-CLOUD_DOMAIN='https://v1.cloud.flexiblevision.com'
-GCP_FUNCTIONS_DOMAIN='https://us-central1-flexible-vision-staging.cloudfunctions.net/'
+CLOUD_DOMAIN="$(cat ~/flex-run/setup_constants/cloud_domain.txt)"
+GCP_FUNCTIONS_DOMAIN="$(cat ~/flex-run/setup_constants/gcp_functions_domain.txt)"
 
 if [ $CAP_UPTD != 'True' ]; then
     #copy camera data to local device
@@ -52,6 +52,13 @@ if [ $PREDICT_UPTD != 'True' ]; then
     docker run -p 8500:8500 -p 8501:8501 --runtime=nvidia --name localprediction  -d -e AWS_ACCESS_KEY_ID=imagerie -e AWS_SECRET_ACCESS_KEY=imagerie -e AWS_REGION=us-east-1 \
         --restart unless-stopped --network imagerie_nw  \
         -t fvonprem/$4-prediction:$PREDICT_UPTD
+
+    DIR=$HOME"/../models"
+    if [ -d "$DIR" ]; then
+    	docker cp $DIR localprediction:/
+	docker restart localprediction
+    fi
+
 fi
 
 sh $HOME/flex-run/upgrades/upgrade_flex_run.sh

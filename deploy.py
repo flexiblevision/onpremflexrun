@@ -44,6 +44,37 @@ from system_server.version_check import is_container_uptodate
 def clear_text_color():
     print("\033[0m")
 
+def get_static_ip_ref():
+    static_ip  = '192.168.0.10'
+    path_ref   = os.path.expanduser('~/flex-run/setup_constants/static_ip.txt')
+    try:
+        with open(path_ref, 'r') as file:
+            static_ip = file.read().replace('\n', '')
+    except: return static_ip
+    return static_ip
+
+def get_interface_name_ref():
+    interface_name  = 'enp0s31f6'
+    path_ref        = os.path.expanduser('~/flex-run/setup_constants/interface_name.txt')
+    try:
+        with open(path_ref, 'r') as file:
+            interface_name = file.read().replace('\n', '')
+    except: return interface_name
+    return interface_name
+
+def set_static_ip():
+    ip             = get_static_ip_ref()
+    interface_name = get_interface_name_ref()
+    
+    os.system('sudo ifconfig ' + interface_name + ' '  + ip + ' netmask 255.255.255.0')
+    with open ('/etc/netplan/fv-net-init.yaml', 'w') as f:
+        f.write('network:\n')
+        f.write('  version: 2\n')
+        f.write('  ethernets:\n')
+        f.write('    '+interface_name+':\n')
+        f.write('      dhcp4: false\n')
+        f.write('      addresses: ['+ip+'/24]')
+
 def containers_running():
     containers = ['capdev', 'localprediction', 'captureui']
     running = []
@@ -91,6 +122,7 @@ def query_yes_no(question, default="yes"):
 # LAUNCH STEPS---------------------
 def step_1():
     print("\033[0;36mStep (1/3) Setting up internet connection.")
+    set_static_ip()
     print("\033[0;33mChecking internet connection...\n")
     time.sleep(2)
     if check_connection():
