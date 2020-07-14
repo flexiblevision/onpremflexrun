@@ -1,1 +1,1 @@
-latest_stable_version
+latest_stable_version_check_dev
