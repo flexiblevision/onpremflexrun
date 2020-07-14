@@ -40,8 +40,6 @@ from redis import Redis
 from rq import Queue, Worker, Connection
 from rq.job import Job
 import socket
-
-from werkzeug import secure_filename
 import tempfile
 
 app = Flask(__name__)
@@ -392,7 +390,7 @@ class UploadModel(Resource):
         #Temporarily write folder to root directory
         path = "/"+model_name
         os.system("mkdir "+path)
-        fn = secure_filename(tempfile.gettempdir() + 'model.zip')
+        fn = tempfile.gettempdir() + 'model.zip'
         fl.save(fn)
 
         try:
