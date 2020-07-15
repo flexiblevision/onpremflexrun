@@ -33,7 +33,7 @@ def create_config_file():
     models = models_collection.find()
     data   = json.loads(json_util.dumps(models))
     if not data: return
-    with open ('/models/model.config', 'a') as f:
+    with open ('/models/model.config', 'w') as f:
         f.write('model_config_list {\n')
         for model_data in data:
             f.write('\tconfig {\n')
