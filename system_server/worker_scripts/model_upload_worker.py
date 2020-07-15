@@ -77,7 +77,7 @@ def upload_model(temp_model_path, filename):
         else:
             print('ADDING MODEL AND VERSION')
             #ADD MODEL AND VERSION
-            os.system("mdkir /models/"+model_name)
+            os.system("mkdir /models/"+model_name)
             os.system("mv {}/{} {}".format(temp_model_path, str(version), model_path))
 
             #ADD MODEL AND VERSION TO DB
