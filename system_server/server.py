@@ -386,18 +386,21 @@ class UploadModel(Resource):
         split_fname = fl.filename.split('#')
         model_name  = split_fname[0]
         version     = split_fname[1].split('.')[0]
+        file_name   = model_name+"#"+version
 
         #Temporarily write folder to root directory
+        write_path = "/"
         path = "/"+model_name
-        os.system("mkdir "+path)
+        # os.system("mkdir "+path)
         fn = tempfile.gettempdir() + 'model.zip'
         fl.save(fn)
 
         try:
             print('EXTRACTING ZIP FILE')
             with zipfile.ZipFile(fn) as zf:
-                zf.extractall(path)
+                zf.extractall(write_path)
 
+            os.system("mv "+write_path+file_name+" "+write_path+model_name) #rename the extracted folder
             os.system("mv "+path+"/job.json "+path+"/"+str(version))
             os.system("mv "+path+"/object-detection.pbtxt "+path+"/"+str(version))
             os.system("rm -rf "+fn)
