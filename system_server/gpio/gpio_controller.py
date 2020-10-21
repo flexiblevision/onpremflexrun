@@ -91,7 +91,7 @@ class GPIO:
         pin_state_ref.update_one(self.state_query, {'$set': self.cur_pin_state}, True)
 
         time.sleep(.3)
-        
+
         functions.set_gpio(1, 1, 1) # Process complete
         functions.set_gpio(1, 2, 0) # System Ready
         functions.set_gpio(1, 3, 1) # Not Busy
@@ -158,7 +158,7 @@ class GPIO:
                 presets = io_ref.find(query)
                 for preset in presets:
                     self.run_inference(preset['cameraId'], preset['modelName'], preset['modelVersion'], preset['ioVal'], pin, preset['presetId'])
-                    time.sleep(1.5)
+                    #time.sleep(1.5)
 
 
 
