@@ -103,17 +103,9 @@ class GPIO:
 
     def allow_inference(self, cur_input_state_high, pin_num):
         run_inference = False
-        if pin_num not in self.last_input_state: self.last_input_state[pin_num] = True
-        last_input_state_high = self.last_input_state[pin_num]
 
-        # HIGH / LOW
-        if last_input_state_high and not cur_input_state_high:
+        if self.last_input_state == "run" and not cur_input_state_high:
             run_inference = True
-            self.last_input_state[pin_num] = False
-        # LOW / HIGH
-        if not last_input_state_high and cur_input_state_high:
-            run_inference = False
-            self.last_input_state[pin_num] = True
 
         return run_inference
 
@@ -148,38 +140,22 @@ class GPIO:
                 functions.read_gpi(8)
             ]
 
-            print(all_pin_state)
-            if 1 in all_pin_state:
+            if 0 in all_pin_state:
                 cur_pin = all_pin_state.index(1)+1
-                
-            if self.allow_inference(1, cur_pin):
+                self.last_input_state = "run"
+            else:
+                #clear input state
+                self.last_input_state = "wait"
+
+            if cur_pin and self.allow_inference(0, cur_pin):
                 self.pin_switch_inference_start(cur_pin)
                 query = {'ioVal': 'GPI'+str(cur_pin)}
                 presets = io_ref.find(query)
                 for preset in presets:
-                    self.run_inference(preset['cameraId'], preset['modelName'], preset['modelVersion'], preset['ioVal'], pin, preset['presetId'])
+                    self.run_inference(preset['cameraId'], preset['modelName'], preset['modelVersion'], preset['ioVal'], cur_pin, preset['presetId'])
                     #time.sleep(1.5)
 
 
-
-            #for pin in range(1,9):
-                #pin_debounce = functions.read_gpi(pin)
-                #time.sleep(self.debounce_delay)
-                #pin_high = functions.read_gpi(pin)
-                #check to make sure pin reading is still the same
-                #if it is, move into allow_inference logic
-                #if not, pass - false reading
-                #bounced = pin_debounce != pin_high
-                #if not bounced and self.allow_inference(pin_high, pin):
-                    #self.pin_switch_inference_start(pin)
-                    #query = {'ioVal': 'GPI'+str(pin)}
-                    #presets = io_ref.find(query)
-                    #for preset in presets:
-                        #inference_args = (preset['cameraId'], preset['modelName'], preset['modelVersion'], preset['ioVal'], pin, preset['presetId'])
-                        #print('STARTING THREAD ------------------------')
-                        #thread = threading.Thread(target=self.run_inference, args=inference_args, daemon=True)
-                        #thread.start()
-                        #time.sleep(2)
 
 init_gpio = GPIO()
 init_gpio.run()
