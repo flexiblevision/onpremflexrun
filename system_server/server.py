@@ -293,8 +293,11 @@ class ExportImage(Resource):
         if not os.path.exists(path):
             os.system('mkdir '+path)
 
-        usb_list = subprocess.Popen(['sudo', 'fdisk', '-l'], stdout=subprocess.PIPE)
-        usb = usb_list.communicate()[0].decode('utf-8').split('dev/')[-1].split(' ')[0]
+        #usb_list = subprocess.Popen(['sudo', 'fdisk', '-l'], stdout=subprocess.PIPE)
+        #usb = usb_list.communicate()[0].decode('utf-8').split('dev/')[-1].split(' ')[0]
+
+        usb_list = subprocess.Popen(['sudo', 'blkid', '-t', 'TYPE=vfat', '-o', 'device'], stdout=subprocess.PIPE)
+        usb = usb_list.communicate()[0].decode('utf-8').splitlines()[-1].split('/')[-1]
 
         if usb[0] == 's':
             os.system('sudo mount /dev/' + usb + ' ' + path)
