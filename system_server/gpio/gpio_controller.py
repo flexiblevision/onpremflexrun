@@ -142,7 +142,7 @@ class GPIO:
             ]
 
             if 0 in all_pin_state:
-                cur_pin = all_pin_state.index(1)+1
+                cur_pin = all_pin_state.index(0)+1
             else:
                 #clear input state
                 self.last_input_state = "wait"
