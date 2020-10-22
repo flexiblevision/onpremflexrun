@@ -313,7 +313,23 @@ class ExportImage(Resource):
 
                 with open(img_path, 'wb') as fh:
                     fh.write(decode_img)
-                    
+
+                if 'inference' in data:
+                    inference = data['inference']
+                    #create inferences folder and add assets
+                    inferences_path = base_path + '/inferences'
+                    if not os.path.exists(inferences_path):
+                        os.system('sudo mkdir -p '+ inferences_path)
+
+                    file_path = inferences_path+'/'
+                    if 'did' in inference:
+                        file_path = file_path+inference['did']+'/'
+
+                    file_path = file_path+data['timestamp'].replace(' ', '_').replace('.', '_').replace(':', '-')+'.json'
+
+                    with open(file_path, 'w') as fh:
+                        json.dump(inference, fh)
+
                 os.system('sudo umount /dev/'+usb+' '+path)
                 print('----- unmounted usb drive -----')
 
