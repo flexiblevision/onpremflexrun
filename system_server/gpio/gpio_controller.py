@@ -29,7 +29,7 @@ class GPIO:
     def __init__(self):
         self.state_query      = {'type': 'gpio_pin_state'}
         self.cur_pin_state    = pin_state_ref.find_one(self.state_query)
-        self.last_input_state = {}
+        self.last_input_state = "wait"
         self.debounce_delay   = .001
 
     def get_pass_fail_entry(self, model, version):
@@ -104,7 +104,8 @@ class GPIO:
     def allow_inference(self, cur_input_state_high, pin_num):
         run_inference = False
 
-        if self.last_input_state == "run" and not cur_input_state_high:
+        if self.last_input_state == "wait" and not cur_input_state_high:
+            self.last_input_state = "run"
             run_inference = True
 
         return run_inference
@@ -142,7 +143,6 @@ class GPIO:
 
             if 0 in all_pin_state:
                 cur_pin = all_pin_state.index(1)+1
-                self.last_input_state = "run"
             else:
                 #clear input state
                 self.last_input_state = "wait"
