@@ -313,6 +313,9 @@ class ExportImage(Resource):
 
                 with open(img_path, 'wb') as fh:
                     fh.write(decode_img)
+                    
+                os.system('sudo umount /dev/'+usb+' '+path)
+                print('----- unmounted usb drive -----')
 
 class GetCameraUID(Resource):
     def get(self, idx):
