@@ -303,8 +303,9 @@ class ExportImage(Resource):
             os.system('sudo mount /dev/' + usb + ' ' + path)
 
             if 'img' and 'model' and 'version'  in data:
-                img_path = path + '/flexible_vision/' + data['model'] + '/' + data['version']
+                base_path = path + '/flexible_vision/' + data['model'] + '/' + data['version']
 
+                img_path = base_path + '/images'
                 if not os.path.exists(img_path):
                     os.system('sudo mkdir -p ' + img_path)
 
@@ -312,7 +313,10 @@ class ExportImage(Resource):
                 decode_img = base64.b64decode(data['img'])
 
                 with open(img_path, 'wb') as fh:
+                    print('writing to: ', img_path)
                     fh.write(decode_img)
+
+                # --------------- export inference data ----------------------
 
                 if 'inference' in data:
                     inference = data['inference']
@@ -321,7 +325,7 @@ class ExportImage(Resource):
                     if not os.path.exists(inferences_path):
                         os.system('sudo mkdir -p '+ inferences_path)
 
-                    file_path = inferences_path+'/'
+                    file_path = inferences_path + '/'
                     if 'did' in inference:
                         file_path = file_path+inference['did']+'/'
 
@@ -332,6 +336,7 @@ class ExportImage(Resource):
 
                 os.system('sudo umount /dev/'+usb+' '+path)
                 print('----- unmounted usb drive -----')
+
 
 class GetCameraUID(Resource):
     def get(self, idx):
