@@ -277,13 +277,32 @@ class SaveImage(Resource):
     def post(self):
         data = request.json
         path = os.environ['HOME']+'/'+'stored_images'
-        if not os.path.exists(path):
-            os.system('mkdir '+path)
+
+
+        usb_list = subprocess.Popen(['sudo', 'blkid', '-t', 'TYPE=vfat', '-o', 'device'], stdout=subprocess.PIPE)
+        usb = usb_list.communicate()[0].decode('utf-8').splitlines()[-1].split('/')[-1]
+
         if 'img' in data:
-            img_path   = path+'/'+str(uuid.uuid4())+'.jpg'
+            img_path   = path+'/flexible_vision/snapshots'
             decode_img = base64.b64decode(data['img'])
+
+            if not os.path.exists(img_path):
+                os.system('sudo mkdir -p ' + img_path)
+
+            img_path = img_path + '/' +str(int(datetime.datetime.now().timestamp()*1000))+'.jpg'
             with open(img_path, 'wb') as fh:
                 fh.write(decode_img)
+
+            if usb[0] == 's':
+                os.system('sudo mount /dev/' + usb + ' ' + path)
+                with open(img_path, 'wb') as fh:
+                    fh.write(decode_img)
+                os.system('sudo umount /dev/'+usb+' '+path)
+                print('----- unmounted usb drive -----')
+
+        return 'Image Saved', 200
+
+
 
 class ExportImage(Resource):
     #@auth.requires_auth
