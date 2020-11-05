@@ -29,7 +29,7 @@ class GPIO:
     def __init__(self):
         self.state_query      = {'type': 'gpio_pin_state'}
         self.cur_pin_state    = pin_state_ref.find_one(self.state_query)
-        self.last_input_state = {}
+        self.last_input_state = "wait"
         self.debounce_delay   = .001
 
     def get_pass_fail_entry(self, model, version):
@@ -59,24 +59,18 @@ class GPIO:
             print(data['pass_fail'], ' <======================')
             if data['pass_fail'] == 'PASS':
                 #set pass pin
-                #time.sleep(.1)
                 print(functions.set_gpio(1, 5, 0), 'PASS PIN ON')
-                #time.sleep(.1)
                 self.cur_pin_state['GPO5'] = True
             if data['pass_fail'] == 'FAIL':
                 #set fail pin
-                #time.sleep(.1)
                 print(functions.set_gpio(1, 6, 0), 'FAIL PIN ON')
-                #time.sleep(.1)
                 self.cur_pin_state['GPO6'] = True
 
             pin_state_ref.update_one(self.state_query, {'$set': self.cur_pin_state}, True)
             time.sleep(.5)
 
             print(functions.set_gpio(1, 5, 1), 'PASS PIN OFF')
-            #time.sleep(.1)
             print(functions.set_gpio(1, 6, 1), 'FAIL PIN OFF')
-            #time.sleep(.1)
             self.cur_pin_state['GPO5'] = False
             self.cur_pin_state['GPO6'] = False
             pin_state_ref.update_one(self.state_query, {'$set': self.cur_pin_state}, True)
@@ -84,29 +78,23 @@ class GPIO:
         return
 
     def pin_switch_inference_start(self, pin):
-        #time.sleep(.1)
         functions.set_gpio(1, 2, 1)        # ready OFF
-        #time.sleep(.1)
         functions.set_gpio(1, 3, 0)        # system busy
-        #time.sleep(.1)
         self.cur_pin_state['GPO2'] = False # ready pin OFF - RED
         self.cur_pin_state['GPO3'] = True  # busy pin ON - RED
         self.cur_pin_state['GPI'+str(pin)] = True
         pin_state_ref.update_one(self.state_query, {'$set': self.cur_pin_state}, True)
 
     def pin_switch_inference_end(self, pin):
-        #time.sleep(.1)
         functions.set_gpio(1, 1, 0) # Process complete
-        #time.sleep(.1)
         self.cur_pin_state['GPO1'] = True
         pin_state_ref.update_one(self.state_query, {'$set': self.cur_pin_state}, True)
+
         time.sleep(.3)
+
         functions.set_gpio(1, 1, 1) # Process complete
-        #time.sleep(.1)
         functions.set_gpio(1, 2, 0) # System Ready
-        #time.sleep(.1)
         functions.set_gpio(1, 3, 1) # Not Busy
-        #time.sleep(.1)
         self.cur_pin_state['GPO1'] = False # GPO Process Complete Pin OFF - GREEN
         self.cur_pin_state['GPO2'] = True  # Ready Pin ON - GREEN
         self.cur_pin_state['GPO3'] = False # Busy Pin OFF - ORANGE
@@ -115,40 +103,59 @@ class GPIO:
 
     def allow_inference(self, cur_input_state_high, pin_num):
         run_inference = False
-        if pin_num not in self.last_input_state: self.last_input_state[pin_num] = True
-        last_input_state_high = self.last_input_state[pin_num]
 
-        # HIGH / LOW
-        if last_input_state_high and not cur_input_state_high:
+        if self.last_input_state == "wait" and not cur_input_state_high:
+            self.last_input_state = "run"
             run_inference = True
-            self.last_input_state[pin_num] = False
-        # LOW / HIGH
-        if not last_input_state_high and cur_input_state_high:
-            run_inference = False
-            self.last_input_state[pin_num] = True
 
         return run_inference
 
+    def default_pin_state(self):
+        functions.set_gpio(1, 1, 1) # Process complete
+        functions.set_gpio(1, 2, 0) # System Ready
+        functions.set_gpio(1, 3, 1) # Not Busy
+        functions.set_gpio(1, 5, 1) # Pass pin off
+        functions.set_gpio(1, 6, 1) # Fail pin off
+        self.cur_pin_state['GPO1'] = False # GPO Process Complete Pin OFF - GREEN
+        self.cur_pin_state['GPO2'] = True  # Ready Pin ON - GREEN
+        self.cur_pin_state['GPO3'] = False # Busy Pin OFF - ORANGE
+        self.cur_pin_state['GPO5'] = False
+        self.cur_pin_state['GPO6'] = False
+        for gpi in range(1,9):
+            self.cur_pin_state['GPI'+str(gpi)] = False
+        pin_state_ref.update_one(self.state_query, {'$set': self.cur_pin_state}, True)
+
+
     def run(self):
+        self.default_pin_state()
         while True:
-            for pin in range(1,9):
-                pin_debounce = functions.read_gpi(pin)
-                time.sleep(self.debounce_delay)
-                pin_high = functions.read_gpi(pin)
-                #check to make sure pin reading is still the same
-                #if it is, move into allow_inference logic
-                #if not, pass - false reading
-                bounced = pin_debounce != pin_high
-                if not bounced and self.allow_inference(pin_high, pin):
-                    self.pin_switch_inference_start(pin)
-                    query = {'ioVal': 'GPI'+str(pin)}
-                    presets = io_ref.find(query)
-                    for preset in presets:
-                        inference_args = (preset['cameraId'], preset['modelName'], preset['modelVersion'], preset['ioVal'], pin, preset['presetId'])
-                        print('STARTING THREAD ------------------------')
-                        thread = threading.Thread(target=self.run_inference, args=inference_args, daemon=True)
-                        thread.start()
-                        time.sleep(2)
+            cur_pin = None
+            all_pin_state = [
+                functions.read_gpi(1),
+                functions.read_gpi(2),
+                functions.read_gpi(3),
+                functions.read_gpi(4),
+                functions.read_gpi(5),
+                functions.read_gpi(6),
+                functions.read_gpi(7),
+                functions.read_gpi(8)
+            ]
+
+            if 0 in all_pin_state:
+                cur_pin = all_pin_state.index(0)+1
+            else:
+                #clear input state
+                self.last_input_state = "wait"
+
+            if cur_pin and self.allow_inference(0, cur_pin):
+                self.pin_switch_inference_start(cur_pin)
+                query = {'ioVal': 'GPI'+str(cur_pin)}
+                presets = io_ref.find(query)
+                for preset in presets:
+                    self.run_inference(preset['cameraId'], preset['modelName'], preset['modelVersion'], preset['ioVal'], cur_pin, preset['presetId'])
+                    #time.sleep(1.5)
+
+
 
 init_gpio = GPIO()
 init_gpio.run()

@@ -277,13 +277,32 @@ class SaveImage(Resource):
     def post(self):
         data = request.json
         path = os.environ['HOME']+'/'+'stored_images'
-        if not os.path.exists(path):
-            os.system('mkdir '+path)
+
+
+        usb_list = subprocess.Popen(['sudo', 'blkid', '-t', 'TYPE=vfat', '-o', 'device'], stdout=subprocess.PIPE)
+        usb = usb_list.communicate()[0].decode('utf-8').splitlines()[-1].split('/')[-1]
+
         if 'img' in data:
-            img_path   = path+'/'+str(uuid.uuid4())+'.jpg'
+            img_path   = path+'/flexible_vision/snapshots'
             decode_img = base64.b64decode(data['img'])
+
+            if not os.path.exists(img_path):
+                os.system('sudo mkdir -p ' + img_path)
+
+            img_path = img_path + '/' +str(int(datetime.datetime.now().timestamp()*1000))+'.jpg'
             with open(img_path, 'wb') as fh:
                 fh.write(decode_img)
+
+            if usb[0] == 's':
+                os.system('sudo mount /dev/' + usb + ' ' + path)
+                with open(img_path, 'wb') as fh:
+                    fh.write(decode_img)
+                os.system('sudo umount /dev/'+usb+' '+path)
+                print('----- unmounted usb drive -----')
+
+        return 'Image Saved', 200
+
+
 
 class ExportImage(Resource):
     #@auth.requires_auth
@@ -293,15 +312,19 @@ class ExportImage(Resource):
         if not os.path.exists(path):
             os.system('mkdir '+path)
 
-        usb_list = subprocess.Popen(['sudo', 'fdisk', '-l'], stdout=subprocess.PIPE)
-        usb = usb_list.communicate()[0].decode('utf-8').split('dev/')[-1].split(' ')[0]
+        #usb_list = subprocess.Popen(['sudo', 'fdisk', '-l'], stdout=subprocess.PIPE)
+        #usb = usb_list.communicate()[0].decode('utf-8').split('dev/')[-1].split(' ')[0]
+
+        usb_list = subprocess.Popen(['sudo', 'blkid', '-t', 'TYPE=vfat', '-o', 'device'], stdout=subprocess.PIPE)
+        usb = usb_list.communicate()[0].decode('utf-8').splitlines()[-1].split('/')[-1]
 
         if usb[0] == 's':
             os.system('sudo mount /dev/' + usb + ' ' + path)
 
             if 'img' and 'model' and 'version'  in data:
-                img_path = path + '/flexible_vision/' + data['model'] + '/' + data['version']
+                base_path = path + '/flexible_vision/' + data['model'] + '/' + data['version']
 
+                img_path = base_path + '/images'
                 if not os.path.exists(img_path):
                     os.system('sudo mkdir -p ' + img_path)
 
@@ -309,7 +332,30 @@ class ExportImage(Resource):
                 decode_img = base64.b64decode(data['img'])
 
                 with open(img_path, 'wb') as fh:
+                    print('writing to: ', img_path)
                     fh.write(decode_img)
+
+                # --------------- export inference data ----------------------
+
+                if 'inference' in data:
+                    inference = data['inference']
+                    #create inferences folder and add assets
+                    inferences_path = base_path + '/inferences'
+                    if not os.path.exists(inferences_path):
+                        os.system('sudo mkdir -p '+ inferences_path)
+
+                    file_path = inferences_path + '/'
+                    if 'did' in inference:
+                        file_path = file_path+inference['did']+'/'
+
+                    file_path = file_path+data['timestamp'].replace(' ', '_').replace('.', '_').replace(':', '-')+'.json'
+
+                    with open(file_path, 'w') as fh:
+                        json.dump(inference, fh)
+
+                os.system('sudo umount /dev/'+usb+' '+path)
+                print('----- unmounted usb drive -----')
+
 
 class GetCameraUID(Resource):
     def get(self, idx):
