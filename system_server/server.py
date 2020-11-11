@@ -452,6 +452,49 @@ class UploadModel(Resource):
         except zipfile.BadZipfile:
             print('bad zipfile in ',fn)
 
+class AddFtpUser(Resource):
+    @auth.requires_auth
+    def post(self):
+        data = request.json
+        if 'username' and 'password' in data:
+            home = os.environ['HOME']
+            subprocess.call(["sh", home+"/flex-run/scripts/add_ftp_user.sh", data['username'], data['password']])
+            return True
+        return False
+
+class DeleteFtpUser(Resource):
+    @auth.requires_auth
+    def delete(self):
+        data = request.json
+        if 'username' in data:
+            os.system('sudo deluser '+data['username'])
+            os.system('sudo rm -r /home/'+data['username'])            
+            return True
+        return False
+
+class UpdateFtpPort(Resource):
+    @auth.requires_auth
+    def put(self):
+        data = request.json
+        if 'port' in data:
+            home = os.environ['HOME']
+            port = int(data['port'])
+            if port > 0:
+                subprocess.call(["sh", home+"/flex-run/scripts/update_ftp.sh", "listen_port", str(port)])
+            return True
+        return False
+
+
+class EnableFtp(Resource):
+    @auth.requires_auth
+    def post(self):
+        data = request.json
+        if 'port' in data:
+            home = os.environ['HOME']
+            subprocess.call(["sh", home+"/flex-run/setup/ftp_server_setup.sh"])
+            return True
+        return False
+
 
 api.add_resource(AuthToken, '/auth_token')
 api.add_resource(Networks, '/networks')
@@ -472,6 +515,11 @@ api.add_resource(GetCameraUID, '/camera_uid/<string:idx>')
 api.add_resource(TogglePin, '/toggle_pin')
 api.add_resource(RestartBackend, '/refresh_backend')
 api.add_resource(UploadModel, '/upload_model')
+api.add_resource(AddFtpUser, '/add_ftp_user')
+api.add_resource(DeleteFtpUser, '/delete_ftp_user')
+api.add_resource(UpdateFtpPort, '/update_ftp_port')
+api.add_resource(EnableFtp, '/enable_ftp')
+
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0',port='5001')
