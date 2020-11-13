@@ -466,6 +466,7 @@ class DeleteFtpUser(Resource):
     @auth.requires_auth
     def delete(self):
         data = request.json
+
         if 'username' in data:
             os.system('sudo deluser '+data['username'])
             os.system('sudo rm -r /home/'+data['username'])            
@@ -476,14 +477,15 @@ class UpdateFtpPort(Resource):
     @auth.requires_auth
     def put(self):
         data = request.json
+
         if 'port' in data:
             home = os.environ['HOME']
             port = int(data['port'])
+
             if port > 0:
                 subprocess.call(["sh", home+"/flex-run/scripts/update_ftp.sh", "listen_port", str(port)])
             return True
         return False
-
 
 class EnableFtp(Resource):
     @auth.requires_auth

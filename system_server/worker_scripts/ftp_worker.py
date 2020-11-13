@@ -20,7 +20,7 @@ redis_con = Redis('localhost', 6379, password=None)
 job_queue = Queue('default', connection=redis_con)
 
 processed = {}
-directory = os.environ['HOME']+"/ftp"
+directory = "/home/ftp"
 
 while True:
     time.sleep(.5)

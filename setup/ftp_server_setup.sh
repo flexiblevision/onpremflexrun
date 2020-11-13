@@ -3,10 +3,10 @@ sudo systemctl enable vsftpd
 sudo ufw allow 20/tcp
 sudo ufw allow 21/tcp
 
-sudo mkdir /root/ftp
+sudo mkdir /home/ftp
 
 sudo sed -i "s/\(^write_enable=\).*/\1YES/" /etc/vsftpd.conf
-sudo grep -qxF "local_root=$HOME/ftp" /etc/vsftpd.conf || echo "local_root=$HOME/ftp" >> /etc/vsftpd.conf
+sudo grep -qxF "local_root=/home/ftp" /etc/vsftpd.conf || echo "local_root=/home/ftp" >> /etc/vsftpd.conf
 sudo grep -qxF "listen_port=21" /etc/vsftpd.conf || echo "listen_port=21" >> /etc/vsftpd.conf
 
 sudo service vsftpd restart

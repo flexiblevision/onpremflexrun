@@ -17,7 +17,7 @@ import subprocess
 client            = MongoClient("172.17.0.1")
 job_collection    = client["fvonprem"]["jobs"]
 util_ref          = client["fvonprem"]["utils"]
-directory         = os.environ['HOME']+"/ftp"
+directory         = "/home/ftp"
 io_ref            = client["fvonprem"]["io_presets"]
 ftp_ref           = client["fvonprem"]["ftp_configs"]
 
