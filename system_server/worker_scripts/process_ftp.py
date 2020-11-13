@@ -23,7 +23,7 @@ ftp_ref           = client["fvonprem"]["ftp_configs"]
 
 def process_img(filename):
     job_id     = str(uuid.uuid4())
-    preset     = io_ref.find_one({'ioType': 'TCP'})
+    preset     = io_ref.find_one({'ioType': 'FTP'})
     ftp_config = ftp_ref.find_one({'type': 'ftp_config'})
 
     if preset:
@@ -32,12 +32,13 @@ def process_img(filename):
 
         img_path = directory+'/'+filename
         if os.path.exists(img_path):
-
+            print('processing image: '+img_path)
             img = subprocess.Popen(['base64', img_path], stdout=subprocess.PIPE)
             img = img.communicate()[0].decode('utf-8').strip()
 
-            if ftp_config['usb']: add_file_to_usb(img)
-            if ftp_config['predict']: predict_img(img,preset)
+            if ftp_config:
+                if 'usb' in ftp_config and ftp_config['usb']: add_file_to_usb(img)
+                if 'predict' in ftp_config and ftp_config['predict']: predict_img(img,preset)
 
             delete_job_ref(job_id)
             os.system('rm -rf '+img_path)
@@ -56,10 +57,14 @@ def process_img(filename):
 def add_file_to_usb(img):
     url     = 'http://172.17.0.1:5001/save_img'
     b64_img = base64.b64encode(img).decode("utf-8")
-    requests.post(url, json={"img": b64_img})
+    try:
+        requests.post(url, json={"img": b64_img})
+    except:
+        print('Upload to USB failed')
+        return False
 
 def predict_img(img, preset):
-    #send request to backen predict route
+    #send request to backend predict route
     modelName    = preset['modelName']
     modelVersion = preset['modelVersion']
     presetId     = preset['presetId']
@@ -70,14 +75,19 @@ def predict_img(img, preset):
     path    = '/api/capture/predict/upload/'+str(modelName)+'/'+str(modelVersion)+'/'+'?workstation=ftp_service'+'&preset_id='+str(presetId)
     url     = host+':'+port+path
     headers = {'Authorization': 'Bearer '+ token}
-    res  = requests.get(url, headers=headers)
+    try:
+        res  = requests.get(url, headers=headers)
+        return res
+    except:
+        print('Prediction failed')
+        return False
 
 def insert_job_ref(job_id, filename):
     job_collection.insert({
         '_id': job_id,
         'type': 'ftp_job_'+filename,
         'start_time': str(datetime.datetime.now()),
-        'status': 'processing'
+        'status': 'running'
     })
 
 def delete_job_ref(job_id):
