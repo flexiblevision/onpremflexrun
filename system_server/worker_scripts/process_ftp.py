@@ -24,7 +24,7 @@ ftp_ref           = client["fvonprem"]["ftp_configs"]
 def process_img(filename):
     job_id     = str(uuid.uuid4())
     preset     = io_ref.find_one({'ioType': 'FTP'})
-    ftp_config = ftp_ref.find_one({'type': 'ftp_config'})
+    ftp_config = ftp_ref.find_one({'type': 'settings'})
 
     if preset:
         #add job to database
@@ -38,7 +38,7 @@ def process_img(filename):
 
             if ftp_config:
                 if 'usb' in ftp_config and ftp_config['usb']: add_file_to_usb(img)
-                if 'predict' in ftp_config and ftp_config['predict']: predict_img(img,preset)
+                if 'predict' in ftp_config and ftp_config['predict']: predict_img(img,filename,preset)
 
             delete_job_ref(job_id)
             os.system('rm -rf '+img_path)
@@ -63,7 +63,7 @@ def add_file_to_usb(img):
         print('Upload to USB failed')
         return False
 
-def predict_img(img, preset):
+def predict_img(img, filename, preset):
     #send request to backend predict route
     modelName    = preset['modelName']
     modelVersion = preset['modelVersion']
@@ -72,11 +72,13 @@ def predict_img(img, preset):
     token   = res['token']
     host    = 'http://172.17.0.1'
     port    = '5000'
-    path    = '/api/capture/predict/upload/'+str(modelName)+'/'+str(modelVersion)+'/'+'?workstation=ftp_service'+'&preset_id='+str(presetId)
+    path    = '/api/capture/predict/upload/'+str(modelName)+'/'+str(modelVersion)+'?workstation=ftp_service'+'&preset_id='+str(presetId)
     url     = host+':'+port+path
     headers = {'Authorization': 'Bearer '+ token}
+    print('running preset: ', preset)
     try:
-        res  = requests.get(url, headers=headers)
+        print(filename)
+        res  = requests.put(url, headers=headers, json={"src": img, "filename": filename})
         return res
     except:
         print('Prediction failed')

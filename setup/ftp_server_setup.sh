@@ -4,6 +4,7 @@ sudo ufw allow 20/tcp
 sudo ufw allow 21/tcp
 
 sudo mkdir /home/ftp
+sudo chmod a+rwx /home/ftp
 
 sudo sed -i "s/\(^write_enable=\).*/\1YES/" /etc/vsftpd.conf
 sudo grep -qxF "local_root=/home/ftp" /etc/vsftpd.conf || echo "local_root=/home/ftp" >> /etc/vsftpd.conf
