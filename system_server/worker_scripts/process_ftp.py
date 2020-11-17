@@ -21,15 +21,12 @@ directory         = "/home/ftp"
 io_ref            = client["fvonprem"]["io_presets"]
 ftp_ref           = client["fvonprem"]["ftp_configs"]
 
-def process_img(filename):
-    job_id     = str(uuid.uuid4())
+def process_img(filename, job_id):
     preset     = io_ref.find_one({'ioType': 'FTP'})
     ftp_config = ftp_ref.find_one({'type': 'settings'})
 
     if preset:
         #add job to database
-        insert_job_ref(job_id, filename)
-
         img_path = directory+'/'+filename
         if os.path.exists(img_path):
             print('processing image: '+img_path)
@@ -56,7 +53,7 @@ def process_img(filename):
 
 def add_file_to_usb(img):
     url     = 'http://172.17.0.1:5001/save_img'
-    b64_img = base64.b64encode(img).decode("utf-8")
+    b64_img = img
     try:
         requests.post(url, json={"img": b64_img})
     except:
@@ -84,13 +81,6 @@ def predict_img(img, filename, preset):
         print('Prediction failed')
         return False
 
-def insert_job_ref(job_id, filename):
-    job_collection.insert({
-        '_id': job_id,
-        'type': 'ftp_job_'+filename,
-        'start_time': str(datetime.datetime.now()),
-        'status': 'running'
-    })
 
 def delete_job_ref(job_id):
     query = {'_id': job_id}

@@ -289,7 +289,7 @@ class SaveImage(Resource):
             if not os.path.exists(img_path):
                 os.system('sudo mkdir -p ' + img_path)
 
-            img_path = img_path + '/' +str(int(datetime.datetime.now().timestamp()*1000))+'.jpg'
+            img_path = img_path + '/' +str(int(datetime.datetime.now().timestamp()*1000))
             with open(img_path, 'wb') as fh:
                 fh.write(decode_img)
 
