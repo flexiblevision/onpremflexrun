@@ -14,4 +14,4 @@ sudo service vsftpd restart
 
 chmod +x $HOME/flex-run/scripts/start_ftp_server.sh
 (sudo crontab -l; echo '@reboot sudo sh '$HOME'/flex-run/scripts/start_ftp_server.sh') | sudo crontab -
-forever start -c python3 $HOME/flex-run/system_server/worker_scripts/ftp_worker.py
+forever start -c python3 $HOME/flex-run/system_server/ftp_worker.py
