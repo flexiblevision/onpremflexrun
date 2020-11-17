@@ -53,6 +53,8 @@ while True:
                     insert_job_ref(job_id, filename)
                     job_queue.enqueue(process_img, filename, job_id, job_timeout=99999999, result_ttl=-1)
                 else:
+                    #remove files that are not jpg/png
+                    os.system('rm '+directory+'/'+filename)
                     continue
         else:
             processed = {}
