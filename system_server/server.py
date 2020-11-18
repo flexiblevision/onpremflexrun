@@ -468,7 +468,7 @@ class DeleteFtpUser(Resource):
         data = request.json
 
         if 'username' in data:
-            os.system('sudo deluser '+data['username'])
+            os.system('sudo deluser -f '+data['username'])
             os.system('sudo rm -r /home/'+data['username'])            
             return True
         return False
