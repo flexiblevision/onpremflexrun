@@ -37,21 +37,21 @@ while True:
     if os.path.exists(directory):
         if len(os.listdir(directory)):
             for filename in os.listdir(directory):
-                if filename not in processed and filename.endswith(".jpg") or filename.endswith(".png"):
-                    extension = filename[-4:]
-                    if not filename.startswith( 'ftp_' ):
-                        tn = time.time_ns() // 1000000 
-                        rename = 'ftp_'+str(tn)+extension #rename file to prevent parsing errors
-                        subprocess.call(['mv', directory+'/'+filename, directory+'/'+rename])
-                        filename = rename
-                        
-                    print('processing: '+filename)
-                    processed[filename] = "processing"
-                    job_id     = str(uuid.uuid4())
-                    os.system('sudo docker cp '+directory+'/'+filename+' capdev:/fvbackend/'+filename)
-                    #add file to redis queue
-                    insert_job_ref(job_id, filename)
-                    job_queue.enqueue(process_img, filename, job_id, job_timeout=99999999, result_ttl=-1)
+                if filename.endswith(".jpg") or filename.endswith(".png"):
+                    if filename not in processed:
+                        extension = filename[-4:]
+                        if not filename.startswith( 'ftp_' ):
+                            tn = time.time_ns() // 1000000 
+                            rename = 'ftp_'+str(tn)+extension #rename file to prevent parsing errors
+                            subprocess.call(['mv', directory+'/'+filename, directory+'/'+rename])
+                            filename = rename
+                            
+                        print('processing: '+filename)
+                        processed[filename] = "processing"
+                        #os.system('sudo docker cp '+directory+'/'+filename+' capdev:/fvbackend/'+filename)
+                        #add file to redis queue
+                        j = job_queue.enqueue(process_img, filename, job_timeout=99999999, result_ttl=-1)
+                        insert_job_ref(j.id, filename)
                 else:
                     #remove files that are not jpg/png
                     os.system('rm '+directory+'/'+filename)

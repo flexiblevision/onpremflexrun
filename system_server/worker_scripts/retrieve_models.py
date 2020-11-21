@@ -41,9 +41,6 @@ def create_config_file(data):
         f.write('}')
 
 def retrieve_models(data, token):
-    job_id = str(uuid.uuid4())
-    insert_job_ref(job_id)
-
     #if model.config exists - remove it
     if os.path.exists(BASE_PATH_TO_MODELS+'model.config'):
         os.system("rm -rf "+BASE_PATH_TO_MODELS+'model.config')
@@ -58,7 +55,6 @@ def retrieve_models(data, token):
 
     models_versions = {}
     if 'models' not in data or not data['models'].values():
-        failed_job_ref(job_id)
         return False
 
     models         = data['models']
@@ -112,34 +108,14 @@ def retrieve_models(data, token):
         print('pushing new models to localprediction')
         os.system("docker cp "+base_path()+"models localprediction:/")
         os.system("docker restart localprediction")
-        delete_job_ref(job_id)
         return True
     else:
-        failed_job_ref(job_id)
         return False
 
 
 def save_models_versions(models_versions):
     models_collection.drop()
     models_collection.insert_many(models_versions)
-
-def insert_job_ref(job_id):
-    job_collection.insert({
-        '_id': job_id,
-        'type': 'model_download',
-        'start_time': str(datetime.datetime.now()),
-        'status': 'running'
-        })
-
-def delete_job_ref(job_id):
-    query = {'_id': job_id}
-    job_collection.delete_one(query)
-    job_collection.drop()
-
-
-def failed_job_ref(job_id):
-    query = {'_id': job_id}
-    job_collection.update_one(query, {'$set': {'status': 'failed'}})
 
 def format_filename(s):
     valid_chars = "-_.() %s%s" % (string.ascii_letters, string.digits)

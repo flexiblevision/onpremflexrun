@@ -21,7 +21,7 @@ directory         = "/home/ftp"
 io_ref            = client["fvonprem"]["io_presets"]
 ftp_ref           = client["fvonprem"]["ftp_configs"]
 
-def process_img(filename, job_id):
+def process_img(filename):
     preset     = io_ref.find_one({'ioType': 'FTP'})
     ftp_config = ftp_ref.find_one({'type': 'settings'})
 
@@ -37,18 +37,11 @@ def process_img(filename, job_id):
                 if 'usb' in ftp_config and ftp_config['usb']: add_file_to_usb(img)
                 if 'predict' in ftp_config and ftp_config['predict']: predict_img(img,filename,preset)
 
-            delete_job_ref(job_id)
             os.system('rm -rf '+img_path)
             return True, 200
         else:
-            job_collection.update_one({'_id': job_id}, {'$set': {'status': 'failed: file not found'}})
-            time.sleep(5)
-            delete_job_ref(job_id)
             return False 
     else:
-        job_collection.update_one({'_id': job_id}, {'$set': {'status': 'failed: no preset'}})
-        time.sleep(5)
-        delete_job_ref(job_id)
         return False
 
 def add_file_to_usb(img):
@@ -75,13 +68,13 @@ def predict_img(img, filename, preset):
     print('running preset: ', preset)
     try:
         print(filename)
-        res  = requests.put(url, headers=headers, json={"src": img, "filename": filename})
+        blb = open(directory+'/'+filename,'rb')
+        time.sleep(.4)
+        files = {'images': blb}
+        res   = requests.post(url, files=files, headers=headers)
+        #res  = requests.put(url, headers=headers, json={"src": img, "filename": filename})
+        print(res, ' <<<<<<<<<<<<<<<<<')
         return res
     except:
         print('Prediction failed')
         return False
-
-
-def delete_job_ref(job_id):
-    query = {'_id': job_id}
-    job_collection.delete_one(query)
