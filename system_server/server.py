@@ -33,6 +33,7 @@ from worker_scripts.retrieve_models import retrieve_models
 from worker_scripts.retrieve_programs import retrieve_programs
 from worker_scripts.retrieve_masks import retrieve_masks
 from worker_scripts.model_upload_worker import upload_model
+from worker_scripts.job_manager import insert_job, push_analytics_to_cloud, get_next_analytics_batch
 
 from gpio.gpio_helper import toggle_pin
 
@@ -50,6 +51,12 @@ NUM_CLASSES = 99
 redis_con   = Redis('localhost', 6379, password=None)
 job_queue   = Queue('default', connection=redis_con)
 CONTAINERS  = {'backend':'capdev', 'frontend':'captureui', 'prediction':'localprediction'}
+
+CLOUD_DOMAIN = "https://clouddeploy.api.flexiblevision.com"
+cloud_path   = os.path.expanduser('~/flex-run/setup_constants/cloud_domain.txt')
+with open(cloud_path, 'r') as file: 
+    CLOUD_DOMAIN = file.read().replace('\n', '')
+
 
 
 def base_path():
@@ -242,9 +249,13 @@ class DownloadModels(Resource):
         data           = request.json
         access_token   = request.headers.get('Access-Token')
         
-        job_queue.enqueue(retrieve_models, data, access_token, job_timeout=99999999, result_ttl=-1)
-        job_queue.enqueue(retrieve_masks, data, access_token, job_timeout=99999999, result_ttl=-1)
-        job_queue.enqueue(retrieve_programs, data, access_token, job_timeout=9999999, result_ttl=-1) 
+        j_models = job_queue.enqueue(retrieve_models, data, access_token, job_timeout=99999999, result_ttl=-1)
+        j_masks  = job_queue.enqueue(retrieve_masks, data, access_token, job_timeout=99999999, result_ttl=-1)
+        j_progs  = job_queue.enqueue(retrieve_programs, data, access_token, job_timeout=9999999, result_ttl=-1) 
+
+        if j_models: insert_job(j_models.id, 'Downloading models')
+        if j_masks: insert_job(j_masks.id, 'Downloading masks')
+        if j_progs: insert_job(j_progs.id, 'Downloading programs')
         return True
 
 class SystemVersions(Resource):
@@ -289,7 +300,7 @@ class SaveImage(Resource):
             if not os.path.exists(img_path):
                 os.system('sudo mkdir -p ' + img_path)
 
-            img_path = img_path + '/' +str(int(datetime.datetime.now().timestamp()*1000))+'.jpg'
+            img_path = img_path + '/' +str(int(datetime.datetime.now().timestamp()*1000))
             with open(img_path, 'wb') as fh:
                 fh.write(decode_img)
 
@@ -448,9 +459,67 @@ class UploadModel(Resource):
             os.system("mv "+path+"/object-detection.pbtxt "+path+"/"+str(version))
             os.system("rm -rf "+fn)
 
-            job_queue.enqueue(upload_model, str(path), str(fl.filename), job_timeout=99999999, result_ttl=-1)
+            j_upload = job_queue.enqueue(upload_model, str(path), str(fl.filename), job_timeout=99999999, result_ttl=-1)
+            if j_upload: insert_job(j_upload.id, 'Uploading models')
         except zipfile.BadZipfile:
             print('bad zipfile in ',fn)
+
+class AddFtpUser(Resource):
+    @auth.requires_auth
+    def post(self):
+        data = request.json
+        if 'username' and 'password' in data:
+            home = os.environ['HOME']
+            subprocess.call(["sh", home+"/flex-run/scripts/add_ftp_user.sh", data['username'], data['password']])
+            return True
+        return False
+
+class DeleteFtpUser(Resource):
+    @auth.requires_auth
+    def delete(self):
+        data = request.json
+
+        if 'username' in data:
+            os.system('sudo deluser -f '+data['username'])
+            os.system('sudo rm -r /home/'+data['username'])            
+            return True
+        return False
+
+class UpdateFtpPort(Resource):
+    @auth.requires_auth
+    def put(self):
+        data = request.json
+
+        if 'port' in data:
+            home = os.environ['HOME']
+            port = int(data['port'])
+
+            if port > 0:
+                subprocess.call(["sh", home+"/flex-run/scripts/update_ftp.sh", "listen_port", str(port)])
+            return True
+        return False
+
+class EnableFtp(Resource):
+    @auth.requires_auth
+    def post(self):
+        data = request.json
+        if 'port' in data:
+            home = os.environ['HOME']
+            subprocess.call(["sh", home+"/flex-run/setup/ftp_server_setup.sh"])
+            return True
+        return False
+
+class SyncAnalytics(Resource):
+    @auth.requires_auth
+    def get(self):
+        access_token = request.headers.get('Access-Token')
+
+        if access_token:
+            analytics = get_next_analytics_batch()
+            if analytics:
+                num_data  = len(analytics)
+                j_push    = job_queue.enqueue(push_analytics_to_cloud, CLOUD_DOMAIN, analytics, access_token, job_timeout=99999999, result_ttl=-1)
+                if j_push: insert_job(j_push.id, 'Syncing_'+str(num_data)+'_with_cloud')
 
 
 api.add_resource(AuthToken, '/auth_token')
@@ -472,6 +541,11 @@ api.add_resource(GetCameraUID, '/camera_uid/<string:idx>')
 api.add_resource(TogglePin, '/toggle_pin')
 api.add_resource(RestartBackend, '/refresh_backend')
 api.add_resource(UploadModel, '/upload_model')
+api.add_resource(AddFtpUser, '/add_ftp_user')
+api.add_resource(DeleteFtpUser, '/delete_ftp_user')
+api.add_resource(UpdateFtpPort, '/update_ftp_port')
+api.add_resource(EnableFtp, '/enable_ftp')
+api.add_resource(SyncAnalytics, '/sync_analytics')
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0',port='5001')

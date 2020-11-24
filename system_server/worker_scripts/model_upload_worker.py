@@ -59,14 +59,6 @@ def upload_model(temp_model_path, filename):
             print(model_name, ' ', version, ' already exists')
             os.system('rm -rf '+temp_model_path)
             return False
-        
-        job_id = str(uuid.uuid4())
-        job_collection.insert({
-            '_id': job_id,
-            'type': 'model_upload',
-            'start_time': str(datetime.datetime.now()),
-            'status': 'running'
-        })
 
         if model_exists and not version_exists:
             print('ADDING VERSION')
@@ -92,6 +84,5 @@ def upload_model(temp_model_path, filename):
         os.system("docker cp /models localprediction:/")
         os.system("docker restart localprediction")
         os.system('rm -rf '+temp_model_path)
-        job_collection.delete_one({'_id': job_id})
     else:
         return False
