@@ -518,7 +518,7 @@ class SyncAnalytics(Resource):
             analytics = get_next_analytics_batch()
             if analytics:
                 num_data  = len(analytics)
-                j_push    = job_queue.enqueue(push_analytics_to_cloud, CLOUD_DOMAIN, analytics, access_token, job_timeout=99999999, result_ttl=-1)
+                j_push    = job_queue.enqueue(push_analytics_to_cloud, CLOUD_DOMAIN, access_token, job_timeout=99999999, result_ttl=-1)
                 if j_push: insert_job(j_push.id, 'Syncing_'+str(num_data)+'_with_cloud')
 
 

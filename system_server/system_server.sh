@@ -1,5 +1,7 @@
 apt update
 apt install -y python3-pip
+apt install vim
+apt install vsftpd
 apt-get -y install nodejs
 apt-get -y install npm
 apt-get -y install curl
