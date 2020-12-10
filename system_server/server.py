@@ -333,13 +333,19 @@ class ExportImage(Resource):
             os.system('sudo mount /dev/' + usb + ' ' + path)
 
             if 'img' and 'model' and 'version'  in data:
+                did = ''
                 base_path = path + '/flexible_vision/' + data['model'] + '/' + data['version']
 
                 img_path = base_path + '/images'
                 if not os.path.exists(img_path):
                     os.system('sudo mkdir -p ' + img_path)
 
-                img_path   = img_path + '/'+ data['timestamp'].replace(' ', '_').replace('.', '_').replace(':', '-') +'.jpg'
+                if 'inference' in data:
+                    inference = data['inference']
+                    if 'did' in inference:
+                        did = '_'+inference['did']
+
+                img_path   = img_path + '/'+ data['timestamp'].replace(' ', '_').replace('.', '_').replace(':', '-')+did+'.jpg'
                 decode_img = base64.b64decode(data['img'])
 
                 with open(img_path, 'wb') as fh:

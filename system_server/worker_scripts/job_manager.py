@@ -27,18 +27,17 @@ def time_now_ms():
     return int(round(time.time() * 1000))
 
 def get_next_analytics_batch():
-    sync_obj = find_utility('last_predict_sync')
+    sync_obj = find_utility('predict_sync')
     if sync_obj:
-        time      = sync_obj[0]['timestamp']
-        analytics = analytics_coll.find({"inference_start": {"$gt": time}}).sort('inference_start', ASCENDING)
+        time      = sync_obj[0]['ms_time']
+        analytics = analytics_coll.find({"inference_start": {"$gt": int(time) }})
         result    = json.loads(json_util.dumps(analytics))
         return result
     else:
         util_collection.insert({
-            "type": "last_predict_sync",
-            "timestamp": str(time_now_ms())
+            "type": "predict_sync",
+            "ms_time": str(time_now_ms())
         })
-
 
 def cloud_call(url, analytics, headers):
     try:
@@ -53,11 +52,10 @@ def cloud_call(url, analytics, headers):
         print('FAILED TO CALL ', url)
         return False
 
-def update_last_sync_on_success():
-    util_collection.insert({
-            "type": "last_predict_sync",
-            "timestamp": str(time_now_ms())
-        })
+def update_last_sync_on_success(last_record_timestamp):
+    util_collection.update_one(
+            {"type": "predict_sync"},
+            {"$set": {"ms_time": last_record_timestamp}}, True)
 
 def push_analytics_to_cloud(domain, access_token):
     analytics     = get_next_analytics_batch()
