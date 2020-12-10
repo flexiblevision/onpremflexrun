@@ -30,7 +30,7 @@ def get_next_analytics_batch():
     sync_obj = find_utility('predict_sync')
     if sync_obj:
         time      = sync_obj[0]['ms_time']
-        analytics = analytics_coll.find({"inference_start": {"$gt": int(time) }})
+        analytics = analytics_coll.find({"prediction_start_time": {"$gt": int(time) }})
         result    = json.loads(json_util.dumps(analytics))
         return result
     else:
@@ -44,7 +44,7 @@ def cloud_call(url, analytics, headers):
         res = requests.post(url, json=analytics, headers=headers)
         print(res)
         print('--------------------------------------')
-        last_record_timestamp = analytics[-1]['inference_start']
+        last_record_timestamp = analytics[-1]['prediction_start_time']
         update_last_sync_on_success(last_record_timestamp)
         time.sleep(2)
         return (res.status_code == 200)
