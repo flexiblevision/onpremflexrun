@@ -33,6 +33,13 @@ def retrieve_programs(resp_data, token):
 
         if data:
             for program in data['records']:
+                program['model'] = format_filename(program['model'])
                 query = {'id': program['id']}
                 programs_collection.update_one(query, {'$set': program}, True)
-            
+
+
+def format_filename(s):
+    valid_chars = "-_.() %s%s" % (string.ascii_letters, string.digits)
+    filename = ''.join(c for c in s if c in valid_chars)
+    filename = filename.replace(' ','_')
+    return filename
