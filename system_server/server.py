@@ -363,9 +363,9 @@ class ExportImage(Resource):
 
                     file_path = inferences_path + '/'
                     if 'did' in inference:
-                        file_path = file_path+inference['did']+'/'
+                        did = '_'+inference['did']
 
-                    file_path = file_path+data['timestamp'].replace(' ', '_').replace('.', '_').replace(':', '-')+'.json'
+                    file_path = file_path+data['timestamp'].replace(' ', '_').replace('.', '_').replace(':', '-')+did+'.json'
 
                     with open(file_path, 'w') as fh:
                         json.dump(inference, fh)
