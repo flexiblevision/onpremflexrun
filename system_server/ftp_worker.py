@@ -37,6 +37,7 @@ while True:
     if os.path.exists(directory):
         if len(os.listdir(directory)):
             for filename in os.listdir(directory):
+                subprocess.call(['mv', directory+'/'+filename, directory+'/'+filename.lower()])
                 if filename.endswith(".jpg") or filename.endswith(".png"):
                     if filename not in processed:
                         extension = filename[-4:]

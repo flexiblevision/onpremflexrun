@@ -333,13 +333,19 @@ class ExportImage(Resource):
             os.system('sudo mount /dev/' + usb + ' ' + path)
 
             if 'img' and 'model' and 'version'  in data:
+                did = ''
                 base_path = path + '/flexible_vision/' + data['model'] + '/' + data['version']
 
                 img_path = base_path + '/images'
                 if not os.path.exists(img_path):
                     os.system('sudo mkdir -p ' + img_path)
 
-                img_path   = img_path + '/'+ data['timestamp'].replace(' ', '_').replace('.', '_').replace(':', '-') +'.jpg'
+                if 'inference' in data:
+                    inference = data['inference']
+                    if 'did' in inference:
+                        did = '_'+inference['did']
+
+                img_path   = img_path + '/'+ data['timestamp'].replace(' ', '_').replace('.', '_').replace(':', '-')+did+'.jpg'
                 decode_img = base64.b64decode(data['img'])
 
                 with open(img_path, 'wb') as fh:
@@ -357,9 +363,9 @@ class ExportImage(Resource):
 
                     file_path = inferences_path + '/'
                     if 'did' in inference:
-                        file_path = file_path+inference['did']+'/'
+                        did = '_'+inference['did']
 
-                    file_path = file_path+data['timestamp'].replace(' ', '_').replace('.', '_').replace(':', '-')+'.json'
+                    file_path = file_path+data['timestamp'].replace(' ', '_').replace('.', '_').replace(':', '-')+did+'.json'
 
                     with open(file_path, 'w') as fh:
                         json.dump(inference, fh)
@@ -518,7 +524,7 @@ class SyncAnalytics(Resource):
             analytics = get_next_analytics_batch()
             if analytics:
                 num_data  = len(analytics)
-                j_push    = job_queue.enqueue(push_analytics_to_cloud, CLOUD_DOMAIN, analytics, access_token, job_timeout=99999999, result_ttl=-1)
+                j_push    = job_queue.enqueue(push_analytics_to_cloud, CLOUD_DOMAIN, access_token, job_timeout=99999999, result_ttl=-1)
                 if j_push: insert_job(j_push.id, 'Syncing_'+str(num_data)+'_with_cloud')
 
 
