@@ -21,12 +21,6 @@ pip3 install 'redis==3.3.11'
 pip3 install 'pymongo==3.10.1'
 pip3 install 'rq==1.2.0'
 
-# -------------moved flex-run into root - no longer necessary ------------
-# echo "home=$HOME\n$(cat $HOME/flex-run/scripts/fv_system_server_start.sh)" > $HOME/flex-run/scripts/fv_system_server_start.sh
-# echo "home=$HOME\n$(cat $HOME/flex-run/scripts/worker_server_start.sh)" > $HOME/flex-run/scripts/worker_server_start.sh
-# echo "home=$HOME\n$(cat $HOME/flex-run/scripts/tcp_server_start.sh)" > $HOME/flex-run/scripts/tcp_server_start.sh
-# echo "home=$HOME\n$(cat $HOME/flex-run/scripts/gpio_server_start.sh)" > $HOME/flex-run/scripts/gpio_server_start.sh
-
 chmod +x $HOME/flex-run/scripts/fv_system_server_start.sh
 chmod +x $HOME/flex-run/scripts/worker_server_start.sh
 chmod +x $HOME/flex-run/scripts/redis_server_start.sh
