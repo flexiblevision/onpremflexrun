@@ -1,5 +1,4 @@
 apt update -y
-apt upgrade -y
 docker network create -d bridge imagerie_nw
 
 ARCH=$(arch)
