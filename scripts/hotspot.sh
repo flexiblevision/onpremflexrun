@@ -1,1 +1,1 @@
-bash ./init_hotspot_on_net_names.sh
+bash ./init_hotspot.sh
