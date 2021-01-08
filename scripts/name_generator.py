@@ -208,10 +208,10 @@ dog_names = female_dog_names + male_dog_names
 
 import random
 import os
-path = os.environ['HOME']+'/setup_constants/visioncell_ssid.txt'
+path = os.environ['HOME']+'/flex-run/setup_constants/visioncell_ssid.txt'
 
 if not os.path.exists(path):
-    name = 'visioncell_'+random.choice(dog_names)
+    name = 'visioncell_'+random.choice(dog_names).lower()
     os.system('echo '+name+' > '+path)
 
     
