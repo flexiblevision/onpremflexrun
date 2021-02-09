@@ -60,7 +60,7 @@ while True:
                 if os.path.isdir(file_path):
                     #search inside directory       
                     if len(os.listdir(file_path)) == 0: 
-                        os.system('rm -rf '+file_path)
+                        #os.system('rm -rf '+file_path)
                         continue
                     for subfilename in os.listdir(file_path):
                         sub_file_path = ftp_directory+'/'+filename+'/'+subfilename
