@@ -100,7 +100,7 @@ while True:
                         headers = {'Authorization': 'Bearer '+ token}
                         resp    = requests.get(url, headers=headers)
 
-                        if resp:
+                        if resp.status_code == 200:
                             data           = resp.json()
                             set_pass_fail_pins(data)
                             keys_to_remove = [k for k in config if not config[k] and k != 'packet_header']
@@ -116,6 +116,9 @@ while True:
                             except socket.error as msg:
                                 print('failed', msg)
                                 connections.sendall(b'-1')
+                        else:
+                            connections.send(b'request failed\n')
+                            
                     else:
                         print('COMMAND INVALID')
                         connections.send(b'Invalid Command\n')
