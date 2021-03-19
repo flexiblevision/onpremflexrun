@@ -41,7 +41,7 @@ if [ $CAPUI_UPTD != 'True' ]; then
     docker stop captureui
     docker rm captureui
     docker run -p 0.0.0.0:80:3000 --restart unless-stopped \
-        --name captureui -e CAPTURE_SERVER=http://172.17.0.1:5000 -e PROCESS_SERVER=http://172.17.0.1 -d --network host \
+        --name captureui -e CAPTURE_SERVER=http://172.17.0.1:5000 -e PROCESS_SERVER=http://172.17.0.1 -d --network imagerie_nw \
         fvonprem/$4-frontend:$CAPUI_UPTD
 fi
 
@@ -50,7 +50,7 @@ if [ $PREDICT_UPTD != 'True' ]; then
     docker stop localprediction
     docker rm localprediction
     docker run -p 8500:8500 -p 8501:8501 --runtime=nvidia --name localprediction  -d -e AWS_ACCESS_KEY_ID=imagerie -e AWS_SECRET_ACCESS_KEY=imagerie -e AWS_REGION=us-east-1 \
-        --restart unless-stopped --network host  \
+        --restart unless-stopped --network imagerie_nw  \
         -t fvonprem/$4-prediction:$PREDICT_UPTD
 
     DIR=$HOME"/../models"
