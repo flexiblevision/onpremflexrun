@@ -25,7 +25,7 @@ if [ $CAP_UPTD != 'True' ]; then
     docker stop capdev
     docker rm capdev
     docker run -d --name=capdev -p 0.0.0.0:5000:5000 --restart unless-stopped --privileged -v /dev:/dev -v /sys:/sys \
-        --network imagerie_nw -e ACCESS_KEY=imagerie -e SECRET_KEY=imagerie \
+        --network host -e ACCESS_KEY=imagerie -e SECRET_KEY=imagerie \
 	-e AUTH0_DOMAIN=$AUTH0_DOMAIN -e AUTH0_CLIENT_ID=$AUTH0_CID \
     	-e REDIS_URL=$REDIS_URL -e REDIS_SERVER=$REDIS_SERVER -e REDIS_PORT=$REDIS_PORT \
     	-e DB_NAME=$DB_NAME -e MONGO_SERVER=$MONGO_SERVER -e MONGO_PORT=$MONGO_PORT \
@@ -41,7 +41,7 @@ if [ $CAPUI_UPTD != 'True' ]; then
     docker stop captureui
     docker rm captureui
     docker run -p 0.0.0.0:80:3000 --restart unless-stopped \
-        --name captureui -e CAPTURE_SERVER=http://capdev:5000 -e PROCESS_SERVER=http://capdev -d --network imagerie_nw \
+        --name captureui -e CAPTURE_SERVER=http://172.17.0.1:5000 -e PROCESS_SERVER=http://172.17.0.1 -d --network host \
         fvonprem/$4-frontend:$CAPUI_UPTD
 fi
 
@@ -50,7 +50,7 @@ if [ $PREDICT_UPTD != 'True' ]; then
     docker stop localprediction
     docker rm localprediction
     docker run -p 8500:8500 -p 8501:8501 --runtime=nvidia --name localprediction  -d -e AWS_ACCESS_KEY_ID=imagerie -e AWS_SECRET_ACCESS_KEY=imagerie -e AWS_REGION=us-east-1 \
-        --restart unless-stopped --network imagerie_nw  \
+        --restart unless-stopped --network host  \
         -t fvonprem/$4-prediction:$PREDICT_UPTD
 
     DIR=$HOME"/../models"
