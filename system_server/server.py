@@ -111,7 +111,13 @@ def set_static_ips(network = None):
 
 def get_mac_id():
     ifconfig  = subprocess.Popen(['ifconfig'], stdout=subprocess.PIPE).communicate()[0].decode('utf-8')
-    interface = 'wlp' + ifconfig.split('wlp')[1].split(':')[0]
+    if 'wlp' in ifconfig:
+        interface = 'wlp' + ifconfig.split('wlp')[1].split(':')[0]
+    elif 'enp' in ifconfig:
+        interface = 'enp' + ifconfig.split('enp')[1].split(':')[0]
+    else:
+        return None
+
     cmd = subprocess.Popen(['cat', '/sys/class/net/'+interface+'/address'], stdout=subprocess.PIPE)
     cmd_out, cmd_err = cmd.communicate()
     return  cmd_out.strip().decode("utf-8")
