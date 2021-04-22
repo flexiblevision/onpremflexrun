@@ -18,6 +18,7 @@ CLOUD_DOMAIN="$(cat ~/flex-run/setup_constants/cloud_domain.txt)"
 GCP_FUNCTIONS_DOMAIN="$(cat ~/flex-run/setup_constants/gcp_functions_domain.txt)"
 
 if [ $CAP_UPTD != 'True' ]; then
+    docker pull fvonprem/$4-backend:$CAP_UPTD
     #copy camera data to local device
     docker cp capdev:/fvbackend/cameras.json /
 
@@ -37,6 +38,7 @@ if [ $CAP_UPTD != 'True' ]; then
 fi
 
 if [ $CAPUI_UPTD != 'True' ]; then
+    docker pull fvonprem/$4-frontend:$CAPUI_UPTD
     # update captureui
     docker stop captureui
     docker rm captureui
@@ -46,6 +48,7 @@ if [ $CAPUI_UPTD != 'True' ]; then
 fi
 
 if [ $PREDICT_UPTD != 'True' ]; then
+    docker pull fvonprem/$4-prediction:$PREDICT_UPTD
     #update localprediction
     docker stop localprediction
     docker rm localprediction
