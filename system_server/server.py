@@ -111,7 +111,13 @@ def set_static_ips(network = None):
 
 def get_mac_id():
     ifconfig  = subprocess.Popen(['ifconfig'], stdout=subprocess.PIPE).communicate()[0].decode('utf-8')
-    interface = 'wlp' + ifconfig.split('wlp')[1].split(':')[0]
+    if 'wlp' in ifconfig:
+        interface = 'wlp' + ifconfig.split('wlp')[1].split(':')[0]
+    elif 'enp' in ifconfig:
+        interface = 'enp' + ifconfig.split('enp')[1].split(':')[0]
+    else:
+        return None
+
     cmd = subprocess.Popen(['cat', '/sys/class/net/'+interface+'/address'], stdout=subprocess.PIPE)
     cmd_out, cmd_err = cmd.communicate()
     return  cmd_out.strip().decode("utf-8")
@@ -323,12 +329,18 @@ class ExportImage(Resource):
         if not os.path.exists(path):
             os.system('mkdir '+path)
 
-        #usb_list = subprocess.Popen(['sudo', 'fdisk', '-l'], stdout=subprocess.PIPE)
-        #usb = usb_list.communicate()[0].decode('utf-8').split('dev/')[-1].split(' ')[0]
-
         usb_list = subprocess.Popen(['sudo', 'blkid', '-t', 'TYPE=vfat', '-o', 'device'], stdout=subprocess.PIPE)
-        usb = usb_list.communicate()[0].decode('utf-8').splitlines()[-1].split('/')[-1]
+        usbs = usb_list.communicate()[0].decode('utf-8').splitlines()
 
+        last_connected_usb_path = usbs[-1]
+        cmd_output = subprocess.Popen(['sudo', 'lsblk', '-o', 'MOUNTPOINT', '-nr', last_connected_usb_path], stdout=subprocess.PIPE)
+        usb_mountpoint = cmd_output.communicate()[0].decode('utf-8')
+
+        if '/boot/efi' in usb_mountpoint:
+            print('CANNOT EXPORT TO BOOT MOUNTPOINT')
+            return False
+
+        usb = usbs[-1].split('/')[-1]
         if usb[0] == 's':
             os.system('sudo mount /dev/' + usb + ' ' + path)
 

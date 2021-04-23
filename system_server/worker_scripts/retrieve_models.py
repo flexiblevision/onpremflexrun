@@ -75,8 +75,11 @@ def retrieve_models(data, token):
         for version in versions:
             if model_name in exclude_models and version in exclude_models[model_name]:
                 # model has already been downloaded
-                model_data['versions'].append(version)
-                print('model has already been downloaded')
+                if os.path.exists(model_folder+'/'+str(version)):
+                    model_data['versions'].append(version)
+                    print('model has already been downloaded')
+                else:
+                    print('version not found, skipping...', model_folder+'/'+str(version))
             else:
                 print('Syncing '+model_name+' versions '+str(version))
                 path = CLOUD_DOMAIN+'/api/capture/models/download/'+str(project_id)+'/'+str(version)

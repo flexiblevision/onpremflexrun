@@ -1,8 +1,8 @@
 apt update
 apt install -y python3-pip
-apt install vim
-apt install vsftpd
-apt install net-tools
+apt install -y vim
+apt install -y vsftpd
+apt install -y net-tools
 apt-get -y install nodejs
 apt-get -y install npm
 apt-get -y install curl
