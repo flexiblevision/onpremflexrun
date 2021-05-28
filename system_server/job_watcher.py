@@ -33,6 +33,7 @@ while True:
     jobs = job_collection.find()
     for job in jobs:
         j = job_queue.fetch_job(job['_id'])
+        if not j: continue
         if j and j.get_status() == 'finished':
             job_collection.delete_one({'_id': job['_id']})
         elif j.get_status() == 'failed':
