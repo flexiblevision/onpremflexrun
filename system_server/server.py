@@ -137,6 +137,16 @@ def system_arch():
 def restart_network_manager():
     os.system("service network-manager restart")
 
+def get_eth_port_names():
+    eth_names = []
+    names = os.popen('basename -a /sys/class/net/*').read()
+    lan_port_num = 1
+    for idx, n in enumerate(names.split('\n')):
+        if 'en' in n:
+            eth_names.append(n)
+            
+    return eth_names
+
 class MacId(Resource):
     def get(self):
         return get_mac_id()
@@ -225,8 +235,6 @@ class Networks(Resource):
             nets['ip'] = 'Wi-Fi not connected'
 
         return nets
-
-
 
     def post(self):
         j = request.json
@@ -406,8 +414,9 @@ class UpdateIp(Resource):
         data = request.json
         ifconfig = subprocess.Popen(['ifconfig'], stdout=subprocess.PIPE).communicate()[0].decode('utf-8')
 
-        if 'enp' in ifconfig:
-            interface_name = 'enp' + ifconfig.split('enp')[1].split(':')[0]
+        eth_names = get_eth_port_names()
+        if len(eth_names) > 0:
+            interface_name = eth_names[-1]
         else:
             return 'ethernet interface not found'
         
@@ -426,30 +435,25 @@ class UpdateIp(Resource):
 
 class GetLanIps(Resource):
     def get(self):
-        lanIds   = [3,0]
         lanIps   = {'LAN1': 'not assigned', 'LAN2': 'not assigned'}
-        ifconfig = subprocess.Popen(['ifconfig'], stdout=subprocess.PIPE).communicate()[0].decode('utf-8')
-
-        for index, lan_port in enumerate(lanIps.keys()):
-            config_port = 'enp'+str(lanIds[index])
-            if config_port in ifconfig:
-                interface_name = config_port + ifconfig.split(config_port)[1].split(':')[0]
-                interface = subprocess.Popen(['ifconfig', interface_name], stdout=subprocess.PIPE).communicate()[0].decode('utf-8')
-                
-                ip6 = None
-                if 'inet6' in interface:
-                    ip6 = interface.split('inet6')[1].split(' ')[1]
-                if 'inet' in interface:
-                    ip = interface.split('inet')[1].split(' ')[1]
-                else:
-                    ip = 'LAN IP not assigned'
-
-                if ip6 and ip6 == ip: ip = 'LAN IP not assigned'
-                lanIps[lan_port] = ip
+        
+        eth_names = get_eth_port_names()
+        for idx, eth in enumerate(eth_names):
+            idx += 1
+            lan_port = 'LAN'+str(idx)
+            interface = subprocess.Popen(['ifconfig', eth], stdout=subprocess.PIPE).communicate()[0].decode('utf-8')
+            
+            ip6 = None
+            if 'inet6' in interface:
+                ip6 = interface.split('inet6')[1].split(' ')[1]
+            if 'inet' in interface:
+                ip = interface.split('inet')[1].split(' ')[1]
             else:
-                lanIps[lan_port] = 'ethernet interface not found'
+                ip = 'LAN IP not assigned'
 
-
+            if ip6 and ip6 == ip: ip = 'LAN IP not assigned'
+            lanIps[lan_port] = ip
+    
         return lanIps
 
 class UploadModel(Resource):
