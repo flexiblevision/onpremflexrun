@@ -4,5 +4,6 @@ rm -rf ~/flex-run-temp
 
 sleep 3
 
+sh $HOME/flex-run/upgrades/system_container_upgrades.sh $1 $2 $3 $4
 sh $HOME/flex-run/upgrades/install_dependencies.sh
 sh $HOME/flex-run/upgrades/start_servers.sh

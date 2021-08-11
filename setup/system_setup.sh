@@ -33,6 +33,7 @@ fi
 
 docker run -d --name=capdev -p 0.0.0.0:5000:5000 --restart unless-stopped --privileged -v /dev:/dev -v /sys:/sys \
     --network imagerie_nw -e ACCESS_KEY=imagerie -e SECRET_KEY=imagerie \
+    -v /etc/timezone:/etc/timezone:ro -v /etc/localtime:/etc/localtime:ro \
     -e AUTH0_DOMAIN=$AUTH0_DOMAIN -e AUTH0_CLIENT_ID=$AUTH0_CID \
     -e REDIS_URL=$REDIS_URL -e REDIS_SERVER=$REDIS_SERVER -e REDIS_PORT=$REDIS_PORT \
     -e DB_NAME=$DB_NAME -e MONGO_SERVER=$MONGO_SERVER -e MONGO_PORT=$MONGO_PORT \
