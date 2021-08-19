@@ -1,1 +1,1 @@
-https://clouddeploy.api.flexiblevision.com
+https://v1.cloud.flexiblevision.com
