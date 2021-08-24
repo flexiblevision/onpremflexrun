@@ -147,6 +147,19 @@ def get_eth_port_names():
             
     return eth_names
 
+def list_usb_paths():
+    valid_formats = ['vfat', 'exfat']
+    mount_paths   = []
+    for format_type in valid_formats:
+        usb_list = subprocess.Popen(['sudo', 'blkid', '-t', 'TYPE='+format_type, '-o', 'device'], stdout=subprocess.PIPE)
+        usb = usb_list.communicate()[0].decode('utf-8').splitlines()
+        if len(usb) > 0:
+            usb = usb[-1].split('/')[-1]
+            mount_paths.append(usb)
+
+    return mount_paths
+
+
 class MacId(Resource):
     def get(self):
         return get_mac_id()
@@ -302,10 +315,14 @@ class SaveImage(Resource):
     def post(self):
         data = request.json
         path = os.environ['HOME']+'/'+'stored_images'
+        usb  = list_usb_paths()[-1]
 
+        cmd_output = subprocess.Popen(['sudo', 'lsblk', '-o', 'MOUNTPOINT', '-nr', usb], stdout=subprocess.PIPE)
+        usb_mountpoint = cmd_output.communicate()[0].decode('utf-8')
 
-        usb_list = subprocess.Popen(['sudo', 'blkid', '-t', 'TYPE=vfat', '-o', 'device'], stdout=subprocess.PIPE)
-        usb = usb_list.communicate()[0].decode('utf-8').splitlines()[-1].split('/')[-1]
+        if '/boot/efi' in usb_mountpoint:
+            print('CANNOT EXPORT TO BOOT MOUNTPOINT')
+            return False
 
         if 'img' in data:
             img_path   = path+'/flexible_vision/snapshots'
@@ -337,9 +354,7 @@ class ExportImage(Resource):
         if not os.path.exists(path):
             os.system('mkdir '+path)
 
-        usb_list = subprocess.Popen(['sudo', 'blkid', '-t', 'TYPE=vfat', '-o', 'device'], stdout=subprocess.PIPE)
-        usbs = usb_list.communicate()[0].decode('utf-8').splitlines()
-
+        usbs = list_usb_paths()
         last_connected_usb_path = usbs[-1]
         cmd_output = subprocess.Popen(['sudo', 'lsblk', '-o', 'MOUNTPOINT', '-nr', last_connected_usb_path], stdout=subprocess.PIPE)
         usb_mountpoint = cmd_output.communicate()[0].decode('utf-8')
