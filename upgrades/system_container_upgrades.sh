@@ -2,6 +2,7 @@ CAP_UPTD=$1
 CAPUI_UPTD=$2
 PREDICT_UPTD=$3
 SYSTEM_ARCH=$4
+PREDLITE_UPTD=$5
 
 REDIS_VERSION='5.0.6'
 MONGO_VERSION='4.2'
@@ -66,4 +67,20 @@ if [ $PREDICT_UPTD != 'True' ]; then
 
 fi
 
-# sh $HOME/flex-run/upgrades/upgrade_flex_run.sh
+if [ $PREDLITE_UPTD != 'True' ]; then
+    docker pull fvonprem/$4-predictlite:$PREDICTLITE_UPTD 
+    #update predictlite
+    docker stop predictlite
+    docker rm predictlite
+    docker run -p 8511:8511 --name predictlite  -d  \
+        --restart unless-stopped --network imagerie_nw  \
+        -t fvonprem/$4-predictlite:$PREDICT_LITE_VERSION
+
+    DIR=$HOME"/../lite_models"
+    if [ -d "$DIR" ]; then
+        docker cp $DIR predictlite:/data/models
+    fi
+
+fi
+
+sh $HOME/flex-run/upgrades/start_servers.sh

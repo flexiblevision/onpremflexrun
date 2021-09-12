@@ -2,6 +2,7 @@ CAPDEV_VERSION=$1
 CAPTUREUI_VERSION=$2
 PREDICTION_VERSION=$3
 SYSTEM_ARCH=$4
+PREDICT_LITE_VERSION=$5
 REDIS_VERSION='5.0.6'
 MONGO_VERSION='4.2'
 
@@ -47,3 +48,7 @@ docker run -p 0.0.0.0:80:3000 --restart unless-stopped \
 docker run -p 8500:8500 -p 8501:8501 --runtime=nvidia --name localprediction  -d -e AWS_ACCESS_KEY_ID=imagerie -e AWS_SECRET_ACCESS_KEY=imagerie -e AWS_REGION=us-east-1 \
     --restart unless-stopped --network imagerie_nw  \
     -t fvonprem/$4-prediction:$PREDICTION_VERSION
+
+docker run -p 8511:8511 --name predictlite  -d  \
+    --restart unless-stopped --network imagerie_nw  \
+    -t fvonprem/$4-predictlite:$PREDICT_LITE_VERSION

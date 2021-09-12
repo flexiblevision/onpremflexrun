@@ -2,7 +2,12 @@ import requests
 import subprocess
 import os
 
-CONTAINERS  = {'backend':'capdev', 'frontend':'captureui', 'prediction':'localprediction'}
+CONTAINERS  = {
+    'backend':'capdev', 
+    'frontend':'captureui', 
+    'prediction':'localprediction',
+    'predictlite': 'predictlite'
+}
 CLOUD_FUNCTIONS_BASE = 'https://us-central1-flexible-vision-staging.cloudfunctions.net/'
 gcp_functions_path   = os.path.expanduser('~/flex-run/setup_constants/gcp_functions_domain.txt')
 with open(gcp_functions_path, 'r') as file:

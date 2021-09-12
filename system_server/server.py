@@ -198,9 +198,16 @@ class Upgrade(Resource):
         cap_uptd     = is_container_uptodate('backend')[1]
         capui_uptd   = is_container_uptodate('frontend')[1]
         predict_uptd = is_container_uptodate('prediction')[1]
+        predictlite_uptd = is_container_uptodate('predictlite')[1]
 
         os.system("chmod +x "+os.environ['HOME']+"/flex-run/system_server/upgrade_system.sh")
-        os.system("sh "+os.environ['HOME']+"/flex-run/system_server/upgrade_system.sh "+cap_uptd+" "+capui_uptd+" "+predict_uptd)
+        os.system("sh "+os.environ['HOME']+"/flex-run/system_server/upgrade_system.sh "+cap_uptd+" "+capui_uptd+" "+predict_uptd+" "+predictlite_uptd)
+
+class UpgradeFlexRun(Resource):
+    @auth.requires_auth
+    def get(self):
+        os.system("chmod +x "+os.environ['HOME']+"/flex-run/upgrades/upgrade_flex_run.sh")
+        os.system("sh "+os.environ['HOME']+"/flex-run/upgrades/upgrade_flex_run.sh")
 
 class AuthToken(Resource):
     @auth.requires_auth
@@ -290,14 +297,21 @@ class SystemVersions(Resource):
         backend_version    = get_current_container_version('capdev')
         frontend_version   = get_current_container_version('captureui')
         prediction_version = get_current_container_version('localprediction')
+        predictlite_version = get_current_container_version('predictlite')
         return {'backend_version': backend_version,
                 'frontend_version': frontend_version,
-                'prediction_version': prediction_version
+                'prediction_version': prediction_version,
+                'predictlite_version': predictlite_version
                 }
 
 class SystemIsUptodate(Resource):
     def get(self):
-        return all([is_container_uptodate('backend')[0], is_container_uptodate('frontend')[0], is_container_uptodate('prediction')[0]])
+        return all([
+            is_container_uptodate('backend')[0], 
+            is_container_uptodate('frontend')[0], 
+            is_container_uptodate('prediction')[0], 
+            is_container_uptodate('predictlite')[0]
+        ])
 
 class DeviceInfo(Resource):
     def get(self):
@@ -583,6 +597,7 @@ api.add_resource(DeleteFtpUser, '/delete_ftp_user')
 api.add_resource(UpdateFtpPort, '/update_ftp_port')
 api.add_resource(EnableFtp, '/enable_ftp')
 api.add_resource(SyncAnalytics, '/sync_analytics')
+api.add_resource(UpgradeFlexRun, '/upgrade_flex_run')
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0',port='5001')

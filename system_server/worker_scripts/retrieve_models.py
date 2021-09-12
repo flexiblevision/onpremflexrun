@@ -27,6 +27,7 @@ def base_path():
     return xavier_ssd if os.path.exists(xavier_ssd) else '/'
 
 BASE_PATH_TO_MODELS = base_path()+'models/'
+BASE_PATH_TO_LITE_MODELS = base_path+'lite_models/'
 LITE_MODEL_TYPES    = ['high_speed']
 
 def create_config_file(data):
@@ -43,9 +44,14 @@ def create_config_file(data):
 
 def retrieve_models(data, token):
     model_type = 'versions' if 'model_type' not in data or data['model_type'] != 'high_speed' else data['model_type']
-    #if model.config exists - remove it
-    if os.path.exists(BASE_PATH_TO_MODELS+'model.config'):
-        os.system("rm -rf "+BASE_PATH_TO_MODELS+'model.config')
+    print(model_type)
+    if model_type not in LITE_MODEL_TYPES:
+        #if model.config exists - remove it
+        if os.path.exists(BASE_PATH_TO_MODELS+'model.config'):
+            os.system("rm -rf "+BASE_PATH_TO_MODELS+'model.config')
+    else:
+        # update base models path
+        BASE_PATH_TO_MODELS = BASE_PATH_TO_LITE_MODELS
 
     #check if exclude_models is empty
     if not bool(data['exclude_models']) and os.path.exists(BASE_PATH_TO_MODELS): 
@@ -71,8 +77,8 @@ def retrieve_models(data, token):
         if len(versions) > 0 and not os.path.exists(model_folder): 
             os.system("mkdir " + model_folder)
 
-        model_data = {'type': model_name, 'versions': []}
-        for model_type in LITE_MODEL_TYPES: model_data[model_type] =[]
+        model_data = {'type': model_name}
+        model_data[model_type] =[]
 
         #iterate over the models data and request/extract model to models folder
         for version in versions:
@@ -115,11 +121,11 @@ def retrieve_models(data, token):
         if model_type in LITE_MODEL_TYPES:
             os.system("docker exec predictlite rm -rf /data/models")
             print('pushing models into predictlite server')
-            os.system("docker cp "+base_path()+"models predictlite:/data/")
+            os.system("docker cp "+BASE_PATH_TO_MODELS+" predictlite:/data/")
         else:
             os.system("docker exec localprediction rm -rf /models")
             print('pushing new models to localprediction')
-            os.system("docker cp "+base_path()+"models localprediction:/")
+            os.system("docker cp "+BASE_PATH_TO_MODELS+" localprediction:/")
             os.system("docker restart localprediction")
         return True
     else:
@@ -127,8 +133,10 @@ def retrieve_models(data, token):
 
 
 def save_models_versions(models_versions):
-    models_collection.drop()
-    models_collection.insert_many(models_versions)
+    # models_collection.drop()
+    # models_collection.insert_many(models_versions)
+    for mv in models_versions:
+        models_collection.update({'type': mv['type']}, mv, upsert=True)
 
 def format_filename(s):
     valid_chars = "-_.() %s%s" % (string.ascii_letters, string.digits)
