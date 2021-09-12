@@ -27,7 +27,7 @@ def base_path():
     return xavier_ssd if os.path.exists(xavier_ssd) else '/'
 
 BASE_PATH_TO_MODELS = base_path()+'models/'
-BASE_PATH_TO_LITE_MODELS = base_path+'lite_models/'
+BASE_PATH_TO_LITE_MODELS = base_path()+'lite_models/'
 LITE_MODEL_TYPES    = ['high_speed']
 
 def create_config_file(data):
