@@ -43,6 +43,11 @@ def create_config_file(data):
         f.write('}')
 
 def retrieve_models(data, token):
+    BASE_PATH_TO_MODELS = base_path()+'models/'
+    BASE_PATH_TO_LITE_MODELS = base_path()+'lite_models/'
+    LITE_MODEL_TYPES    = ['high_speed']
+
+
     model_type = 'versions' if 'model_type' not in data or data['model_type'] != 'high_speed' else data['model_type']
     print(model_type)
     if model_type not in LITE_MODEL_TYPES:
@@ -116,7 +121,7 @@ def retrieve_models(data, token):
         if model_type not in LITE_MODEL_TYPES:
             create_config_file(models_versions.values())
 
-        save_models_versions(models_versions.values())
+        save_models_versions(models_versions.values(), model_type)
         
         if model_type in LITE_MODEL_TYPES:
             os.system("docker exec predictlite rm -rf /data/models")
@@ -132,11 +137,19 @@ def retrieve_models(data, token):
         return False
 
 
-def save_models_versions(models_versions):
+def save_models_versions(models_versions, model_type):
     # models_collection.drop()
     # models_collection.insert_many(models_versions)
+    db_models = models_collection.find()
+    for model in db_models:
+        model_list = {}
+        model_list[model_type] = []
+        models_collection.update_one({'type': model['type']}, {'$set': model_list}, True)
+
     for mv in models_versions:
-        models_collection.update({'type': mv['type']}, mv, upsert=True)
+        model_list = {}
+        model_list[model_type] = mv[model_type]
+        models_collection.update_one({'type': mv['type']}, {'$set': model_list}, True)
 
 def format_filename(s):
     valid_chars = "-_.() %s%s" % (string.ascii_letters, string.digits)

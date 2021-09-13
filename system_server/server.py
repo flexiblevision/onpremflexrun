@@ -28,6 +28,7 @@ from collections import defaultdict
 from io import StringIO
 from io import BytesIO
 from version_check import *
+from os.path import exists
 
 from worker_scripts.retrieve_models import retrieve_models
 from worker_scripts.retrieve_programs import retrieve_programs
@@ -65,6 +66,8 @@ def base_path():
     return xavier_ssd if os.path.exists(xavier_ssd) else '/'
 
 BASE_PATH_TO_MODELS = base_path()+'models/'
+BASE_PATH_TO_LITE_MODELS = base_path()+'lite_models/'
+
 
 def is_valid_ip(ip):
     if not ip: return False
@@ -265,9 +268,20 @@ class CategoryIndex(Resource):
         # category index will now be created from the job.json file
         # read in json file and parse the labelmap_dict to create the category_index
 
+        model_path = None
         path_to_model_labels = BASE_PATH_TO_MODELS + model + '/' + version + '/job.json'
+        path_to_lite_models  = BASE_PATH_TO_LITE_MODELS + model + '/' + version + '/job.json'
+
+        model_paths = [path_to_model_labels, path_to_lite_models]
+        for path in model_paths:
+            if exists(path):
+                model_path = path
+                break
+        
+        if not model_path: return {}
+
         labels = None
-        with open(path_to_model_labels) as data:
+        with open(model_path) as data:
             labels = json.load(data)['labelmap_dict']
 
         category_index = {}
