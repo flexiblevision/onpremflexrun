@@ -22,11 +22,19 @@ TZ="$(cat /etc/timezone)"
 if [ $CAP_UPTD != 'True' ]; then
     docker pull fvonprem/$4-backend:$CAP_UPTD
     #copy camera data to local device
-    docker cp capdev:/fvbackend/cameras.json /
+    {
+        docker cp capdev:/fvbackend/cameras.json /
+    } || {
+        echo 'camera config file does not exist'
+    }
 
     # update capdev
-    docker stop capdev
-    docker rm capdev
+    {
+        docker stop capdev
+        docker rm capdev
+    } || {
+        echo 'capdev does not exist to remove'
+    }
     docker run -d --name=capdev -p 0.0.0.0:5000:5000 --restart unless-stopped --privileged -v /dev:/dev -v /sys:/sys \
         --network host -e ACCESS_KEY=imagerie -e SECRET_KEY=imagerie \
         -v /etc/timezone:/etc/timezone:ro -v /etc/localtime:/etc/localtime:ro \
@@ -37,14 +45,22 @@ if [ $CAP_UPTD != 'True' ]; then
         -d fvonprem/$4-backend:$CAP_UPTD
 
     #upload camera data back to new container
-    docker cp /cameras.json capdev:/fvbackend/
+    {
+        docker cp /cameras.json capdev:/fvbackend/
+    } || {
+        echo 'camera config file not found'
+    }
 fi
 
 if [ $CAPUI_UPTD != 'True' ]; then
     docker pull fvonprem/$4-frontend:$CAPUI_UPTD
     # update captureui
-    docker stop captureui
-    docker rm captureui
+    {
+        docker stop captureui
+        docker rm captureui
+    } || {
+        echo 'captureui does not exist to remove'
+    }
     docker run -p 0.0.0.0:80:3000 --restart unless-stopped \
         --name captureui -e CAPTURE_SERVER=http://172.17.0.1:5000 -e PROCESS_SERVER=http://172.17.0.1 -d --network imagerie_nw \
         fvonprem/$4-frontend:$CAPUI_UPTD
@@ -53,8 +69,12 @@ fi
 if [ $PREDICT_UPTD != 'True' ]; then
     docker pull fvonprem/$4-prediction:$PREDICT_UPTD
     #update localprediction
-    docker stop localprediction
-    docker rm localprediction
+    {
+        docker stop localprediction
+        docker rm localprediction
+    } || {
+        echo 'localprediction does not exist to remove'
+    }
     docker run -p 8500:8500 -p 8501:8501 --runtime=nvidia --name localprediction  -d -e AWS_ACCESS_KEY_ID=imagerie -e AWS_SECRET_ACCESS_KEY=imagerie -e AWS_REGION=us-east-1 \
         --restart unless-stopped --network imagerie_nw  \
         -t fvonprem/$4-prediction:$PREDICT_UPTD
@@ -68,13 +88,19 @@ if [ $PREDICT_UPTD != 'True' ]; then
 fi
 
 if [ $PREDLITE_UPTD != 'True' ]; then
-    docker pull fvonprem/$4-predictlite:$PREDICTLITE_UPTD 
+    docker pull fvonprem/$4-predictlite:$PREDLITE_UPTD 
     #update predictlite
-    docker stop predictlite
-    docker rm predictlite
+    {
+        docker stop predictlite
+        docker rm predictlite
+
+    } || {
+        echo 'predictlite does not exist to remove'
+    }
+    
     docker run -p 8511:8511 --name predictlite  -d  \
         --restart unless-stopped --network imagerie_nw  \
-        -t fvonprem/$4-predictlite:$PREDICT_LITE_VERSION
+        -t fvonprem/$4-predictlite:$PREDLITE_UPTD
 
     DIR=$HOME"/../lite_models"
     if [ -d "$DIR" ]; then
