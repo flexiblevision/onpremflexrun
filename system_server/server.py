@@ -203,9 +203,11 @@ class Upgrade(Resource):
         predict_uptd = is_container_uptodate('prediction')[1]
         predictlite_uptd = is_container_uptodate('predictlite')[1]
 
+        #upgrade flex run 
         os.system("chmod +x "+os.environ['HOME']+"/flex-run/upgrades/upgrade_flex_run.sh")
         os.system("sh "+os.environ['HOME']+"/flex-run/upgrades/upgrade_flex_run.sh")
 
+        #upgrade containers 
         os.system("chmod +x "+os.environ['HOME']+"/flex-run/system_server/upgrade_system.sh")
         os.system("sh "+os.environ['HOME']+"/flex-run/system_server/upgrade_system.sh "+cap_uptd+" "+capui_uptd+" "+predict_uptd+" "+predictlite_uptd)
 
