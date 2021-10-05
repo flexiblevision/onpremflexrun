@@ -111,6 +111,9 @@ def set_static_ips(network = None):
         f.write('    '+interface_name+':\n')
         f.write('      dhcp4: false\n')
         f.write('      addresses: '+ip_string)
+    
+    os.system("sudo netplan apply")
+
 
 def get_mac_id():
     ifconfig  = subprocess.Popen(['ifconfig'], stdout=subprocess.PIPE).communicate()[0].decode('utf-8')

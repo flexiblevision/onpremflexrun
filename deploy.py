@@ -75,6 +75,8 @@ def set_static_ip():
         f.write('      dhcp4: false\n')
         f.write('      addresses: ['+ip+'/24]')
 
+    os.system("sudo netplan apply")
+
 def containers_running():
     containers = ['capdev', 'localprediction', 'captureui']
     running = []
