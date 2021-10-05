@@ -84,12 +84,17 @@ def get_static_ip_ref():
     return static_ip
 
 def get_interface_name_ref():
-    interface_name  = 'enp0s31f6'
-    path_ref        = os.path.expanduser('~/flex-run/setup_constants/interface_name.txt')
-    try:
-        with open(path_ref, 'r') as file:
-            interface_name = file.read().replace('\n', '')
-    except: return interface_name
+    eth_ports = get_eth_port_names()
+    if len(eth_ports) <= 1:
+        interface_name  = 'enp0s31f6'
+        path_ref        = os.path.expanduser('~/flex-run/setup_constants/interface_name.txt')
+        try:
+            with open(path_ref, 'r') as file:
+                interface_name = file.read().replace('\n', '')
+        except: return interface_name
+    else:
+        interface_name = get_eth_port_names[-1]
+        
     return interface_name
 
 def set_static_ips(network = None):
