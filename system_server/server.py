@@ -93,7 +93,7 @@ def get_interface_name_ref():
                 interface_name = file.read().replace('\n', '')
         except: return interface_name
     else:
-        interface_name = get_eth_port_names[-1]
+        interface_name = get_eth_port_names()[-1]
 
     return interface_name
 
@@ -387,7 +387,7 @@ class SaveImage(Resource):
 
         return 'Image Saved', 200
 
-class ExportImage(Resource):
+class ExportImage(Resource):    
     #@auth.requires_auth
     def post(self):
         data = request.json
