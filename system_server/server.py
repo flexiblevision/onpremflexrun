@@ -358,7 +358,7 @@ class SaveImage(Resource):
         path = os.environ['HOME']+'/'+'stored_images'
         usb  = list_usb_paths()[-1]
 
-        cmd_output = subprocess.Popen(['sudo', 'lsblk', '-o', 'MOUNTPOINT', '-nr', usb], stdout=subprocess.PIPE)
+        cmd_output = subprocess.Popen(['sudo', 'lsblk', '-o', 'MOUNTPOINT', '-nr', '/dev/'+usb], stdout=subprocess.PIPE)
         usb_mountpoint = cmd_output.communicate()[0].decode('utf-8')
 
         if '/boot/efi' in usb_mountpoint or usb_mountpoint == '':
@@ -367,12 +367,14 @@ class SaveImage(Resource):
 
         if 'img' in data:
             img_path   = path+'/flexible_vision/snapshots'
+            todayDate  = time.strftime("%d-%m-%y")
+            img_path   = img_path +'/' + todayDate
             decode_img = base64.b64decode(data['img'])
 
             if not os.path.exists(img_path):
-                os.system('sudo mkdir -p ' + img_path)
+                os.makedirs(img_path)
 
-            img_path = img_path + '/' +str(int(datetime.datetime.now().timestamp()*1000))
+            img_path = img_path + '/' +str(int(datetime.datetime.now().timestamp()*1000))+'.jpg'
             with open(img_path, 'wb') as fh:
                 fh.write(decode_img)
 
@@ -385,8 +387,6 @@ class SaveImage(Resource):
 
         return 'Image Saved', 200
 
-
-
 class ExportImage(Resource):
     #@auth.requires_auth
     def post(self):
@@ -397,7 +397,7 @@ class ExportImage(Resource):
 
         usbs = list_usb_paths()
         last_connected_usb_path = usbs[-1]
-        cmd_output = subprocess.Popen(['sudo', 'lsblk', '-o', 'MOUNTPOINT', '-nr', last_connected_usb_path], stdout=subprocess.PIPE)
+        cmd_output = subprocess.Popen(['sudo', 'lsblk', '-o', 'MOUNTPOINT', '-nr', '/dev/'+last_connected_usb_path], stdout=subprocess.PIPE)
         usb_mountpoint = cmd_output.communicate()[0].decode('utf-8')
 
         if '/boot/efi' in usb_mountpoint or usb_mountpoint == '':
@@ -412,16 +412,20 @@ class ExportImage(Resource):
                 did = ''
                 base_path = path + '/flexible_vision/' + data['model'] + '/' + data['version']
 
-                img_path = base_path + '/images'
+                img_path  = base_path + '/images'
+                todayDate = time.strftime("%d-%m-%y")
+                img_path  = img_path +'/' + todayDate
+
                 if not os.path.exists(img_path):
-                    os.system('sudo mkdir -p ' + img_path)
+                    os.makedirs(img_path)
 
                 if 'inference' in data:
                     inference = data['inference']
                     if 'did' in inference:
                         did = '_'+inference['did']
 
-                img_path   = img_path + '/'+ data['timestamp'].replace(' ', '_').replace('.', '_').replace(':', '-')+did+'.jpg'
+                timestamp  = str(datetime.datetime.now())
+                img_path   = img_path + '/'+ timestamp.replace(' ', '_').replace('.', '_').replace(':', '-')+did+'.jpg'
                 decode_img = base64.b64decode(data['img'])
 
                 with open(img_path, 'wb') as fh:
@@ -434,14 +438,16 @@ class ExportImage(Resource):
                     inference = data['inference']
                     #create inferences folder and add assets
                     inferences_path = base_path + '/inferences'
+                    inferences_path = inferences_path +'/' + todayDate
+
                     if not os.path.exists(inferences_path):
-                        os.system('sudo mkdir -p '+ inferences_path)
+                        os.makedirs(inferences_path)
 
                     file_path = inferences_path + '/'
                     if 'did' in inference:
                         did = '_'+inference['did']
 
-                    file_path = file_path+data['timestamp'].replace(' ', '_').replace('.', '_').replace(':', '-')+did+'.json'
+                    file_path = file_path+timestamp.replace(' ', '_').replace('.', '_').replace(':', '-')+did+'.json'
 
                     with open(file_path, 'w') as fh:
                         json.dump(inference, fh)
