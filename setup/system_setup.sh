@@ -33,7 +33,7 @@ if [ "$SYSTEM_ARCH" = "x86" ]; then
 fi
 
 docker run -d --name=capdev -p 0.0.0.0:5000:5000 --restart unless-stopped --privileged -v /dev:/dev -v /sys:/sys \
-    --network imagerie_nw -e ACCESS_KEY=imagerie -e SECRET_KEY=imagerie \
+    --network host -e ACCESS_KEY=imagerie -e SECRET_KEY=imagerie \
     -v /etc/timezone:/etc/timezone:ro -v /etc/localtime:/etc/localtime:ro \
     -e AUTH0_DOMAIN=$AUTH0_DOMAIN -e AUTH0_CLIENT_ID=$AUTH0_CID \
     -e REDIS_URL=$REDIS_URL -e REDIS_SERVER=$REDIS_SERVER -e REDIS_PORT=$REDIS_PORT \
