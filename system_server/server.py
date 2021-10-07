@@ -94,7 +94,7 @@ def get_interface_name_ref():
         except: return interface_name
     else:
         interface_name = get_eth_port_names[-1]
-        
+
     return interface_name
 
 def set_static_ips(network = None):
@@ -361,7 +361,7 @@ class SaveImage(Resource):
         cmd_output = subprocess.Popen(['sudo', 'lsblk', '-o', 'MOUNTPOINT', '-nr', usb], stdout=subprocess.PIPE)
         usb_mountpoint = cmd_output.communicate()[0].decode('utf-8')
 
-        if '/boot/efi' in usb_mountpoint:
+        if '/boot/efi' in usb_mountpoint or usb_mountpoint == '':
             print('CANNOT EXPORT TO BOOT MOUNTPOINT')
             return False
 
@@ -400,7 +400,7 @@ class ExportImage(Resource):
         cmd_output = subprocess.Popen(['sudo', 'lsblk', '-o', 'MOUNTPOINT', '-nr', last_connected_usb_path], stdout=subprocess.PIPE)
         usb_mountpoint = cmd_output.communicate()[0].decode('utf-8')
 
-        if '/boot/efi' in usb_mountpoint:
+        if '/boot/efi' in usb_mountpoint or usb_mountpoint == '':
             print('CANNOT EXPORT TO BOOT MOUNTPOINT')
             return False
 
