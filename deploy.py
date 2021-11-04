@@ -45,7 +45,7 @@ def clear_text_color():
     print("\033[0m")
 
 def get_static_ip_ref():
-    static_ip  = '192.168.0.10'
+    static_ip  = '192.168.10.35'
     path_ref   = os.path.expanduser('~/flex-run/setup_constants/static_ip.txt')
     try:
         with open(path_ref, 'r') as file:

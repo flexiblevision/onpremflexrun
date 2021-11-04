@@ -75,7 +75,7 @@ def is_valid_ip(ip):
     return bool(m) and all(map(lambda n: 0 <= int(n) <= 255, m.groups()))
 
 def get_static_ip_ref():
-    static_ip  = '192.168.0.10'
+    static_ip  = '192.168.10.35'
     path_ref   = os.path.expanduser('~/flex-run/setup_constants/static_ip.txt')
     try:
         with open(path_ref, 'r') as file:
