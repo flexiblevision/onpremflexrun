@@ -3,6 +3,7 @@ CAPUI_UPTD=$2
 PREDICT_UPTD=$3
 SYSTEM_ARCH=$4
 PREDLITE_UPTD=$5
+VISION_UPTD=$6
 
 REDIS_VERSION='5.0.6'
 MONGO_VERSION='4.2'
@@ -106,6 +107,37 @@ if [ $PREDLITE_UPTD != 'True' ]; then
     if [ -d "$DIR" ]; then
         docker cp $DIR predictlite:/data/models
     fi
+
+fi
+
+if [ $VISION_UPTD != 'True' ]; then
+    docker pull fvonprem/$4-predictlite:$VISION_UPTD 
+    #update vision
+    {
+        docker cp vision:/fvbackend/vision.json /
+    } || {
+        echo 'vision config file does not exist'
+    }
+
+
+    {
+        docker stop vision
+        docker rm vision
+
+    } || {
+        echo 'vision does not exist to remove'
+    }
+    
+    docker run -p 5555:5555 --name vision  -d  \
+        --restart unless-stopped --network host  \
+        -t fvonprem/$4-vision:$VISION_UPTD
+
+    # upload camera config back into container
+    {
+        docker cp /vision.json vision:/fvbackend/
+    } || {
+        echo 'vision config file not found'
+    }
 
 fi
 

@@ -3,6 +3,8 @@ CAPTUREUI_VERSION=$2
 PREDICTION_VERSION=$3
 SYSTEM_ARCH=$4
 PREDICT_LITE_VERSION=$5
+VISION_VERSION=$6
+
 REDIS_VERSION='5.0.6'
 MONGO_VERSION='4.2'
 
@@ -52,3 +54,7 @@ docker run -p 8500:8500 -p 8501:8501 --runtime=nvidia --name localprediction  -d
 docker run -p 8511:8511 --name predictlite  -d  \
     --restart unless-stopped --network imagerie_nw  \
     -t fvonprem/$4-predictlite:$PREDICT_LITE_VERSION
+
+docker run -p 5555:5555 --name vision  -d  \
+    --restart unless-stopped --network host  \
+    -t fvonprem/$4-vision:$VISION_VERSION

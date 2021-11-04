@@ -140,7 +140,19 @@ def step_2():
     backend_version = is_container_uptodate('backend')[1]
     frontend_version = is_container_uptodate('frontend')[1]
     prediction_version = is_container_uptodate('prediction')[1]
-    subprocess.call(["sh", "./scripts/local_setup.sh", backend_version, frontend_version, prediction_version])
+    predictlite_version = is_container_uptodate('predictlite')[1]
+    vision_version = is_container_uptodate('vision')[1]
+
+
+    subprocess.call([
+        "sh", 
+        "./scripts/local_setup.sh", 
+        backend_version, 
+        frontend_version, 
+        prediction_version, 
+        predictlite_version, 
+        vision_version
+    ])
 
 def step_3():
     if containers_running():
