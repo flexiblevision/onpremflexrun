@@ -7,8 +7,10 @@ CONTAINERS  = {
     'frontend':'captureui', 
     'prediction':'localprediction',
     'predictlite': 'predictlite',
-    'vision': 'vision'
+    'vision': 'vision',
+    'nodecreator': 'nodecreator'
 }
+
 CLOUD_FUNCTIONS_BASE = 'https://us-central1-flexible-vision-staging.cloudfunctions.net/'
 gcp_functions_path   = os.path.expanduser('~/flex-run/setup_constants/gcp_functions_domain.txt')
 with open(gcp_functions_path, 'r') as file:

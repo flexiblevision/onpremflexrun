@@ -4,6 +4,7 @@ PREDICT_UPTD=$3
 SYSTEM_ARCH=$4
 PREDLITE_UPTD=$5
 VISION_UPTD=$6
+CREATOR_UPTD=$7
 
 REDIS_VERSION='5.0.6'
 MONGO_VERSION='4.2'
@@ -140,5 +141,23 @@ if [ $VISION_UPTD != 'True' ]; then
     }
 
 fi
+
+if [ $CREATOR_UPTD  != 'True' ]; then
+    docker pull fvonprem/$4-nodecreator:$CREATOR_UPTD  
+
+    {
+        docker stop nodecreator
+        docker rm nodecreator
+
+    } || {
+        echo 'Node Creator does not exist to remove'
+    }
+    
+    docker run -d --name=nodecreator -p 0.0.0.0:1880:1880 \
+    --restart unless-stopped --privileged -v /dev:/dev -v /sys:/sys \
+    --network host -d fvonprem/$4-nodecreator:$CREATOR_UPTD 
+
+fi
+
 
 sh $HOME/flex-run/upgrades/start_servers.sh

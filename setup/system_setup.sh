@@ -4,6 +4,7 @@ PREDICTION_VERSION=$3
 SYSTEM_ARCH=$4
 PREDICT_LITE_VERSION=$5
 VISION_VERSION=$6
+CREATOR_VERSION=$7
 
 REDIS_VERSION='5.0.6'
 MONGO_VERSION='4.2'
@@ -58,3 +59,7 @@ docker run -p 8511:8511 --name predictlite  -d  \
 docker run -p 5555:5555 --name vision  -d  \
     --restart unless-stopped --network host  \
     -t fvonprem/$4-vision:$VISION_VERSION
+
+docker run -d --name=nodecreator -p 0.0.0.0:1880:1880 \ 
+    --restart unless-stopped --privileged -v /dev:/dev -v /sys:/sys \
+    --network host -d fvonprem/$4-nodecreator:$CREATOR_VERSION  

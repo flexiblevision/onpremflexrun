@@ -211,6 +211,8 @@ class Upgrade(Resource):
         predict_uptd = is_container_uptodate('prediction')[1]
         predictlite_uptd = is_container_uptodate('predictlite')[1]
         vision_uptd      = is_container_uptodate('vision')[1]
+        creator_uptd     = is_container_uptodate('nodecreator')[1]
+
 
 
         #upgrade flex run 
@@ -219,7 +221,7 @@ class Upgrade(Resource):
 
         #upgrade containers 
         os.system("chmod +x "+os.environ['HOME']+"/flex-run/system_server/upgrade_system.sh")
-        os.system("sh "+os.environ['HOME']+"/flex-run/system_server/upgrade_system.sh "+cap_uptd+" "+capui_uptd+" "+predict_uptd+" "+predictlite_uptd+" "+vision_uptd)
+        os.system("sh "+os.environ['HOME']+"/flex-run/system_server/upgrade_system.sh "+cap_uptd+" "+capui_uptd+" "+predict_uptd+" "+predictlite_uptd+" "+vision_uptd+" "+creator_uptd)
 
 class UpgradeFlexRun(Resource):
     @auth.requires_auth
@@ -328,11 +330,15 @@ class SystemVersions(Resource):
         prediction_version = get_current_container_version('localprediction')
         predictlite_version = get_current_container_version('predictlite')
         vision_version      = get_current_container_version('vision')
+        creator_version     = get_current_container_version('nodecreator')
+
+        
         return {'backend_version': backend_version,
                 'frontend_version': frontend_version,
                 'prediction_version': prediction_version,
                 'predictlite_version': predictlite_version,
-                'vision_version': vision_version
+                'vision_version': vision_version,
+                'creator_version': creator_version
                 }
 
 class SystemIsUptodate(Resource):
@@ -342,7 +348,8 @@ class SystemIsUptodate(Resource):
             is_container_uptodate('frontend')[0], 
             is_container_uptodate('prediction')[0], 
             is_container_uptodate('predictlite')[0],
-            is_container_uptodate('vision')[0]
+            is_container_uptodate('vision')[0],
+            is_container_uptodate('nodecreator')[0]
         ])
 
 class DeviceInfo(Resource):
