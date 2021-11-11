@@ -146,6 +146,12 @@ if [ $CREATOR_UPTD  != 'True' ]; then
     docker pull fvonprem/$4-nodecreator:$CREATOR_UPTD  
 
     {
+        docker cp nodecreator:/root/.node-red/flows.json /
+    } || {
+        echo 'flows file does not exist'
+    }
+
+    {
         docker stop nodecreator
         docker rm nodecreator
 
@@ -156,6 +162,13 @@ if [ $CREATOR_UPTD  != 'True' ]; then
     docker run -d --name=nodecreator -p 0.0.0.0:1880:1880 \
     --restart unless-stopped --privileged -v /dev:/dev -v /sys:/sys \
     --network host -d fvonprem/$4-nodecreator:$CREATOR_UPTD 
+
+
+    {
+        docker cp /flows.json nodecreator:/root/.node-red/
+    } || {
+        echo 'flows file not found'
+    }
 
 fi
 
