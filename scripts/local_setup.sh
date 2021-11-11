@@ -1,5 +1,6 @@
 apt update -y
 docker network create -d bridge imagerie_nw
+usermod -aG dialout visioncell
 
 ARCH=$(arch)
 if [ "$ARCH" = "aarch64" ]; then
