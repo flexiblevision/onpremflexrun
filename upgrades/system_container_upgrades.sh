@@ -163,7 +163,6 @@ if [ $CREATOR_UPTD  != 'True' ]; then
     --restart unless-stopped --privileged -v /dev:/dev -v /sys:/sys \
     --network host -d fvonprem/$4-nodecreator:$CREATOR_UPTD 
 
-
     {
         docker cp /flows.json nodecreator:/root/.node-red/
     } || {
