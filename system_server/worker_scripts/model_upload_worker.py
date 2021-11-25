@@ -49,7 +49,7 @@ def read_job_file(temp_path):
     ver_path = ""
     directory_contents = os.listdir(temp_path)
     for item in directory_contents:
-        if os.path.isdir(temp_path+'/'+item):
+        if os.path.isdir(temp_path+'/'+item) and item.isnumeric():
             ver_path = item
             break
 
@@ -125,7 +125,7 @@ def upload_model(temp_model_path, filename):
 
         if is_lite_model:
             print('PUSHING MODELS TO PREDICT LITE SERVER')
-            os.system("docker cp "+lite_version_path+" predictlite:/data/models/")
+            os.system("docker cp /lite_models predictlite:/data/")
             os.system('rm -rf '+temp_model_path)
         else:
             print('PUSHING MODELS TO PREDICTION SERVER')
