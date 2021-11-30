@@ -107,7 +107,8 @@ while True:
                             except:
                                 print('failed to set pass fail pins')
                             keys_to_remove = [k for k in config if not config[k] and k != 'packet_header']
-                            for k in keys_to_remove: del data[k]
+                            for k in keys_to_remove: 
+                                if k in data: del data[k]
 
                             data_bytes = json.dumps(data).encode('utf-8')
                             packet_header = b''
