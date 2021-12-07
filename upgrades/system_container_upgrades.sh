@@ -131,6 +131,7 @@ if [ $VISION_UPTD != 'True' ]; then
     
     docker run -p 5555:5555 --name vision  -d  \
         --restart unless-stopped --network host  \
+        --privileged -v /dev:/dev -v /sys:/sys \
         -t fvonprem/$4-vision:$VISION_UPTD
 
     # upload camera config back into container

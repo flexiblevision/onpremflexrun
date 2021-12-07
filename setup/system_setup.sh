@@ -58,6 +58,7 @@ docker run -p 8511:8511 --name predictlite  -d  \
 
 docker run -p 5555:5555 --name vision  -d  \
     --restart unless-stopped --network host  \
+    --privileged -v /dev:/dev -v /sys:/sys \
     -t fvonprem/$4-vision:$VISION_VERSION
 
 docker run -d --name=nodecreator -p 0.0.0.0:1880:1880 \ 
