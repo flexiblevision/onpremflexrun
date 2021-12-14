@@ -190,8 +190,9 @@ class Restart(Resource):
 class RestartBackend(Resource):
     @auth.requires_auth
     def get(self):
-        print('restarting capdev...')
+        print('restarting capdev and vision...')
         os.system("docker restart capdev")
+        os.system("docker restart vision")
 
 class TogglePin(Resource):
     #@auth.requires_auth
