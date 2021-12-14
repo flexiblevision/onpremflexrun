@@ -141,15 +141,29 @@ def save_models_versions(models_versions, model_type):
     # models_collection.drop()
     # models_collection.insert_many(models_versions)
     db_models = models_collection.find()
+
+    # loop over models and set model type(model name) lists to empty
     for model in db_models:
         model_list = {}
         model_list[model_type] = []
         models_collection.update_one({'type': model['type']}, {'$set': model_list}, True)
 
+        # if versions are empty then remove model
+        is_empty = []
+        if model_type not in models_versions:
+            for version_list in model.values():
+                if isinstance(version_list, list):
+                    is_empty.append(len(version_list)==0)
+                
+        if all(is_empty):
+            models_collection.delete_one({'type': model['type']})
+
+    # loop over model versions and set model versions array by type/model_name
     for mv in models_versions:
         model_list = {}
         model_list[model_type] = mv[model_type]
-        models_collection.update_one({'type': mv['type']}, {'$set': model_list}, True)
+        model_query = {'type': mv['type']}
+        models_collection.update_one(model_query, {'$set': model_list}, True)
 
 def format_filename(s):
     valid_chars = "-_.() %s%s" % (string.ascii_letters, string.digits)
