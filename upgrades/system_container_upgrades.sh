@@ -54,20 +54,6 @@ if [ $CAP_UPTD != 'True' ]; then
     }
 fi
 
-if [ $CAPUI_UPTD != 'True' ]; then
-    docker pull fvonprem/$4-frontend:$CAPUI_UPTD
-    # update captureui
-    {
-        docker stop captureui
-        docker rm captureui
-    } || {
-        echo 'captureui does not exist to remove'
-    }
-    docker run -p 0.0.0.0:80:3000 --restart unless-stopped \
-        --name captureui -e CAPTURE_SERVER=http://172.17.0.1:5000 -e PROCESS_SERVER=http://172.17.0.1 -d --network imagerie_nw \
-        fvonprem/$4-frontend:$CAPUI_UPTD
-fi
-
 if [ $PREDICT_UPTD != 'True' ]; then
     docker pull fvonprem/$4-prediction:$PREDICT_UPTD
     #update localprediction
@@ -171,6 +157,21 @@ if [ $CREATOR_UPTD  != 'True' ]; then
     }
 
 fi
+
+if [ $CAPUI_UPTD != 'True' ]; then
+    docker pull fvonprem/$4-frontend:$CAPUI_UPTD
+    # update captureui
+    {
+        docker stop captureui
+        docker rm captureui
+    } || {
+        echo 'captureui does not exist to remove'
+    }
+    docker run -p 0.0.0.0:80:3000 --restart unless-stopped \
+        --name captureui -e CAPTURE_SERVER=http://172.17.0.1:5000 -e PROCESS_SERVER=http://172.17.0.1 -d --network imagerie_nw \
+        fvonprem/$4-frontend:$CAPUI_UPTD
+fi
+
 
 
 sh $HOME/flex-run/upgrades/start_servers.sh

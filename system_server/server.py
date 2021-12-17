@@ -2,7 +2,7 @@ from datetime import timedelta
 from flask import make_response, request, current_app
 from functools import update_wrapper
 
-from flask import Flask
+from flask import Flask, render_template
 from flask_restful import Resource, Api
 import json
 from json import dumps
@@ -51,14 +51,30 @@ CORS(app)
 NUM_CLASSES = 99
 redis_con   = Redis('localhost', 6379, password=None)
 job_queue   = Queue('default', connection=redis_con)
-CONTAINERS  = {'backend':'capdev', 'frontend':'captureui', 'prediction':'localprediction'}
+CONTAINERS  = {
+    'backend':'capdev', 
+    'frontend':'captureui', 
+    'prediction':'localprediction',
+    'predict lite': 'predictlite',
+    'nodecreator': 'nodecreator',
+    'vision': 'vision',
+    'database': 'mongo' 
+}
 
 CLOUD_DOMAIN = "https://clouddeploy.api.flexiblevision.com"
 cloud_path   = os.path.expanduser('~/flex-run/setup_constants/cloud_domain.txt')
 with open(cloud_path, 'r') as file: 
     CLOUD_DOMAIN = file.read().replace('\n', '')
 
-
+daemon_services_list = {
+    "FlexRun Server": "server.py",
+    "TCP Server": "tcp/tcp_server.py",
+    "GPIO Server": "gpio/gpio_controller.py",
+    "Sync Worker": "worker_scripts/sync_worker.py",
+    "Worker Server": "worker.py",
+    "Inference Server Watcher": "worker_scripts/ping_prediction_server.py",
+    "Job Watcher": "job_watcher.py"
+}
 
 def base_path():
     #mounted memory to ssd
@@ -193,6 +209,31 @@ class RestartBackend(Resource):
         print('restarting capdev and vision...')
         os.system("docker restart capdev")
         os.system("docker restart vision")
+
+class ListServices(Resource):
+    def get(self):
+        f_services = []
+        scripts_base_path = os.environ['HOME']+"/flex-run/system_server/"
+        for key in daemon_services_list:
+            service_path = scripts_base_path + daemon_services_list[key]
+            is_running   = subprocess.getoutput("forever list | grep {} | wc -l | sed -e 's/1/Running/' | sed -e 's/0/Not Running/'".format(service_path))
+            color = 'green' if is_running == "Running" else 'red'
+            txt = key + " - " + is_running
+            f_services.append({'txt': txt, 'color': color})
+
+        c_services = []
+        for f_name in CONTAINERS:
+            container_name = CONTAINERS[f_name]
+            inspect = subprocess.Popen(['docker', 'inspect', '-f', "{{.State.Running}}", container_name], stdout=subprocess.PIPE)
+            is_running = inspect.communicate()[0].decode('utf-8').strip()
+            color = 'green' if is_running=='true' else 'red'
+            r_txt = 'Running' if is_running=='true' else 'Not Running'
+            txt = f_name + " - " + r_txt
+            c_services.append({'txt': txt, 'color': color})
+
+        resp = make_response(render_template('services_doc.html', daemon_services=f_services, container_services=c_services))
+        resp.headers['Content-type'] = 'text/html; charset=utf-8'
+        return resp
 
 class TogglePin(Resource):
     #@auth.requires_auth
@@ -637,6 +678,7 @@ api.add_resource(GetLanIps, '/get_lan_ips')
 api.add_resource(GetCameraUID, '/camera_uid/<string:idx>')
 api.add_resource(TogglePin, '/toggle_pin')
 api.add_resource(RestartBackend, '/refresh_backend')
+api.add_resource(ListServices, '/list_services')
 api.add_resource(UploadModel, '/upload_model')
 api.add_resource(AddFtpUser, '/add_ftp_user')
 api.add_resource(DeleteFtpUser, '/delete_ftp_user')
