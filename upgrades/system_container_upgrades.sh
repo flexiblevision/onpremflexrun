@@ -21,7 +21,23 @@ CLOUD_DOMAIN="$(cat ~/flex-run/setup_constants/cloud_domain.txt)"
 GCP_FUNCTIONS_DOMAIN="$(cat ~/flex-run/setup_constants/gcp_functions_domain.txt)"
 TZ="$(cat /etc/timezone)"
 
+
+uuid="$(uuidgen)"
+r_path=$HOME"/flex-run/upgrades/upgrade_recorder.py"
+num_steps=-1
+cur_step
+for var in "$@"
+do
+    if [ $var != 'True' ]; then
+        num_steps=$((num_steps+1))
+    fi
+done
+
+python3 $r_path -i uuid -s $num_steps
+
 if [ $CAP_UPTD != 'True' ]; then
+    python3 $r_path -i uuid -t 'updating backend server' -c $cur_step
+
     docker pull fvonprem/$4-backend:$CAP_UPTD
     #copy camera data to local device
     {
@@ -52,9 +68,14 @@ if [ $CAP_UPTD != 'True' ]; then
     } || {
         echo 'camera config file not found'
     }
+
+    cur_step=$((cur_step+1))
+    python3 $r_path -i uuid -t 'backend server updated' -c $cur_step
 fi
 
 if [ $PREDICT_UPTD != 'True' ]; then
+    python3 $r_path -i uuid -t 'updating inference server' -c $cur_step
+
     docker pull fvonprem/$4-prediction:$PREDICT_UPTD
     #update localprediction
     {
@@ -72,10 +93,14 @@ if [ $PREDICT_UPTD != 'True' ]; then
     	docker cp $DIR localprediction:/
 	docker restart localprediction
     fi
-
+    
+    cur_step=$((cur_step+1))
+    python3 $r_path -i uuid -t 'inference server updated' -c $cur_step
 fi
 
 if [ $PREDLITE_UPTD != 'True' ]; then
+    python3 $r_path -i uuid -t 'updating inference lite server' -c $cur_step
+
     docker pull fvonprem/$4-predictlite:$PREDLITE_UPTD 
     #update predictlite
     {
@@ -95,9 +120,13 @@ if [ $PREDLITE_UPTD != 'True' ]; then
         docker cp $DIR predictlite:/data/models
     fi
 
+    cur_step=$((cur_step+1))
+    python3 $r_path -i uuid -t 'updated inference lite server' -c $cur_step
 fi
 
 if [ $VISION_UPTD != 'True' ]; then
+    python3 $r_path -i uuid -t 'updating vision server' -c $cur_step
+
     docker pull fvonprem/$4-predictlite:$VISION_UPTD 
     #update vision
     {
@@ -126,10 +155,14 @@ if [ $VISION_UPTD != 'True' ]; then
     } || {
         echo 'vision config file not found'
     }
-
+    
+    cur_step=$((cur_step+1))
+    python3 $r_path -i uuid -t 'updated vision server' -c $cur_step
 fi
 
 if [ $CREATOR_UPTD  != 'True' ]; then
+    python3 $r_path -i uuid -t 'updating nodecreator server' -c $cur_step
+
     docker pull fvonprem/$4-nodecreator:$CREATOR_UPTD  
 
     {
@@ -156,9 +189,13 @@ if [ $CREATOR_UPTD  != 'True' ]; then
         echo 'flows file not found'
     }
 
+    cur_step=$((cur_step+1))
+    python3 $r_path -i uuid -t 'updated vision server' -c $cur_step
 fi
 
 if [ $CAPUI_UPTD != 'True' ]; then
+    python3 $r_path -i uuid -t 'updating frontend server' -c $cur_step
+
     docker pull fvonprem/$4-frontend:$CAPUI_UPTD
     # update captureui
     {
@@ -170,6 +207,9 @@ if [ $CAPUI_UPTD != 'True' ]; then
     docker run -p 0.0.0.0:80:3000 --restart unless-stopped \
         --name captureui -e CAPTURE_SERVER=http://172.17.0.1:5000 -e PROCESS_SERVER=http://172.17.0.1 -d --network imagerie_nw \
         fvonprem/$4-frontend:$CAPUI_UPTD
+
+    cur_step=$((cur_step+1))
+    python3 $r_path -i uuid -t 'updated frontend server' -c $cur_step
 fi
 
 
