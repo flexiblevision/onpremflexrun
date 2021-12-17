@@ -21,6 +21,7 @@ def initialize(id, num_steps):
         "start_time": str(datetime.datetime.now()),
         "end_time": None,
         "state": "running",
+        "log": "",
         "id": id 
     }
     updated_record = upgrade_records.update_one({'id': id}, {'$set': record}, True)
@@ -31,6 +32,7 @@ def get_record(id):
     return record
 
 def update(record, cur_step, text):
+    record['log'] = record['log'] + " # " + text
     record['last_updated'] = str(datetime.datetime.now())
     record['cur_step'] = cur_step
     record['cur_step_txt'] = text
