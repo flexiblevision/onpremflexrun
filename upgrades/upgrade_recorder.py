@@ -32,11 +32,12 @@ def get_record(id):
     return record
 
 def update(record, cur_step, text):
+    if 'log' not in record: record['log'] = ''
     record['log'] = record['log'] + " # " + text
     record['last_updated'] = str(datetime.datetime.now())
     record['cur_step'] = cur_step
     record['cur_step_txt'] = text
-    if cur_step == record['upgrade_steps']:
+    if int(cur_step) == int(record['upgrade_steps']):
         record['end_time'] = str(datetime.datetime.now())
         record['state']    = "completed"
 
