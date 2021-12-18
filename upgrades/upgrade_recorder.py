@@ -8,6 +8,9 @@ import getopt
 client          = MongoClient("172.17.0.1")
 upgrade_records = client["fvonprem"]["upgrade_records"]
 
+def ms_timestamp():
+    return int(datetime.datetime.now().timestamp()*1000)
+
 def initialize(id, num_steps):
     if not id:
         print('Must pass an id')
@@ -17,8 +20,8 @@ def initialize(id, num_steps):
         "cur_step_txt": "Initializing",
         "upgrade_steps": num_steps,
         "cur_step": 0, 
-        "last_updated": str(datetime.datetime.now()),
-        "start_time": str(datetime.datetime.now()),
+        "last_updated": ms_timestamp(),
+        "start_time": ms_timestamp(),
         "end_time": None,
         "state": "running",
         "log": "",
@@ -34,11 +37,11 @@ def get_record(id):
 def update(record, cur_step, text):
     if 'log' not in record: record['log'] = ''
     record['log'] = record['log'] + " # " + text
-    record['last_updated'] = str(datetime.datetime.now())
+    record['last_updated'] = ms_timestamp()
     record['cur_step'] = cur_step
     record['cur_step_txt'] = text
     if int(cur_step) == int(record['upgrade_steps']):
-        record['end_time'] = str(datetime.datetime.now())
+        record['end_time'] = ms_timestamp()
         record['state']    = "completed"
 
     if '_id' in record: del record['_id']
