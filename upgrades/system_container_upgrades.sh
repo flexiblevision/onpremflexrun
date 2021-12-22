@@ -33,7 +33,7 @@ do
     fi
 done
 
-python3 $r_path -i uuid -s $num_steps
+python3 $r_path -i $uuid -s $num_steps
 
 if [ $CAP_UPTD != 'True' ]; then
     python3 $r_path -i $uuid -t 'updating backend server' -c $cur_step
@@ -70,11 +70,11 @@ if [ $CAP_UPTD != 'True' ]; then
     }
 
     cur_step=$((cur_step+1))
-    python3 $r_path -i uuid -t 'backend server updated' -c $cur_step
+    python3 $r_path -i $uuid -t 'backend server updated' -c $cur_step
 fi
 
 if [ $PREDICT_UPTD != 'True' ]; then
-    python3 $r_path -i uuid -t 'updating inference server' -c $cur_step
+    python3 $r_path -i $uuid -t 'updating inference server' -c $cur_step
 
     docker pull fvonprem/$4-prediction:$PREDICT_UPTD
     #update localprediction
@@ -95,11 +95,11 @@ if [ $PREDICT_UPTD != 'True' ]; then
     fi
     
     cur_step=$((cur_step+1))
-    python3 $r_path -i uuid -t 'inference server updated' -c $cur_step
+    python3 $r_path -i $uuid -t 'inference server updated' -c $cur_step
 fi
 
 if [ $PREDLITE_UPTD != 'True' ]; then
-    python3 $r_path -i uuid -t 'updating inference lite server' -c $cur_step
+    python3 $r_path -i $uuid -t 'updating inference lite server' -c $cur_step
 
     docker pull fvonprem/$4-predictlite:$PREDLITE_UPTD 
     #update predictlite
@@ -121,11 +121,11 @@ if [ $PREDLITE_UPTD != 'True' ]; then
     fi
 
     cur_step=$((cur_step+1))
-    python3 $r_path -i uuid -t 'updated inference lite server' -c $cur_step
+    python3 $r_path -i $uuid -t 'updated inference lite server' -c $cur_step
 fi
 
 if [ $VISION_UPTD != 'True' ]; then
-    python3 $r_path -i uuid -t 'updating vision server' -c $cur_step
+    python3 $r_path -i $uuid -t 'updating vision server' -c $cur_step
 
     docker pull fvonprem/$4-predictlite:$VISION_UPTD 
     #update vision
@@ -157,11 +157,11 @@ if [ $VISION_UPTD != 'True' ]; then
     }
     
     cur_step=$((cur_step+1))
-    python3 $r_path -i uuid -t 'updated vision server' -c $cur_step
+    python3 $r_path -i $uuid -t 'updated vision server' -c $cur_step
 fi
 
 if [ $CREATOR_UPTD  != 'True' ]; then
-    python3 $r_path -i uuid -t 'updating nodecreator server' -c $cur_step
+    python3 $r_path -i $uuid -t 'updating nodecreator server' -c $cur_step
 
     docker pull fvonprem/$4-nodecreator:$CREATOR_UPTD  
 
@@ -190,11 +190,11 @@ if [ $CREATOR_UPTD  != 'True' ]; then
     }
 
     cur_step=$((cur_step+1))
-    python3 $r_path -i uuid -t 'updated vision server' -c $cur_step
+    python3 $r_path -i $uuid -t 'updated vision server' -c $cur_step
 fi
 
 if [ $CAPUI_UPTD != 'True' ]; then
-    python3 $r_path -i uuid -t 'updating frontend server' -c $cur_step
+    python3 $r_path -i $uuid -t 'updating frontend server' -c $cur_step
 
     docker pull fvonprem/$4-frontend:$CAPUI_UPTD
     # update captureui
@@ -209,7 +209,7 @@ if [ $CAPUI_UPTD != 'True' ]; then
         fvonprem/$4-frontend:$CAPUI_UPTD
 
     cur_step=$((cur_step+1))
-    python3 $r_path -i uuid -t 'updated frontend server' -c $cur_step
+    python3 $r_path -i $uuid -t 'updated frontend server' -c $cur_step
 fi
 
 
