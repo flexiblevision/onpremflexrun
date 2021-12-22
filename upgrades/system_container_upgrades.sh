@@ -36,7 +36,7 @@ done
 python3 $r_path -i uuid -s $num_steps
 
 if [ $CAP_UPTD != 'True' ]; then
-    python3 $r_path -i uuid -t 'updating backend server' -c $cur_step
+    python3 $r_path -i $uuid -t 'updating backend server' -c $cur_step
 
     docker pull fvonprem/$4-backend:$CAP_UPTD
     #copy camera data to local device
