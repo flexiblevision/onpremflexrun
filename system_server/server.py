@@ -208,6 +208,15 @@ class RestartBackend(Resource):
     def get(self):
         print('restarting capdev and vision...')
         os.system("docker restart capdev")
+        #call to vision server to release all cameras
+        try:
+            host    = 'http://172.17.0.1'
+            port    = '5555'
+            path    = '/api/vision/releaseAll'
+            url     = host+':'+port+path
+            resp    = requests.get(url)
+        except Exception as e:
+            print(e)
         os.system("docker restart vision")
 
 class ListServices(Resource):
