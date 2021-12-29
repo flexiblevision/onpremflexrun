@@ -4,7 +4,6 @@ import string
 import sys
 import getopt
 
-
 client          = MongoClient("172.17.0.1")
 upgrade_records = client["fvonprem"]["upgrade_records"]
 
