@@ -264,7 +264,14 @@ class Upgrade(Resource):
         vision_uptd      = is_container_uptodate('vision')[1]
         creator_uptd     = is_container_uptodate('nodecreator')[1]
 
-
+        try:
+            host    = 'http://172.17.0.1'
+            port    = '5555'
+            path    = '/api/vision/releaseAll'
+            url     = host+':'+port+path
+            resp    = requests.get(url)
+        except Exception as e:
+            print(e)
 
         #upgrade flex run 
         os.system("chmod +x "+os.environ['HOME']+"/flex-run/upgrades/upgrade_flex_run.sh")
