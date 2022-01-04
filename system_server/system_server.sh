@@ -54,3 +54,4 @@ forever start -c python3 $HOME/flex-run/system_server/job_watcher.py
 
 forever start -c redis-server --daemonize yes
 sudo sh -c 'echo 1000 > /sys/module/usbcore/parameters/usbfs_memory_mb'
+sudo grep -qxF 'Hidden=true' /etc/xdg/autostart/update-notifier.desktop || sudo bash -c 'echo "Hidden=true" >> /etc/xdg/autostart/update-notifier.desktop'
