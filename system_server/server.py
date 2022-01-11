@@ -35,8 +35,10 @@ from worker_scripts.retrieve_programs import retrieve_programs
 from worker_scripts.retrieve_masks import retrieve_masks
 from worker_scripts.model_upload_worker import upload_model
 from worker_scripts.job_manager import insert_job, push_analytics_to_cloud, get_next_analytics_batch
+import platform 
 
-from gpio.gpio_helper import toggle_pin
+if platform.processor() != 'aarch64':
+    from gpio.gpio_helper import toggle_pin
 
 from redis import Redis
 from rq import Queue, Worker, Connection
@@ -84,6 +86,8 @@ def base_path():
 BASE_PATH_TO_MODELS = base_path()+'models/'
 BASE_PATH_TO_LITE_MODELS = base_path()+'lite_models/'
 
+for p in [BASE_PATH_TO_MODELS, BASE_PATH_TO_LITE_MODELS]:
+    if not os.path.exists(p): os.makedirs(p)
 
 def is_valid_ip(ip):
     if not ip: return False
@@ -249,8 +253,11 @@ class TogglePin(Resource):
     def put(self):
         j = request.json
         if 'pin_num' in j:
-            toggle_pin(j['pin_num'])
-            return True
+            try:
+                toggle_pin(j['pin_num'])
+                return True
+            except:
+                return False
         else:
             return False
 

@@ -124,7 +124,7 @@ def query_yes_no(question, default="yes"):
 # LAUNCH STEPS---------------------
 def step_1():
     print("\033[0;36mStep (1/3) Setting up internet connection.")
-    set_static_ip()
+    #set_static_ip()  #conflicts with arm
     print("\033[0;33mChecking internet connection...\n")
     time.sleep(2)
     if check_connection():

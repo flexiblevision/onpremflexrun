@@ -22,6 +22,15 @@ GCP_FUNCTIONS_DOMAIN="$(cat ~/flex-run/setup_constants/gcp_functions_domain.txt)
 
 docker run -p $MONGO_PORT:$MONGO_PORT --restart unless-stopped  --name mongo -d mongo:$MONGO_VERSION
 
+if [ "$SYSTEM_ARCH" = "arm" ]; then
+    wget https://nodejs.org/dist/v10.16.1/node-v10.16.1-linux-arm64.tar.xz
+    tar -xJf node-v10.16.1-linux-armv6l.tar.xz
+    cd node-v10.16.1-linux-armv6l/
+    sudo cp -R * /usr/local/
+
+    sudo apt-get install nvidia-container
+fi 
+
 if [ "$SYSTEM_ARCH" = "x86" ]; then
     docker volume ls -q -f driver=nvidia-docker | xargs -r -I{} -n1 docker ps -q -a -f volume={} | xargs -r docker rm -f
     curl -s -L https://nvidia.github.io/nvidia-docker/gpgkey | \

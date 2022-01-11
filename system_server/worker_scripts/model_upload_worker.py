@@ -29,7 +29,6 @@ job_collection    = client["fvonprem"]["jobs"]
 models_collection = client["fvonprem"]["models"]
 lite_model_types  = ['high_speed']
 
-
 def create_config_file():
     models = models_collection.find()
     data   = json.loads(json_util.dumps(models))
