@@ -618,6 +618,17 @@ class UploadModel(Resource):
 
             os.system("mv "+path+"/job.json "+path+"/"+str(version))
             os.system("mv "+path+"/object-detection.pbtxt "+path+"/"+str(version))
+
+            #move pb file to model version directory
+            model_file_path = path+"/"+str(version)+"/saved_model/saved_model.pb"
+            if os.path.exists(model_file_path):
+                os.system("mv "+model_file_path+" "+path+"/"+str(version))
+
+            #move variables folder to model version directory
+            vars_path = path+"/"+str(version)+"/saved_model/variables"
+            if os.path.exists(vars_path):
+                os.system("mv "+vars_path+" "+path+"/"+str(version))
+
             os.system("rm -rf "+fn)
 
             j_upload = job_queue.enqueue(upload_model, str(path), str(fl.filename), job_timeout=99999999, result_ttl=-1)

@@ -105,6 +105,17 @@ def retrieve_models(data, token):
                             zf.extractall(model_folder)
                         os.system("mv "+model_folder+"/job.json "+model_folder+"/"+str(version))
                         os.system("mv "+model_folder+"/object-detection.pbtxt "+model_folder+"/"+str(version))
+
+                        #move pb file to model version directory
+                        model_file_path = model_folder+"/"+str(version)+"/saved_model/saved_model.pb"
+                        if os.path.exists(model_file_path):
+                            os.system("mv "+model_file_path+" "+model_folder+"/"+str(version))
+
+                        #move variables folder to model version directory
+                        vars_path = model_folder+"/"+str(version)+"/saved_model/variables"
+                        if os.path.exists(vars_path):
+                            os.system("mv "+vars_path+" "+model_folder+"/"+str(version))
+
                         model_data[model_type].append(version)
                     except zipfile.BadZipfile:
                         print('bad zipfile in '+model_folder)
