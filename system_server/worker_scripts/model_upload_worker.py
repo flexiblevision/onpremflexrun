@@ -33,15 +33,17 @@ def create_config_file():
     models = models_collection.find()
     data   = json.loads(json_util.dumps(models))
     if not data: return
+
     with open ('/models/model.config', 'w') as f:
         f.write('model_config_list {\n')
         for model_data in data:
-            f.write('\tconfig {\n')
-            f.write('\t\tname: \''+model_data['type']+'\'\n')
-            f.write('\t\tbase_path: \''+'/models/'+model_data['type']+'/\'\n')
-            f.write('\t\tmodel_platform: \'tensorflow\'\n')
-            f.write('\t\tmodel_version_policy: {all {}}\n')
-            f.write('\t}\n')
+            if 'versions' in model_data and len(model_data['versions']) > 0:
+                f.write('\tconfig {\n')
+                f.write('\t\tname: \''+model_data['type']+'\'\n')
+                f.write('\t\tbase_path: \''+'/models/'+model_data['type']+'/\'\n')
+                f.write('\t\tmodel_platform: \'tensorflow\'\n')
+                f.write('\t\tmodel_version_policy: {all {}}\n')
+                f.write('\t}\n')
         f.write('}')
 
 def read_job_file(temp_path):

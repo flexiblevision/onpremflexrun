@@ -603,10 +603,13 @@ class UploadModel(Resource):
 
         split_fname = fl.filename.split('#')
         model_name  = split_fname[0]
-        version     = split_fname[1].split('.')[0]
 
         #Temporarily write folder to root directory
         path = "/"+model_name
+        if os.path.exists('/models'+path):
+            print(path+' - already exists - REMOVING')
+            os.system('rm -rf '+'/models'+path)
+
         os.system("mkdir "+path)
         fn = tempfile.gettempdir() + 'model.zip'
         fl.save(fn)
@@ -616,6 +619,16 @@ class UploadModel(Resource):
             with zipfile.ZipFile(fn) as zf:
                 zf.extractall(path)
 
+            #read path/job.json to get version
+            job_data = None
+            if os.path.exists(path+'/job.json'):
+                with open(path+'/job.json') as f:
+                    data = json.load(f)
+                    if data: job_data = data
+
+            if not job_data: return 'no job data'
+
+            version = job_data['model_version']
             os.system("mv "+path+"/job.json "+path+"/"+str(version))
             os.system("mv "+path+"/object-detection.pbtxt "+path+"/"+str(version))
 
