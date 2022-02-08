@@ -21,7 +21,7 @@ sudo crontab -r
 (sudo crontab -l; echo '@reboot sudo sh '$HOME'/flex-run/scripts/allocate_usbfs_memory.sh') | sudo crontab -
 (sudo crontab -l; echo '@reboot sleep 50 && sudo sh '$HOME'/flex-run/scripts/restart_localprediction.sh') | sudo crontab -
 (sudo crontab -l; echo '@reboot sudo sh '$HOME'/flex-run/scripts/start_job_watcher.sh') | sudo crontab -
-
+(sudo crontab -l; echo '@weekly sudo sh '$HOME'/flex-run/scripts/system_cleanup.sh') | sudo crontab -
 
 #restart worker server
 forever stop $HOME/flex-run/system_server/worker.py
