@@ -9,6 +9,7 @@ chmod +x $HOME/flex-run/scripts/gpio_server_start.sh
 chmod +x $HOME/flex-run/scripts/sync_worker_start.
 chmod +x $HOME/flex-run/scripts/start_job_watcher.sh
 chmod +x $HOME/flex-run/scripts/start_ftp_server.sh
+chmod +x $HOME/flex-run/scripts/system_cleanup.sh
 
 sudo crontab -r
 (sudo crontab -l; echo '@reboot sudo sh '$HOME'/flex-run/scripts/fv_system_server_start.sh') | sudo crontab -
