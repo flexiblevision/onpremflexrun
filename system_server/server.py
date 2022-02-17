@@ -158,6 +158,7 @@ def system_info():
     cmd = subprocess.Popen(['grep', 'system'], stdin=out.stdout, stdout=subprocess.PIPE)
     cmd_out, cmd_err = cmd.communicate()
     system = cmd_out.strip().decode("utf-8")
+    system = " ".join(system.split())
     return system
 
 def system_arch():
@@ -190,6 +191,27 @@ def list_usb_paths():
 
     return mount_paths
 
+def get_lan_ips():
+    lanIps   = {'LAN1': 'not assigned', 'LAN2': 'not assigned'}
+    
+    eth_names = get_eth_port_names()
+    for idx, eth in enumerate(eth_names):
+        idx += 1
+        lan_port = 'LAN'+str(idx)
+        interface = subprocess.Popen(['ifconfig', eth], stdout=subprocess.PIPE).communicate()[0].decode('utf-8')
+        
+        ip6 = None
+        if 'inet6' in interface:
+            ip6 = interface.split('inet6')[1].split(' ')[1]
+        if 'inet' in interface:
+            ip = interface.split('inet')[1].split(' ')[1]
+        else:
+            ip = 'LAN IP not assigned'
+
+        if ip6 and ip6 == ip: ip = 'LAN IP not assigned'
+        lanIps[lan_port] = ip
+
+    return lanIps
 
 class MacId(Resource):
     def get(self):
@@ -419,13 +441,27 @@ class SystemIsUptodate(Resource):
 
 class DeviceInfo(Resource):
     def get(self):
-        domain = request.headers.get('Host').split(':')[0]
         info = {}
+        domain = request.headers.get('Host').split(':')[0]
+
+        ifconfig  = subprocess.Popen(['ifconfig'], stdout=subprocess.PIPE).communicate()[0].decode('utf-8')
+        interface = 'wlp' + ifconfig.split('wlp')[1].split(':')[0]
+        wlp       = subprocess.Popen(['ifconfig', interface], stdout=subprocess.PIPE).communicate()[0].decode('utf-8')
+        
+        if 'inet' in wlp:
+            info['last_known_ip'] = wlp.split('inet')[1].split(' ')[1]
+        else:
+            info['last_known_ip'] = domain
+        
+        lan_ips = get_lan_ips()
+        for ip in lan_ips.values():
+            if ip != 'not assigned' and ip != 'LAN IP not assigned':
+                info['last_known_ip'] = '{};{}'.format(ip, info['last_known_ip'])
+
         info['system']        = system_info()
         info['arch']          = system_arch()
         info['mac_id']        = get_mac_id()
         info['last_active']   = str(datetime.datetime.now())
-        info['last_known_ip'] = domain
         return info
 
 class SaveImage(Resource):
@@ -574,25 +610,7 @@ class UpdateIp(Resource):
 
 class GetLanIps(Resource):
     def get(self):
-        lanIps   = {'LAN1': 'not assigned', 'LAN2': 'not assigned'}
-        
-        eth_names = get_eth_port_names()
-        for idx, eth in enumerate(eth_names):
-            idx += 1
-            lan_port = 'LAN'+str(idx)
-            interface = subprocess.Popen(['ifconfig', eth], stdout=subprocess.PIPE).communicate()[0].decode('utf-8')
-            
-            ip6 = None
-            if 'inet6' in interface:
-                ip6 = interface.split('inet6')[1].split(' ')[1]
-            if 'inet' in interface:
-                ip = interface.split('inet')[1].split(' ')[1]
-            else:
-                ip = 'LAN IP not assigned'
-
-            if ip6 and ip6 == ip: ip = 'LAN IP not assigned'
-            lanIps[lan_port] = ip
-    
+        lanIps = get_lan_ips()
         return lanIps
 
 class UploadModel(Resource):
