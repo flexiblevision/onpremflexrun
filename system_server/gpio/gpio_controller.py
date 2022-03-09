@@ -47,12 +47,18 @@ class GPIO:
         path    = '/api/capture/predict/snap/'+str(modelName)+'/'+str(modelVersion)+'/'+str(cameraId)+'?workstation='+str(ioVal)+'&preset_id='+str(presetId)
         url     = host+':'+port+path
         headers = {'Authorization': 'Bearer '+ token}
-        res  = requests.get(url, headers=headers)
-        data = res.json()
-        print(data, '-----------------------')
-        #self.set_pass_fail_pins(modelName, modelVersion, data['tags'])
-        self.set_pass_fail_pins(data)
-        self.pin_switch_inference_end(pin)
+        try:
+            res  = requests.get(url, headers=headers, timeout=2)
+        except Exception as error:
+            print(error)
+            return
+        
+        if res.status_code == 200:
+            data = res.json()
+            print(data, '-----------------------')
+            #self.set_pass_fail_pins(modelName, modelVersion, data['tags'])
+            self.set_pass_fail_pins(data)
+            self.pin_switch_inference_end(pin)
 
     def set_pass_fail_pins(self, data):
         if 'pass_fail' in data:
