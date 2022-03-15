@@ -20,6 +20,7 @@ pip3 install 'Flask-Jsonpify==1.5.0'
 pip3 install 'redis==3.3.11'
 pip3 install 'pymongo==3.10.1'
 pip3 install 'rq==1.2.0'
+pip3 install 'itsdangerous==1.1.0'
 
 chmod +x $HOME/flex-run/scripts/fv_system_server_start.sh
 chmod +x $HOME/flex-run/scripts/worker_server_start.sh
