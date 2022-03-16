@@ -21,11 +21,10 @@ CLOUD_DOMAIN="$(cat ~/flex-run/setup_constants/cloud_domain.txt)"
 GCP_FUNCTIONS_DOMAIN="$(cat ~/flex-run/setup_constants/gcp_functions_domain.txt)"
 TZ="$(cat /etc/timezone)"
 
-
 uuid="$(uuidgen)"
 r_path=$HOME"/flex-run/upgrades/upgrade_recorder.py"
 num_steps=-1
-cur_step
+cur_step=0
 for var in "$@"
 do
     if [ $var != 'True' ]; then
