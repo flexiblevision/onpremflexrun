@@ -130,6 +130,7 @@ if [ $VISION_UPTD != 'True' ]; then
     #update vision
     {
         docker cp vision:/fvbackend/vision.json /
+        docker cp vision:/fvbackend/camera_configs /
     } || {
         echo 'vision config file does not exist'
     }
@@ -151,6 +152,7 @@ if [ $VISION_UPTD != 'True' ]; then
     # upload camera config back into container
     {
         docker cp /vision.json vision:/fvbackend/
+        docker cp /camera_configs vision:/fvbackend/
     } || {
         echo 'vision config file not found'
     }
@@ -189,7 +191,7 @@ if [ $CREATOR_UPTD  != 'True' ]; then
     }
 
     cur_step=$((cur_step+1))
-    python3 $r_path -i $uuid -t 'updated vision server' -c $cur_step
+    python3 $r_path -i $uuid -t 'updated nodecreator server' -c $cur_step
 fi
 
 if [ $CAPUI_UPTD != 'True' ]; then
