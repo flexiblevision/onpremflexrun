@@ -129,7 +129,6 @@ if [ $VISION_UPTD != 'True' ]; then
     docker pull fvonprem/$4-predictlite:$VISION_UPTD 
     #update vision
     {
-        docker cp vision:/fvbackend/vision.json /
         docker cp vision:/fvbackend/camera_configs /
     } || {
         echo 'vision config file does not exist'
@@ -151,7 +150,6 @@ if [ $VISION_UPTD != 'True' ]; then
 
     # upload camera config back into container
     {
-        docker cp /vision.json vision:/fvbackend/
         docker cp /camera_configs vision:/fvbackend/
     } || {
         echo 'vision config file not found'

@@ -57,3 +57,4 @@ forever start -c python3 $HOME/flex-run/system_server/job_watcher.py
 forever start -c redis-server --daemonize yes
 sudo sh -c 'echo 1000 > /sys/module/usbcore/parameters/usbfs_memory_mb'
 sudo rm /etc/xdg/autostart/update-notifier.desktop
+echo nvidia* hold | dpkg --set-selections
