@@ -724,6 +724,10 @@ class SyncAnalytics(Resource):
                 j_push    = job_queue.enqueue(push_analytics_to_cloud, CLOUD_DOMAIN, access_token, job_timeout=99999999, result_ttl=-1)
                 if j_push: insert_job(j_push.id, 'Syncing_'+str(num_data)+'_with_cloud')
 
+class DeAuthorize(Resource):
+    @auth.requires_auth
+    def get(self):
+        os.system("rm "+os.environ['HOME']+"/flex-run/system_server/creds.txt")
 
 api.add_resource(AuthToken, '/auth_token')
 api.add_resource(Networks, '/networks')
@@ -751,6 +755,7 @@ api.add_resource(UpdateFtpPort, '/update_ftp_port')
 api.add_resource(EnableFtp, '/enable_ftp')
 api.add_resource(SyncAnalytics, '/sync_analytics')
 api.add_resource(UpgradeFlexRun, '/upgrade_flex_run')
+api.add_resource(DeAuthorize, '/deauthorize')
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0',port='5001')
