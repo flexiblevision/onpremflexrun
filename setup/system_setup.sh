@@ -2,6 +2,10 @@ CAPDEV_VERSION=$1
 CAPTUREUI_VERSION=$2
 PREDICTION_VERSION=$3
 SYSTEM_ARCH=$4
+PREDICT_LITE_VERSION=$5
+VISION_VERSION=$6
+CREATOR_VERSION=$7
+
 REDIS_VERSION='5.0.6'
 MONGO_VERSION='4.2'
 
@@ -18,6 +22,15 @@ GCP_FUNCTIONS_DOMAIN="$(cat ~/flex-run/setup_constants/gcp_functions_domain.txt)
 
 docker run -p $MONGO_PORT:$MONGO_PORT --restart unless-stopped  --name mongo -d mongo:$MONGO_VERSION
 
+if [ "$SYSTEM_ARCH" = "arm" ]; then
+    wget https://nodejs.org/dist/v10.16.1/node-v10.16.1-linux-arm64.tar.xz
+    tar -xJf node-v10.16.1-linux-armv6l.tar.xz
+    cd node-v10.16.1-linux-armv6l/
+    sudo cp -R * /usr/local/
+
+    sudo apt-get install nvidia-container
+fi 
+
 if [ "$SYSTEM_ARCH" = "x86" ]; then
     docker volume ls -q -f driver=nvidia-docker | xargs -r -I{} -n1 docker ps -q -a -f volume={} | xargs -r docker rm -f
     curl -s -L https://nvidia.github.io/nvidia-docker/gpgkey | \
@@ -32,7 +45,8 @@ if [ "$SYSTEM_ARCH" = "x86" ]; then
 fi
 
 docker run -d --name=capdev -p 0.0.0.0:5000:5000 --restart unless-stopped --privileged -v /dev:/dev -v /sys:/sys \
-    --network imagerie_nw -e ACCESS_KEY=imagerie -e SECRET_KEY=imagerie \
+    --network host -e ACCESS_KEY=imagerie -e SECRET_KEY=imagerie \
+    -v /etc/timezone:/etc/timezone:ro -v /etc/localtime:/etc/localtime:ro \
     -e AUTH0_DOMAIN=$AUTH0_DOMAIN -e AUTH0_CLIENT_ID=$AUTH0_CID \
     -e REDIS_URL=$REDIS_URL -e REDIS_SERVER=$REDIS_SERVER -e REDIS_PORT=$REDIS_PORT \
     -e DB_NAME=$DB_NAME -e MONGO_SERVER=$MONGO_SERVER -e MONGO_PORT=$MONGO_PORT \
@@ -46,3 +60,16 @@ docker run -p 0.0.0.0:80:3000 --restart unless-stopped \
 docker run -p 8500:8500 -p 8501:8501 --runtime=nvidia --name localprediction  -d -e AWS_ACCESS_KEY_ID=imagerie -e AWS_SECRET_ACCESS_KEY=imagerie -e AWS_REGION=us-east-1 \
     --restart unless-stopped --network imagerie_nw  \
     -t fvonprem/$4-prediction:$PREDICTION_VERSION
+
+docker run -p 8511:8511 --name predictlite  -d  \
+    --restart unless-stopped --network imagerie_nw  \
+    -t fvonprem/$4-predictlite:$PREDICT_LITE_VERSION
+
+docker run -p 5555:5555 --name vision  -d  \
+    --restart unless-stopped --network host  \
+    --privileged -v /dev:/dev -v /sys:/sys \
+    -t fvonprem/$4-vision:$VISION_VERSION
+
+docker run -d --name=nodecreator -p 0.0.0.0:1880:1880 \ 
+    --restart unless-stopped --privileged -v /dev:/dev -v /sys:/sys \
+    --network host -d fvonprem/$4-nodecreator:$CREATOR_VERSION  

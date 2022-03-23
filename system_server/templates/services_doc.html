@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <title>FV Running Services</title>
+  </head>
+  <body>
+    <div style="text-align:center;"><h1>Flexible Vision Running Services</h1></div>
+    <h2>Daemon Services</h2>
+    <div>
+        {% for item in daemon_services %}
+            <div style="display:flex;align-items:center;">
+                    <div>{{ item.txt }}</div>
+                    <div style="background:{{item.color}};border-radius: 50%;width:10px;height:10px;margin-left:10px;"></div>
+            </div>
+        {% endfor %}
+    </div>
+    <h2>Container Services</h2>
+    <div>
+        {% for item in container_services %}
+            <div style="display:flex;align-items:center;">
+                    <div>{{ item.txt }}</div>
+                    <div style="background:{{item.color}};border-radius: 50%;width:10px;height:10px;margin-left:10px;"></div>
+            </div>
+        {% endfor %}
+    </div>
+  </body>
+</html>

@@ -102,15 +102,19 @@ while True:
 
                         if resp.status_code == 200:
                             data           = resp.json()
-                            set_pass_fail_pins(data)
+                            try:
+                                set_pass_fail_pins(data)
+                            except:
+                                print('failed to set pass fail pins')
                             keys_to_remove = [k for k in config if not config[k] and k != 'packet_header']
-                            for k in keys_to_remove: del data[k]
+                            for k in keys_to_remove: 
+                                if k in data: del data[k]
 
                             data_bytes = json.dumps(data).encode('utf-8')
                             packet_header = b''
                             if config['packet_header']:
                                 packet_header = b'\x01'+str(len(data_bytes)).encode('utf-8')
-                            data_bytes = packet_header+b'\x02'+data_bytes+b'\x03'+b'\x0d'
+                                data_bytes = packet_header+b'\x02'+data_bytes+b'\x03'+b'\x0d'
                             try:
                                 connections.sendall(data_bytes)
                             except socket.error as msg:

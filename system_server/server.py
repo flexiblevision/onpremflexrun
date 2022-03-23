@@ -2,7 +2,7 @@ from datetime import timedelta
 from flask import make_response, request, current_app
 from functools import update_wrapper
 
-from flask import Flask
+from flask import Flask, render_template
 from flask_restful import Resource, Api
 import json
 from json import dumps
@@ -28,14 +28,17 @@ from collections import defaultdict
 from io import StringIO
 from io import BytesIO
 from version_check import *
+from os.path import exists
 
 from worker_scripts.retrieve_models import retrieve_models
 from worker_scripts.retrieve_programs import retrieve_programs
 from worker_scripts.retrieve_masks import retrieve_masks
 from worker_scripts.model_upload_worker import upload_model
 from worker_scripts.job_manager import insert_job, push_analytics_to_cloud, get_next_analytics_batch
+import platform 
 
-from gpio.gpio_helper import toggle_pin
+if platform.processor() != 'aarch64':
+    from gpio.gpio_helper import toggle_pin
 
 from redis import Redis
 from rq import Queue, Worker, Connection
@@ -50,14 +53,30 @@ CORS(app)
 NUM_CLASSES = 99
 redis_con   = Redis('localhost', 6379, password=None)
 job_queue   = Queue('default', connection=redis_con)
-CONTAINERS  = {'backend':'capdev', 'frontend':'captureui', 'prediction':'localprediction'}
+CONTAINERS  = {
+    'backend':'capdev', 
+    'frontend':'captureui', 
+    'prediction':'localprediction',
+    'predict lite': 'predictlite',
+    'nodecreator': 'nodecreator',
+    'vision': 'vision',
+    'database': 'mongo' 
+}
 
 CLOUD_DOMAIN = "https://clouddeploy.api.flexiblevision.com"
 cloud_path   = os.path.expanduser('~/flex-run/setup_constants/cloud_domain.txt')
 with open(cloud_path, 'r') as file: 
     CLOUD_DOMAIN = file.read().replace('\n', '')
 
-
+daemon_services_list = {
+    "FlexRun Server": "server.py",
+    "TCP Server": "tcp/tcp_server.py",
+    "GPIO Server": "gpio/gpio_controller.py",
+    "Sync Worker": "worker_scripts/sync_worker.py",
+    "Worker Server": "worker.py",
+    "Inference Server Watcher": "worker_scripts/ping_prediction_server.py",
+    "Job Watcher": "job_watcher.py"
+}
 
 def base_path():
     #mounted memory to ssd
@@ -65,6 +84,10 @@ def base_path():
     return xavier_ssd if os.path.exists(xavier_ssd) else '/'
 
 BASE_PATH_TO_MODELS = base_path()+'models/'
+BASE_PATH_TO_LITE_MODELS = base_path()+'lite_models/'
+
+for p in [BASE_PATH_TO_MODELS, BASE_PATH_TO_LITE_MODELS]:
+    if not os.path.exists(p): os.makedirs(p)
 
 def is_valid_ip(ip):
     if not ip: return False
@@ -72,7 +95,7 @@ def is_valid_ip(ip):
     return bool(m) and all(map(lambda n: 0 <= int(n) <= 255, m.groups()))
 
 def get_static_ip_ref():
-    static_ip  = '192.168.0.10'
+    static_ip  = '192.168.10.35'
     path_ref   = os.path.expanduser('~/flex-run/setup_constants/static_ip.txt')
     try:
         with open(path_ref, 'r') as file:
@@ -81,24 +104,29 @@ def get_static_ip_ref():
     return static_ip
 
 def get_interface_name_ref():
-    interface_name  = 'enp0s31f6'
-    path_ref        = os.path.expanduser('~/flex-run/setup_constants/interface_name.txt')
-    try:
-        with open(path_ref, 'r') as file:
-            interface_name = file.read().replace('\n', '')
-    except: return interface_name
+    eth_ports = get_eth_port_names()
+    if len(eth_ports) <= 1:
+        interface_name  = 'enp0s31f6'
+        path_ref        = os.path.expanduser('~/flex-run/setup_constants/interface_name.txt')
+        try:
+            with open(path_ref, 'r') as file:
+                interface_name = file.read().replace('\n', '')
+        except: return interface_name
+    else:
+        interface_name = get_eth_port_names()[-1]
+
     return interface_name
 
 def set_static_ips(network = None):
-    static_ip      = get_static_ip_ref()
+    #static_ip      = get_static_ip_ref()
     ips            = []
     interface_name = get_interface_name_ref()
     if is_valid_ip(network):
         ips.append(network+'/24')
 
-    ips.append(static_ip+'/24') #append static ip
+    #ips.append(static_ip+'/24') #append static ip
     ip_string = '['
-    for ip in ips: ip_string += (ip+', ') 
+    for ip in ips: ip_string += (ip) 
     ip_string = ip_string + ']'
 
     with open ('/etc/netplan/fv-net-init.yaml', 'w') as f:
@@ -108,6 +136,9 @@ def set_static_ips(network = None):
         f.write('    '+interface_name+':\n')
         f.write('      dhcp4: false\n')
         f.write('      addresses: '+ip_string)
+    
+    os.system("sudo netplan apply")
+
 
 def get_mac_id():
     ifconfig  = subprocess.Popen(['ifconfig'], stdout=subprocess.PIPE).communicate()[0].decode('utf-8')
@@ -127,6 +158,7 @@ def system_info():
     cmd = subprocess.Popen(['grep', 'system'], stdin=out.stdout, stdout=subprocess.PIPE)
     cmd_out, cmd_err = cmd.communicate()
     system = cmd_out.strip().decode("utf-8")
+    system = " ".join(system.split())
     return system
 
 def system_arch():
@@ -136,6 +168,50 @@ def system_arch():
 
 def restart_network_manager():
     os.system("service network-manager restart")
+
+def get_eth_port_names():
+    eth_names = []
+    names = os.popen('basename -a /sys/class/net/*').read()
+    lan_port_num = 1
+    for idx, n in enumerate(names.split('\n')):
+        if 'en' in n:
+            eth_names.append(n)
+            
+    return eth_names
+
+def list_usb_paths():
+    valid_formats = ['vfat', 'exfat']
+    mount_paths   = []
+    for format_type in valid_formats:
+        usb_list = subprocess.Popen(['sudo', 'blkid', '-t', 'TYPE='+format_type, '-o', 'device'], stdout=subprocess.PIPE)
+        usb = usb_list.communicate()[0].decode('utf-8').splitlines()
+        if len(usb) > 0:
+            usb = usb[-1].split('/')[-1]
+            mount_paths.append(usb)
+
+    return mount_paths
+
+def get_lan_ips():
+    lanIps   = {'LAN1': 'not assigned', 'LAN2': 'not assigned'}
+    
+    eth_names = get_eth_port_names()
+    for idx, eth in enumerate(eth_names):
+        idx += 1
+        lan_port = 'LAN'+str(idx)
+        interface = subprocess.Popen(['ifconfig', eth], stdout=subprocess.PIPE).communicate()[0].decode('utf-8')
+        
+        ip6 = None
+        if 'inet6' in interface:
+            ip6 = interface.split('inet6')[1].split(' ')[1]
+        if 'inet' in interface:
+            ip = interface.split('inet')[1].split(' ')[1]
+        else:
+            ip = 'LAN IP not assigned'
+
+        if ip6 and ip6 == ip: ip = 'LAN IP not assigned'
+        lanIps[lan_port] = ip
+
+    return lanIps
 
 class MacId(Resource):
     def get(self):
@@ -156,16 +232,54 @@ class Restart(Resource):
 class RestartBackend(Resource):
     @auth.requires_auth
     def get(self):
-        print('restarting capdev...')
+        print('restarting capdev and vision...')
         os.system("docker restart capdev")
+        #call to vision server to release all cameras
+        try:
+            host    = 'http://172.17.0.1'
+            port    = '5555'
+            path    = '/api/vision/releaseAll'
+            url     = host+':'+port+path
+            resp    = requests.get(url)
+        except Exception as e:
+            print(e)
+        os.system("docker restart vision")
+
+class ListServices(Resource):
+    def get(self):
+        f_services = []
+        scripts_base_path = os.environ['HOME']+"/flex-run/system_server/"
+        for key in daemon_services_list:
+            service_path = scripts_base_path + daemon_services_list[key]
+            is_running   = subprocess.getoutput("forever list | grep {} | wc -l | sed -e 's/1/Running/' | sed -e 's/0/Not Running/'".format(service_path))
+            color = 'green' if is_running == "Running" else 'red'
+            txt = key + " - " + is_running
+            f_services.append({'txt': txt, 'color': color})
+
+        c_services = []
+        for f_name in CONTAINERS:
+            container_name = CONTAINERS[f_name]
+            inspect = subprocess.Popen(['docker', 'inspect', '-f', "{{.State.Running}}", container_name], stdout=subprocess.PIPE)
+            is_running = inspect.communicate()[0].decode('utf-8').strip()
+            color = 'green' if is_running=='true' else 'red'
+            r_txt = 'Running' if is_running=='true' else 'Not Running'
+            txt = f_name + " - " + r_txt
+            c_services.append({'txt': txt, 'color': color})
+
+        resp = make_response(render_template('services_doc.html', daemon_services=f_services, container_services=c_services))
+        resp.headers['Content-type'] = 'text/html; charset=utf-8'
+        return resp
 
 class TogglePin(Resource):
     #@auth.requires_auth
     def put(self):
         j = request.json
         if 'pin_num' in j:
-            toggle_pin(j['pin_num'])
-            return True
+            try:
+                toggle_pin(j['pin_num'])
+                return True
+            except:
+                return False
         else:
             return False
 
@@ -175,9 +289,32 @@ class Upgrade(Resource):
         cap_uptd     = is_container_uptodate('backend')[1]
         capui_uptd   = is_container_uptodate('frontend')[1]
         predict_uptd = is_container_uptodate('prediction')[1]
+        predictlite_uptd = is_container_uptodate('predictlite')[1]
+        vision_uptd      = is_container_uptodate('vision')[1]
+        creator_uptd     = is_container_uptodate('nodecreator')[1]
 
+        try:
+            host    = 'http://172.17.0.1'
+            port    = '5555'
+            path    = '/api/vision/releaseAll'
+            url     = host+':'+port+path
+            resp    = requests.get(url)
+        except Exception as e:
+            print(e)
+
+        #upgrade flex run 
+        os.system("chmod +x "+os.environ['HOME']+"/flex-run/upgrades/upgrade_flex_run.sh")
+        os.system("sh "+os.environ['HOME']+"/flex-run/upgrades/upgrade_flex_run.sh")
+
+        #upgrade containers 
         os.system("chmod +x "+os.environ['HOME']+"/flex-run/system_server/upgrade_system.sh")
-        os.system("sh "+os.environ['HOME']+"/flex-run/system_server/upgrade_system.sh "+cap_uptd+" "+capui_uptd+" "+predict_uptd)
+        os.system("sh "+os.environ['HOME']+"/flex-run/system_server/upgrade_system.sh "+cap_uptd+" "+capui_uptd+" "+predict_uptd+" "+predictlite_uptd+" "+vision_uptd+" "+creator_uptd)
+
+class UpgradeFlexRun(Resource):
+    @auth.requires_auth
+    def get(self):
+        os.system("chmod +x "+os.environ['HOME']+"/flex-run/upgrades/upgrade_flex_run.sh")
+        os.system("sh "+os.environ['HOME']+"/flex-run/upgrades/upgrade_flex_run.sh")
 
 class AuthToken(Resource):
     @auth.requires_auth
@@ -226,8 +363,6 @@ class Networks(Resource):
 
         return nets
 
-
-
     def post(self):
         j = request.json
         return os.system("nmcli dev wifi connect "+j['netName']+" password "+j['netPassword'])
@@ -237,9 +372,20 @@ class CategoryIndex(Resource):
         # category index will now be created from the job.json file
         # read in json file and parse the labelmap_dict to create the category_index
 
+        model_path = None
         path_to_model_labels = BASE_PATH_TO_MODELS + model + '/' + version + '/job.json'
+        path_to_lite_models  = BASE_PATH_TO_LITE_MODELS + model + '/' + version + '/job.json'
+
+        model_paths = [path_to_model_labels, path_to_lite_models]
+        for path in model_paths:
+            if exists(path):
+                model_path = path
+                break
+        
+        if not model_path: return {}
+
         labels = None
-        with open(path_to_model_labels) as data:
+        with open(model_path) as data:
             labels = json.load(data)['labelmap_dict']
 
         category_index = {}
@@ -269,24 +415,53 @@ class SystemVersions(Resource):
         backend_version    = get_current_container_version('capdev')
         frontend_version   = get_current_container_version('captureui')
         prediction_version = get_current_container_version('localprediction')
+        predictlite_version = get_current_container_version('predictlite')
+        vision_version      = get_current_container_version('vision')
+        creator_version     = get_current_container_version('nodecreator')
+
+        
         return {'backend_version': backend_version,
                 'frontend_version': frontend_version,
-                'prediction_version': prediction_version
+                'prediction_version': prediction_version,
+                'predictlite_version': predictlite_version,
+                'vision_version': vision_version,
+                'creator_version': creator_version
                 }
 
 class SystemIsUptodate(Resource):
     def get(self):
-        return all([is_container_uptodate('backend')[0], is_container_uptodate('frontend')[0], is_container_uptodate('prediction')[0]])
+        return all([
+            is_container_uptodate('backend')[0], 
+            is_container_uptodate('frontend')[0], 
+            is_container_uptodate('prediction')[0], 
+            is_container_uptodate('predictlite')[0],
+            is_container_uptodate('vision')[0],
+            is_container_uptodate('nodecreator')[0]
+        ])
 
 class DeviceInfo(Resource):
     def get(self):
-        domain = request.headers.get('Host').split(':')[0]
         info = {}
+        domain = request.headers.get('Host').split(':')[0]
+
+        ifconfig  = subprocess.Popen(['ifconfig'], stdout=subprocess.PIPE).communicate()[0].decode('utf-8')
+        interface = 'wlp' + ifconfig.split('wlp')[1].split(':')[0]
+        wlp       = subprocess.Popen(['ifconfig', interface], stdout=subprocess.PIPE).communicate()[0].decode('utf-8')
+        
+        if 'inet' in wlp:
+            info['last_known_ip'] = wlp.split('inet')[1].split(' ')[1]
+        else:
+            info['last_known_ip'] = domain
+        
+        lan_ips = get_lan_ips()
+        for ip in lan_ips.values():
+            if ip != 'not assigned' and ip != 'LAN IP not assigned':
+                info['last_known_ip'] = '{};{}'.format(ip, info['last_known_ip'])
+
         info['system']        = system_info()
         info['arch']          = system_arch()
         info['mac_id']        = get_mac_id()
         info['last_active']   = str(datetime.datetime.now())
-        info['last_known_ip'] = domain
         return info
 
 class SaveImage(Resource):
@@ -294,19 +469,25 @@ class SaveImage(Resource):
     def post(self):
         data = request.json
         path = os.environ['HOME']+'/'+'stored_images'
+        usb  = list_usb_paths()[-1]
 
+        cmd_output = subprocess.Popen(['sudo', 'lsblk', '-o', 'MOUNTPOINT', '-nr', '/dev/'+usb], stdout=subprocess.PIPE)
+        usb_mountpoint = cmd_output.communicate()[0].decode('utf-8')
 
-        usb_list = subprocess.Popen(['sudo', 'blkid', '-t', 'TYPE=vfat', '-o', 'device'], stdout=subprocess.PIPE)
-        usb = usb_list.communicate()[0].decode('utf-8').splitlines()[-1].split('/')[-1]
+        if '/boot/efi' in usb_mountpoint or usb_mountpoint == '':
+            print('CANNOT EXPORT TO BOOT MOUNTPOINT')
+            return False
 
         if 'img' in data:
             img_path   = path+'/flexible_vision/snapshots'
+            todayDate  = time.strftime("%d-%m-%y")
+            img_path   = img_path +'/' + todayDate
             decode_img = base64.b64decode(data['img'])
 
             if not os.path.exists(img_path):
-                os.system('sudo mkdir -p ' + img_path)
+                os.makedirs(img_path)
 
-            img_path = img_path + '/' +str(int(datetime.datetime.now().timestamp()*1000))
+            img_path = img_path + '/' +str(int(datetime.datetime.now().timestamp()*1000))+'.jpg'
             with open(img_path, 'wb') as fh:
                 fh.write(decode_img)
 
@@ -319,9 +500,7 @@ class SaveImage(Resource):
 
         return 'Image Saved', 200
 
-
-
-class ExportImage(Resource):
+class ExportImage(Resource):    
     #@auth.requires_auth
     def post(self):
         data = request.json
@@ -329,14 +508,12 @@ class ExportImage(Resource):
         if not os.path.exists(path):
             os.system('mkdir '+path)
 
-        usb_list = subprocess.Popen(['sudo', 'blkid', '-t', 'TYPE=vfat', '-o', 'device'], stdout=subprocess.PIPE)
-        usbs = usb_list.communicate()[0].decode('utf-8').splitlines()
-
+        usbs = list_usb_paths()
         last_connected_usb_path = usbs[-1]
-        cmd_output = subprocess.Popen(['sudo', 'lsblk', '-o', 'MOUNTPOINT', '-nr', last_connected_usb_path], stdout=subprocess.PIPE)
+        cmd_output = subprocess.Popen(['sudo', 'lsblk', '-o', 'MOUNTPOINT', '-nr', '/dev/'+last_connected_usb_path], stdout=subprocess.PIPE)
         usb_mountpoint = cmd_output.communicate()[0].decode('utf-8')
 
-        if '/boot/efi' in usb_mountpoint:
+        if '/boot/efi' in usb_mountpoint or usb_mountpoint == '':
             print('CANNOT EXPORT TO BOOT MOUNTPOINT')
             return False
 
@@ -348,16 +525,20 @@ class ExportImage(Resource):
                 did = ''
                 base_path = path + '/flexible_vision/' + data['model'] + '/' + data['version']
 
-                img_path = base_path + '/images'
+                img_path  = base_path + '/images'
+                todayDate = time.strftime("%d-%m-%y")
+                img_path  = img_path +'/' + todayDate
+
                 if not os.path.exists(img_path):
-                    os.system('sudo mkdir -p ' + img_path)
+                    os.makedirs(img_path)
 
                 if 'inference' in data:
                     inference = data['inference']
                     if 'did' in inference:
                         did = '_'+inference['did']
 
-                img_path   = img_path + '/'+ data['timestamp'].replace(' ', '_').replace('.', '_').replace(':', '-')+did+'.jpg'
+                timestamp  = str(datetime.datetime.now())
+                img_path   = img_path + '/'+ timestamp.replace(' ', '_').replace('.', '_').replace(':', '-')+did+'.jpg'
                 decode_img = base64.b64decode(data['img'])
 
                 with open(img_path, 'wb') as fh:
@@ -370,14 +551,16 @@ class ExportImage(Resource):
                     inference = data['inference']
                     #create inferences folder and add assets
                     inferences_path = base_path + '/inferences'
+                    inferences_path = inferences_path +'/' + todayDate
+
                     if not os.path.exists(inferences_path):
-                        os.system('sudo mkdir -p '+ inferences_path)
+                        os.makedirs(inferences_path)
 
                     file_path = inferences_path + '/'
                     if 'did' in inference:
                         did = '_'+inference['did']
 
-                    file_path = file_path+data['timestamp'].replace(' ', '_').replace('.', '_').replace(':', '-')+did+'.json'
+                    file_path = file_path+timestamp.replace(' ', '_').replace('.', '_').replace(':', '-')+did+'.json'
 
                     with open(file_path, 'w') as fh:
                         json.dump(inference, fh)
@@ -406,8 +589,9 @@ class UpdateIp(Resource):
         data = request.json
         ifconfig = subprocess.Popen(['ifconfig'], stdout=subprocess.PIPE).communicate()[0].decode('utf-8')
 
-        if 'enp' in ifconfig:
-            interface_name = 'enp' + ifconfig.split('enp')[1].split(':')[0]
+        eth_names = get_eth_port_names()
+        if len(eth_names) > 0:
+            interface_name = eth_names[-1]
         else:
             return 'ethernet interface not found'
         
@@ -426,30 +610,7 @@ class UpdateIp(Resource):
 
 class GetLanIps(Resource):
     def get(self):
-        lanIds   = [3,0]
-        lanIps   = {'LAN1': 'not assigned', 'LAN2': 'not assigned'}
-        ifconfig = subprocess.Popen(['ifconfig'], stdout=subprocess.PIPE).communicate()[0].decode('utf-8')
-
-        for index, lan_port in enumerate(lanIps.keys()):
-            config_port = 'enp'+str(lanIds[index])
-            if config_port in ifconfig:
-                interface_name = config_port + ifconfig.split(config_port)[1].split(':')[0]
-                interface = subprocess.Popen(['ifconfig', interface_name], stdout=subprocess.PIPE).communicate()[0].decode('utf-8')
-                
-                ip6 = None
-                if 'inet6' in interface:
-                    ip6 = interface.split('inet6')[1].split(' ')[1]
-                if 'inet' in interface:
-                    ip = interface.split('inet')[1].split(' ')[1]
-                else:
-                    ip = 'LAN IP not assigned'
-
-                if ip6 and ip6 == ip: ip = 'LAN IP not assigned'
-                lanIps[lan_port] = ip
-            else:
-                lanIps[lan_port] = 'ethernet interface not found'
-
-
+        lanIps = get_lan_ips()
         return lanIps
 
 class UploadModel(Resource):
@@ -460,10 +621,13 @@ class UploadModel(Resource):
 
         split_fname = fl.filename.split('#')
         model_name  = split_fname[0]
-        version     = split_fname[1].split('.')[0]
 
         #Temporarily write folder to root directory
         path = "/"+model_name
+        if os.path.exists('/models'+path):
+            print(path+' - already exists - REMOVING')
+            os.system('rm -rf '+'/models'+path)
+
         os.system("mkdir "+path)
         fn = tempfile.gettempdir() + 'model.zip'
         fl.save(fn)
@@ -473,8 +637,29 @@ class UploadModel(Resource):
             with zipfile.ZipFile(fn) as zf:
                 zf.extractall(path)
 
+            #read path/job.json to get version
+            job_data = None
+            if os.path.exists(path+'/job.json'):
+                with open(path+'/job.json') as f:
+                    data = json.load(f)
+                    if data: job_data = data
+
+            if not job_data: return 'no job data'
+
+            version = job_data['model_version']
             os.system("mv "+path+"/job.json "+path+"/"+str(version))
             os.system("mv "+path+"/object-detection.pbtxt "+path+"/"+str(version))
+
+            #move pb file to model version directory
+            model_file_path = path+"/"+str(version)+"/saved_model/saved_model.pb"
+            if os.path.exists(model_file_path):
+                os.system("mv "+model_file_path+" "+path+"/"+str(version))
+
+            #move variables folder to model version directory
+            vars_path = path+"/"+str(version)+"/saved_model/variables"
+            if os.path.exists(vars_path):
+                os.system("mv "+vars_path+" "+path+"/"+str(version))
+
             os.system("rm -rf "+fn)
 
             j_upload = job_queue.enqueue(upload_model, str(path), str(fl.filename), job_timeout=99999999, result_ttl=-1)
@@ -539,6 +724,10 @@ class SyncAnalytics(Resource):
                 j_push    = job_queue.enqueue(push_analytics_to_cloud, CLOUD_DOMAIN, access_token, job_timeout=99999999, result_ttl=-1)
                 if j_push: insert_job(j_push.id, 'Syncing_'+str(num_data)+'_with_cloud')
 
+class DeAuthorize(Resource):
+    @auth.requires_auth
+    def get(self):
+        os.system("rm "+os.environ['HOME']+"/flex-run/system_server/creds.txt")
 
 api.add_resource(AuthToken, '/auth_token')
 api.add_resource(Networks, '/networks')
@@ -558,12 +747,15 @@ api.add_resource(GetLanIps, '/get_lan_ips')
 api.add_resource(GetCameraUID, '/camera_uid/<string:idx>')
 api.add_resource(TogglePin, '/toggle_pin')
 api.add_resource(RestartBackend, '/refresh_backend')
+api.add_resource(ListServices, '/list_services')
 api.add_resource(UploadModel, '/upload_model')
 api.add_resource(AddFtpUser, '/add_ftp_user')
 api.add_resource(DeleteFtpUser, '/delete_ftp_user')
 api.add_resource(UpdateFtpPort, '/update_ftp_port')
 api.add_resource(EnableFtp, '/enable_ftp')
 api.add_resource(SyncAnalytics, '/sync_analytics')
+api.add_resource(UpgradeFlexRun, '/upgrade_flex_run')
+api.add_resource(DeAuthorize, '/deauthorize')
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0',port='5001')

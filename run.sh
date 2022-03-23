@@ -5,5 +5,5 @@ fi
 sudo apt-get update
 sudo apt-get install -y python3.6
 sudo apt-get install net-tools
-sh ./scripts/installSwapfile.sh
+
 python3 deploy.py

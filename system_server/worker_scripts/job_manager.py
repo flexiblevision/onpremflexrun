@@ -40,6 +40,10 @@ def get_next_analytics_batch():
         })
 
 def cloud_call(url, analytics, headers):
+    if not analytics:
+        # update_last_sync_on_success(time_now_ms())
+        return True
+
     try:
         res = requests.post(url, json=analytics, headers=headers)
         print(res)

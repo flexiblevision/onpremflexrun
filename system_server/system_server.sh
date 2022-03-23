@@ -20,6 +20,7 @@ pip3 install 'Flask-Jsonpify==1.5.0'
 pip3 install 'redis==3.3.11'
 pip3 install 'pymongo==3.10.1'
 pip3 install 'rq==1.2.0'
+pip3 install 'itsdangerous==1.1.0'
 
 chmod +x $HOME/flex-run/scripts/fv_system_server_start.sh
 chmod +x $HOME/flex-run/scripts/worker_server_start.sh
@@ -31,6 +32,7 @@ chmod +x $HOME/flex-run/scripts/tcp_server_start.sh
 chmod +x $HOME/flex-run/scripts/gpio_server_start.sh
 chmod +x $HOME/flex-run/scripts/sync_worker_start.sh
 chmod +x $HOME/flex-run/scripts/start_job_watcher.sh
+chmod +x $HOME/flex-run/scripts/system_cleanup.sh
 
 sudo crontab -r
 (sudo crontab -l; echo '@reboot sudo sh '$HOME'/flex-run/scripts/fv_system_server_start.sh') | sudo crontab -
@@ -43,7 +45,7 @@ sudo crontab -r
 (sudo crontab -l; echo '@reboot sudo sh '$HOME'/flex-run/scripts/allocate_usbfs_memory.sh') | sudo crontab -
 (sudo crontab -l; echo '@reboot sleep 50 && sudo sh '$HOME'/flex-run/scripts/restart_localprediction.sh') | sudo crontab -
 (sudo crontab -l; echo '@reboot sudo sh '$HOME'/flex-run/scripts/start_job_watcher.sh') | sudo crontab -
-
+(sudo crontab -l; echo '@monthly sudo sh '$HOME'/flex-run/scripts/system_cleanup.sh') | sudo crontab -
 
 forever start -c python3 $HOME/flex-run/system_server/server.py
 forever start -c python3 $HOME/flex-run/system_server/worker.py
@@ -54,3 +56,5 @@ forever start -c python3 $HOME/flex-run/system_server/job_watcher.py
 
 forever start -c redis-server --daemonize yes
 sudo sh -c 'echo 1000 > /sys/module/usbcore/parameters/usbfs_memory_mb'
+sudo rm /etc/xdg/autostart/update-notifier.desktop
+apt-mark hold "nvidia*"
