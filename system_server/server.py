@@ -135,6 +135,7 @@ def set_static_ips(network = None):
         f.write('  ethernets:\n')
         f.write('    '+interface_name+':\n')
         f.write('      dhcp4: false\n')
+        f.write('      mtu: 9000\n')
         f.write('      addresses: '+ip_string)
     
     os.system("sudo netplan apply")
