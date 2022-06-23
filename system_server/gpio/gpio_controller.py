@@ -39,19 +39,42 @@ class GPIO:
         if not data: return False
         return data[0]
 
-    def run_inference(self, cameraId, modelName, modelVersion, ioVal, pin, presetId):
+    def run_inference(self, preset, pin):
+        cameraId, modelName, modelVersion = preset['cameraId'], preset['modelName'], preset['modelVersion']
+        ioVal, presetId                   = preset['ioVal'], cur_pin, preset['presetId']
+        server = preset['server'] if 'server' in preset else 'vision'
+
         res     = util_ref.find_one({'type': 'id_token'}, {'_id': 0})
         token   = res['token']
-        host    = 'http://172.17.0.1'
+        host    = 'http://172.17.0.1'            
         port    = '5000'
         path    = '/api/capture/predict/snap/'+str(modelName)+'/'+str(modelVersion)+'/'+str(cameraId)+'?workstation='+str(ioVal)+'&preset_id='+str(presetId)
-        url     = host+':'+port+path
-        headers = {'Authorization': 'Bearer '+ token}
-        try:
-            res  = requests.get(url, headers=headers, timeout=2)
-        except Exception as error:
-            print(error)
-            return
+
+        if server == 'thermal':
+            tport = '5400'
+            tpath = '/api/ir/vision/b64Frame/'+str(cameraId)
+
+            t_url     = host+':'+tport+tpath
+            headers = {'Authorization': 'Bearer '+ token}
+            try:
+                t_res  = requests.get(t_url, headers=headers, timeout=2)
+                data = t_res.json()
+
+                path = '/api/capture/predict/single_inference/1/1?preset_id='+presetId
+                res  = requests.put(url, json=data, headers=headers, timeout=2)
+
+            except Exception as error:
+                print(error)
+                return
+
+        else:
+            url     = host+':'+port+path
+            headers = {'Authorization': 'Bearer '+ token}
+            try:
+                res  = requests.get(url, headers=headers, timeout=2)
+            except Exception as error:
+                print(error)
+                return
         
         if res.status_code == 200:
             data = res.json()
@@ -158,7 +181,7 @@ class GPIO:
                 query = {'ioVal': 'GPI'+str(cur_pin)}
                 presets = io_ref.find(query)
                 for preset in presets:
-                    self.run_inference(preset['cameraId'], preset['modelName'], preset['modelVersion'], preset['ioVal'], cur_pin, preset['presetId'])
+                    self.run_inference(preset, cur_pin)
                     #time.sleep(1.5)
 
 
