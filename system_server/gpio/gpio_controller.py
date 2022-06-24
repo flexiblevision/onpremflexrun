@@ -41,7 +41,7 @@ class GPIO:
 
     def run_inference(self, preset, pin):
         cameraId, modelName, modelVersion = preset['cameraId'], preset['modelName'], preset['modelVersion']
-        ioVal, presetId                   = preset['ioVal'], cur_pin, preset['presetId']
+        ioVal, presetId                   = preset['ioVal'], preset['presetId']
         server = preset['server'] if 'server' in preset else 'vision'
 
         res     = util_ref.find_one({'type': 'id_token'}, {'_id': 0})
@@ -60,7 +60,8 @@ class GPIO:
                 t_res  = requests.get(t_url, headers=headers, timeout=2)
                 data = t_res.json()
 
-                path = '/api/capture/predict/single_inference/1/1?preset_id='+presetId
+                path = '/api/capture/predict/single_inference/1/1?preset_id='+str(presetId)
+                url  = host+':'+port+path
                 res  = requests.put(url, json=data, headers=headers, timeout=2)
 
             except Exception as error:
@@ -103,6 +104,7 @@ class GPIO:
             self.cur_pin_state['GPO5'] = False
             self.cur_pin_state['GPO6'] = False
             pin_state_ref.update_one(self.state_query, {'$set': self.cur_pin_state}, True)
+            self.cur_pin_state    = pin_state_ref.find_one(self.state_query)
             return data['pass_fail']
         return
 
@@ -112,6 +114,7 @@ class GPIO:
         self.cur_pin_state['GPO2'] = False # ready pin OFF - RED
         self.cur_pin_state['GPO3'] = True  # busy pin ON - RED
         self.cur_pin_state['GPI'+str(pin)] = True
+        self.cur_pin_state = pin_state_ref.find_one(self.state_query)
         pin_state_ref.update_one(self.state_query, {'$set': self.cur_pin_state}, True)
 
     def pin_switch_inference_end(self, pin):
@@ -128,6 +131,7 @@ class GPIO:
         self.cur_pin_state['GPO2'] = True  # Ready Pin ON - GREEN
         self.cur_pin_state['GPO3'] = False # Busy Pin OFF - ORANGE
         self.cur_pin_state['GPI'+str(pin)] = False
+        self.cur_pin_state = pin_state_ref.find_one(self.state_query)
         pin_state_ref.update_one(self.state_query, {'$set': self.cur_pin_state}, True)
 
     def allow_inference(self, cur_input_state_high, pin_num):
@@ -152,6 +156,7 @@ class GPIO:
         self.cur_pin_state['GPO6'] = False
         for gpi in range(1,9):
             self.cur_pin_state['GPI'+str(gpi)] = False
+        self.cur_pin_state = pin_state_ref.find_one(self.state_query)
         pin_state_ref.update_one(self.state_query, {'$set': self.cur_pin_state}, True)
 
 
