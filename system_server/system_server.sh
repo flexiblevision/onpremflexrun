@@ -10,7 +10,7 @@ apt-get -y install hostapd
 apt install -y redis-server
 apt install -y openssh-server
 make install -C $HOME/flex-run/scripts/create_ap
-npm install forever@2.0.0 -g
+npm install forever@3.0.0 -g
 pip3 install 'requests==2.18.4'
 pip3 install 'python-jose==3.1.0'
 pip3 install 'Flask==1.1.1'
