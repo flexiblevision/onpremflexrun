@@ -59,6 +59,7 @@ if [ $CAP_UPTD != 'True' ]; then
         -e REDIS_URL=$REDIS_URL -e REDIS_SERVER=$REDIS_SERVER -e REDIS_PORT=$REDIS_PORT \
         -e DB_NAME=$DB_NAME -e MONGO_SERVER=$MONGO_SERVER -e MONGO_PORT=$MONGO_PORT \
         -e GCP_FUNCTIONS_DOMAIN=$GCP_FUNCTIONS_DOMAIN -e CLOUD_DOMAIN=$CLOUD_DOMAIN \
+        --log-opt max-size=50m --log-opt max-file=5 \
         -d fvonprem/$4-backend:$CAP_UPTD
 
     #upload camera data back to new container
@@ -85,6 +86,7 @@ if [ $PREDICT_UPTD != 'True' ]; then
     }
     docker run -p 8500:8500 -p 8501:8501 --runtime=nvidia --name localprediction  -d -e AWS_ACCESS_KEY_ID=imagerie -e AWS_SECRET_ACCESS_KEY=imagerie -e AWS_REGION=us-east-1 \
         --restart unless-stopped --network imagerie_nw  \
+        --log-opt max-size=50m --log-opt max-file=5 \
         -t fvonprem/$4-prediction:$PREDICT_UPTD
 
     DIR=$HOME"/../models"
@@ -112,6 +114,7 @@ if [ $PREDLITE_UPTD != 'True' ]; then
     
     docker run -p 8511:8511 --name predictlite  -d  \
         --restart unless-stopped --network imagerie_nw  \
+        --log-opt max-size=50m --log-opt max-file=5 \
         -t fvonprem/$4-predictlite:$PREDLITE_UPTD
 
     DIR=$HOME"/../lite_models"
@@ -146,6 +149,7 @@ if [ $VISION_UPTD != 'True' ]; then
     docker run -p 5555:5555 --name vision  -d  \
         --restart unless-stopped --network host  \
         --privileged -v /dev:/dev -v /sys:/sys \
+        --log-opt max-size=50m --log-opt max-file=5 \
         -t fvonprem/$4-vision:$VISION_UPTD
 
     # upload camera config back into container
@@ -180,6 +184,7 @@ if [ $CREATOR_UPTD  != 'True' ]; then
     
     docker run -d --name=nodecreator -p 0.0.0.0:1880:1880 \
     --restart unless-stopped --privileged -v /dev:/dev -v /sys:/sys \
+    --log-opt max-size=50m --log-opt max-file=5 \
     --network host -d fvonprem/$4-nodecreator:$CREATOR_UPTD 
 
     {
@@ -205,6 +210,7 @@ if [ $CAPUI_UPTD != 'True' ]; then
     }
     docker run -p 0.0.0.0:80:3000 --restart unless-stopped \
         --name captureui -e CAPTURE_SERVER=http://172.17.0.1:5000 -e PROCESS_SERVER=http://172.17.0.1 -d --network imagerie_nw \
+        --log-opt max-size=50m --log-opt max-file=5 \
         fvonprem/$4-frontend:$CAPUI_UPTD
 
     cur_step=$((cur_step+1))
