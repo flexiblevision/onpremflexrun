@@ -26,6 +26,9 @@ def initialize(id, num_steps):
         "log": "",
         "id": id 
     }
+
+    # update any running upgrade records to failed
+    upgrade_records.update_one({'state': 'running'}, {'$set': {'state': 'failed'}})
     updated_record = upgrade_records.update_one({'id': id}, {'$set': record}, True)
     return record
 
