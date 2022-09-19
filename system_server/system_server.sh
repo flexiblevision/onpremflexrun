@@ -50,12 +50,17 @@ sudo crontab -r
 (sudo crontab -l; echo '@reboot sudo sh '$HOME'/flex-run/scripts/start_job_watcher.sh') | sudo crontab -
 (sudo crontab -l; echo '@monthly sudo sh '$HOME'/flex-run/scripts/system_cleanup.sh') | sudo crontab -
 
+
 forever start -c python3 $HOME/flex-run/system_server/server.py
 forever start -c python3 $HOME/flex-run/system_server/worker.py
-forever start -c python3 $HOME/flex-run/system_server/gpio/gpio_controller.py
 forever start -c python3 $HOME/flex-run/system_server/tcp/tcp_server.py
 forever start -c python3 $HOME/flex-run/system_server/worker_scripts/sync_worker.py
 forever start -c python3 $HOME/flex-run/system_server/job_watcher.py
+
+ARCH=$(arch)
+if [ "$ARCH" = "x86_64" ]; then
+    forever start -c python3 $HOME/flex-run/system_server/gpio/gpio_controller.py
+fi
 
 forever start -c redis-server --daemonize yes
 sudo sh -c 'echo 1000 > /sys/module/usbcore/parameters/usbfs_memory_mb'

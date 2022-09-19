@@ -28,9 +28,6 @@ sudo crontab -r
 forever stop $HOME/flex-run/system_server/worker.py
 forever start -c python3 $HOME/flex-run/system_server/worker.py
 
-forever stop $HOME/flex-run/system_server/gpio/gpio_controller.py
-forever start -c python3 $HOME/flex-run/system_server/gpio/gpio_controller.py
-
 forever stop $HOME/flex-run/system_server/worker_scripts/sync_worker.py
 forever start -c python3 $HOME/flex-run/system_server/worker_scripts/sync_worker.py
 
@@ -39,6 +36,12 @@ forever start -c python3 $HOME/flex-run/system_server/tcp/tcp_server.py
 
 forever stop $HOME/flex-run/system_server/job_watcher.py
 forever start -c python3 $HOME/flex-run/system_server/job_watcher.py
+
+ARCH=$(arch)
+if [ "$ARCH" = "x86_64" ]; then
+    forever stop $HOME/flex-run/system_server/gpio/gpio_controller.py
+    forever start -c python3 $HOME/flex-run/system_server/gpio/gpio_controller.py
+fi
 
 
 if [ -e /etc/vsftpd.conf ]
