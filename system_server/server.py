@@ -143,8 +143,8 @@ def set_static_ips(network = None):
 
 def get_mac_id():
     ifconfig  = subprocess.Popen(['ifconfig'], stdout=subprocess.PIPE).communicate()[0].decode('utf-8')
-    if 'wlp' in ifconfig:
-        interface = 'wlp' + ifconfig.split('wlp')[1].split(':')[0]
+    if 'wl' in ifconfig:
+        interface = 'wl' + ifconfig.split('wl')[1].split(':')[0]
     elif 'enp' in ifconfig:
         interface = 'enp' + ifconfig.split('enp')[1].split(':')[0]
     else:
@@ -353,7 +353,7 @@ class Networks(Resource):
 
         ifconfig = subprocess.Popen(['ifconfig'], stdout=subprocess.PIPE).communicate()[0].decode('utf-8')
         
-        interface = 'wlp' + ifconfig.split('wlp')[1].split(':')[0]
+        interface = 'wl' + ifconfig.split('wl')[1].split(':')[0]
 
         wlp = subprocess.Popen(['ifconfig', interface], stdout=subprocess.PIPE).communicate()[0].decode('utf-8')
         
@@ -446,7 +446,7 @@ class DeviceInfo(Resource):
         domain = request.headers.get('Host').split(':')[0]
 
         ifconfig  = subprocess.Popen(['ifconfig'], stdout=subprocess.PIPE).communicate()[0].decode('utf-8')
-        interface = 'wlp' + ifconfig.split('wlp')[1].split(':')[0]
+        interface = 'wl' + ifconfig.split('wl')[1].split(':')[0]
         wlp       = subprocess.Popen(['ifconfig', interface], stdout=subprocess.PIPE).communicate()[0].decode('utf-8')
         
         if 'inet' in wlp:
