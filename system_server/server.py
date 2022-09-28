@@ -46,6 +46,12 @@ from rq.job import Job
 import socket
 import tempfile
 
+from pymongo import MongoClient, ASCENDING
+from bson import json_util, ObjectId
+
+client            = MongoClient("172.17.0.1")
+interfaces_db     = client["fvonprem"]["interfaces"]
+
 app = Flask(__name__)
 api = Api(app)
 
@@ -140,11 +146,65 @@ def set_static_ips(network = None):
     
     os.system("sudo netplan apply")
 
+def set_ips(settings):
+    store_netplan_settings(settings)
+    build_set_netplan()
+
+def build_set_netplan():
+    interfaces = []
+    res = interfaces_db.find()
+    interfaces = json.loads(json_util.dumps(res))
+
+    if os.path.exists('/etc/netplan/'):
+        with open ('/etc/netplan/fv-net-init.yaml', 'w') as f:
+            f.write('network:\n')
+            f.write('  version: 2\n')
+            f.write('  ethernets:\n')
+            for i in interfaces:
+                f.write('    '+i['iname']+':\n')
+                f.write('      dhcp4: '+i['dhcp']+'\n')
+                f.write('      mtu: 9000\n')
+                f.write('      addresses: '+i['ip_string'])
+        
+        os.system("sudo netplan apply")
+    else:
+        print('netplan path does not exist')
+
+def store_netplan_settings(i_config):
+    try:
+        #store in interfaces db
+        iname, ip, dhcp = i_config['lanPort'], i_config['ip'], i_config['dhcp']
+
+        ips = []
+        if is_valid_ip(ip):
+            ips.append(ip+'/24')
+        else:
+            raise Exception('Failed')
+
+        #ips.append(static_ip+'/24') #append static ip
+        ip_string = '['
+        for ip in ips: ip_string += (ip) 
+        ip_string = ip_string + ']'
+
+        i_entry = {
+            '_id': iname,
+            'ip': ip,
+            'ip_string': ip_string,
+            'updated': str(datetime.datetime.now()),
+            'dhcp': dhcp,
+            'iname': iname
+        }
+
+        interfaces_db.update_one(
+                {"iname": iname},
+                {"$set": i_entry}, True)
+    except Exception as error:
+        print(error)
 
 def get_mac_id():
     ifconfig  = subprocess.Popen(['ifconfig'], stdout=subprocess.PIPE).communicate()[0].decode('utf-8')
-    if 'wlp' in ifconfig:
-        interface = 'wlp' + ifconfig.split('wlp')[1].split(':')[0]
+    if 'wl' in ifconfig:
+        interface = 'wl' + ifconfig.split('wl')[1].split(':')[0]
     elif 'enp' in ifconfig:
         interface = 'enp' + ifconfig.split('enp')[1].split(':')[0]
     else:
@@ -175,7 +235,7 @@ def get_eth_port_names():
     names = os.popen('basename -a /sys/class/net/*').read()
     lan_port_num = 1
     for idx, n in enumerate(names.split('\n')):
-        if 'en' in n:
+        if re.match(r"^eth|^en", n):
             eth_names.append(n)
             
     return eth_names
@@ -193,14 +253,21 @@ def list_usb_paths():
     return mount_paths
 
 def get_lan_ips():
-    lanIps   = {'LAN1': 'not assigned', 'LAN2': 'not assigned'}
-    
+    #lanIps   = {'LAN1': 'not assigned', 'LAN2': 'not assigned'}
+    lans = []
     eth_names = get_eth_port_names()
     for idx, eth in enumerate(eth_names):
+        lanIps = {}
         idx += 1
         lan_port = 'LAN'+str(idx)
+        lanIps['ip']   = 'not assigned'
+        lanIps['port'] = eth
+        lanIps['name'] = lan_port
+        lanIps['dhcp'] = True
         interface = subprocess.Popen(['ifconfig', eth], stdout=subprocess.PIPE).communicate()[0].decode('utf-8')
-        
+        i_entry   = interfaces_db.find_one({'iname': eth})
+        if i_entry: lanIps['dhcp'] = i_entry['dhcp']
+
         ip6 = None
         if 'inet6' in interface:
             ip6 = interface.split('inet6')[1].split(' ')[1]
@@ -210,9 +277,10 @@ def get_lan_ips():
             ip = 'LAN IP not assigned'
 
         if ip6 and ip6 == ip: ip = 'LAN IP not assigned'
-        lanIps[lan_port] = ip
+        lanIps['ip'] = ip
+        lans.append(lanIps)
 
-    return lanIps
+    return lans
 
 class MacId(Resource):
     def get(self):
@@ -353,7 +421,7 @@ class Networks(Resource):
 
         ifconfig = subprocess.Popen(['ifconfig'], stdout=subprocess.PIPE).communicate()[0].decode('utf-8')
         
-        interface = 'wlp' + ifconfig.split('wlp')[1].split(':')[0]
+        interface = 'wl' + ifconfig.split('wl')[1].split(':')[0]
 
         wlp = subprocess.Popen(['ifconfig', interface], stdout=subprocess.PIPE).communicate()[0].decode('utf-8')
         
@@ -446,7 +514,7 @@ class DeviceInfo(Resource):
         domain = request.headers.get('Host').split(':')[0]
 
         ifconfig  = subprocess.Popen(['ifconfig'], stdout=subprocess.PIPE).communicate()[0].decode('utf-8')
-        interface = 'wlp' + ifconfig.split('wlp')[1].split(':')[0]
+        interface = 'wl' + ifconfig.split('wl')[1].split(':')[0]
         wlp       = subprocess.Popen(['ifconfig', interface], stdout=subprocess.PIPE).communicate()[0].decode('utf-8')
         
         if 'inet' in wlp:
@@ -591,14 +659,18 @@ class UpdateIp(Resource):
         ifconfig = subprocess.Popen(['ifconfig'], stdout=subprocess.PIPE).communicate()[0].decode('utf-8')
 
         eth_names = get_eth_port_names()
-        if len(eth_names) > 0:
-            interface_name = eth_names[-1]
+        if 'lanPort' in data and data['lanPort'] in eth_names:
+            idx = eth_names.index(data['lanPort'])
+            interface_name = eth_names[idx]
         else:
-            return 'ethernet interface not found'
+            return 'ethernet interface not found', 500
         
         if data['ip'] != '' and is_valid_ip(data['ip']):
-            set_static_ips(data['ip'])
+            # set_static_ips(data['ip'])
+            set_ips(data)
             os.system('sudo ifconfig ' + interface_name + ' '  + data['ip'] + ' netmask 255.255.255.0')
+        else:
+            return 'IP address invalid', 500
 
         interface = subprocess.Popen(['ifconfig', interface_name], stdout=subprocess.PIPE).communicate()[0].decode('utf-8')
 
