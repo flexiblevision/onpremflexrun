@@ -44,8 +44,8 @@ def latest_stable_image_version(image):
     data    = {"arch": system_arch(), "image": image}
     headers = {"Content-Type": "application/json"}
     res     = requests.post(CLOUD_FUNCTIONS_BASE+LATEST_STABLE_REF, json=data, headers=headers)
-    if res:
-        return res.json()
+    if res.status_code == 200:
+        return res.text
 
 def is_container_uptodate(container):
     system_version  = get_current_container_version(CONTAINERS[container])
