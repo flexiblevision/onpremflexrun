@@ -29,7 +29,8 @@ sudo docker stop rtsp-server
 sudo docker rm rtsp-server
 sudo docker run --network=host --name rtsp-server -d --restart unless-stopped \
     --log-opt max-size=50m --log-opt max-file=5 \
-    -v $PWD/server.yml:/rtsp-simple-server.yml fvonprem/x86-rtspserver:prod
+    -v $HOME/flex-run/system_server/timemachine/server.yml:/rtsp-simple-server.yml \
+    -t fvonprem/x86-rtspserver:prod
 
 # start filesystem servers
 chmod +x $HOME/flex-run/scripts/filesystem_server.sh
