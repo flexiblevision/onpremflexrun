@@ -35,6 +35,7 @@ from worker_scripts.retrieve_programs import retrieve_programs
 from worker_scripts.retrieve_masks import retrieve_masks
 from worker_scripts.model_upload_worker import upload_model
 from worker_scripts.job_manager import insert_job, push_analytics_to_cloud, get_next_analytics_batch
+from timemachine.installer import *
 import platform 
 
 if platform.processor() != 'aarch64':
@@ -384,6 +385,42 @@ class UpgradeFlexRun(Resource):
     def get(self):
         os.system("chmod +x "+os.environ['HOME']+"/flex-run/upgrades/upgrade_flex_run.sh")
         os.system("sh "+os.environ['HOME']+"/flex-run/upgrades/upgrade_flex_run.sh")
+
+class EnableTimemachine(Resource):
+    @auth.requires_auth
+    def post(self):
+        j = request.json
+        tm_types    = ['local', 'cloud', 'zip_push']
+        did_install = False
+        if 'type' in j:
+            if j['type'] in tm_types:
+                if j['type'] == 'local' or j['type'] == 'zip_push':
+                    did_install = local_zip_push_install(j['type'])
+                else:
+                    did_install =  cloud_install()
+            else:
+                return 'type must be one of the following: [local, cloud, zip_push]', 500
+        else:
+            return 'missing type key. Type key must be passed',500
+
+        if did_install:
+            return True, 200
+        else:
+            return False, 500
+
+class DisableTimemachine(Resource):
+    @auth.requires_auth
+    def delete(self):
+        j = request.json
+        tm_types = ['local', 'cloud', 'zip_push']
+        if 'type' in j:
+            if j['type'] == 'local' or j['type'] == 'zip_push':
+                os.system('sh '+os.environ['HOME']+'/flex-run/system_server/timemachine/uninstaller.sh')
+            else:
+                print('uninstall cloud timemachine')
+            return True, 200
+        else:
+            return 'missing type key. Type key must be passed',500
 
 class AuthToken(Resource):
     @auth.requires_auth
@@ -829,6 +866,8 @@ api.add_resource(EnableFtp, '/enable_ftp')
 api.add_resource(SyncAnalytics, '/sync_analytics')
 api.add_resource(UpgradeFlexRun, '/upgrade_flex_run')
 api.add_resource(DeAuthorize, '/deauthorize')
+api.add_resource(EnableTimemachine, '/enable_timemachine')
+api.add_resource(DisableTimemachine, '/disable_timemachine')
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0',port='5001')

@@ -73,6 +73,9 @@ docker run -p 5555:5555 --name vision  -d  \
     --restart unless-stopped --network host  \
     --privileged -v /dev:/dev -v /sys:/sys \
     --log-opt max-size=50m --log-opt max-file=5 \
+    -e AUTH0_DOMAIN=$AUTH0_DOMAIN -e AUTH0_CID=$AUTH0_CID \
+    -e REDIS_URL=$REDIS_URL -e REDIS_SERVER=$REDIS_SERVER -e REDIS_PORT=$REDIS_PORT \
+    -e DB_NAME=$DB_NAME -e MONGO_SERVER=$MONGO_SERVER -e MONGO_PORT=$MONGO_PORT \
     -t fvonprem/$4-vision:$VISION_VERSION
 
 docker run -d --name=nodecreator -p 0.0.0.0:1880:1880 \
