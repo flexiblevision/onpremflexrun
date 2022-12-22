@@ -81,4 +81,5 @@ docker run -p 5555:5555 --name vision  -d  \
 docker run -d --name=nodecreator -p 0.0.0.0:1880:1880 \
     --restart unless-stopped --privileged -v /dev:/dev -v /sys:/sys \
     --log-opt max-size=50m --log-opt max-file=5 \
+    -v /home/visioncell/Documents:/Documents \
     --network host -t fvonprem/$4-nodecreator:$CREATOR_VERSION 

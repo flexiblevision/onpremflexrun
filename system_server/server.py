@@ -36,6 +36,7 @@ from worker_scripts.retrieve_masks import retrieve_masks
 from worker_scripts.model_upload_worker import upload_model
 from worker_scripts.job_manager import insert_job, push_analytics_to_cloud, get_next_analytics_batch
 from timemachine.installer import *
+from timemachine.cleanup import cleanup_timemachine_records
 import platform 
 
 if platform.processor() != 'aarch64':
@@ -52,6 +53,7 @@ from bson import json_util, ObjectId
 
 client            = MongoClient("172.17.0.1")
 interfaces_db     = client["fvonprem"]["interfaces"]
+tm_records_db     = client["fvonprem"]["event_records"]
 
 app = Flask(__name__)
 api = Api(app)
@@ -839,6 +841,11 @@ class DeAuthorize(Resource):
     def get(self):
         os.system("rm "+os.environ['HOME']+"/flex-run/system_server/creds.txt")
 
+class CleanupTimemachine(Resource):
+    @auth.requires_auth
+    def delete(self):
+        return cleanup_timemachine_records(), 200
+
 api.add_resource(AuthToken, '/auth_token')
 api.add_resource(Networks, '/networks')
 api.add_resource(MacId, '/mac_id')
@@ -868,6 +875,8 @@ api.add_resource(UpgradeFlexRun, '/upgrade_flex_run')
 api.add_resource(DeAuthorize, '/deauthorize')
 api.add_resource(EnableTimemachine, '/enable_timemachine')
 api.add_resource(DisableTimemachine, '/disable_timemachine')
+api.add_resource(CleanupTimemachine, '/cleanup_timemachine')
+
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0',port='5001')

@@ -188,6 +188,7 @@ if [ $CREATOR_UPTD  != 'True' ]; then
     docker run -d --name=nodecreator -p 0.0.0.0:1880:1880 \
     --restart unless-stopped --privileged -v /dev:/dev -v /sys:/sys \
     --log-opt max-size=50m --log-opt max-file=5 \
+    -v /home/visioncell/Documents:/Documents \
     --network host -d fvonprem/$4-nodecreator:$CREATOR_UPTD 
 
     {
