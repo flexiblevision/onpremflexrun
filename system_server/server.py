@@ -165,7 +165,7 @@ def build_set_netplan():
             f.write('  ethernets:\n')
             for i in interfaces:
                 f.write('    '+i['iname']+':\n')
-                f.write('      dhcp4: '+i['dhcp']+'\n')
+                f.write('      dhcp4: '+str(i['dhcp'])+'\n')
                 f.write('      mtu: 9000\n')
                 f.write('      addresses: '+i['ip_string'])
         
@@ -392,8 +392,13 @@ class EnableTimemachine(Resource):
     @auth.requires_auth
     def post(self):
         j = request.json
+        access_token = request.headers.get('Access-Token')
+        if not access_token: return 'Access-Token header is required', 403
+
         tm_types    = ['local', 'cloud', 'zip_push']
         did_install = False
+        authorized  = validate_account('time_machine', access_token)
+        if not authorized: return 'Account is not authorized to use the Time Machine feature.', 403
         if 'type' in j:
             if j['type'] in tm_types:
                 if j['type'] == 'local' or j['type'] == 'zip_push':

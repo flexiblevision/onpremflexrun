@@ -3,6 +3,10 @@ import getopt, sys
 from datetime import datetime
 import os
 
+CLOUD_DOMAIN = "https://clouddeploy.api.flexiblevision.com"
+cloud_path   = os.path.expanduser('~/flex-run/setup_constants/cloud_domain.txt')
+with open(cloud_path, 'r') as file: 
+    CLOUD_DOMAIN = file.read().replace('\n', '')
 
 def cloud_install():
     #call to setup servers in the cloud
@@ -34,6 +38,19 @@ def verify_local_install():
         did_install.append(False)
 
     return all(did_install)
+
+def validate_account(service, access_token):
+    is_valid = True #TESTING ONLY
+    headers = {'Authorization': 'Bearer '+access_token}
+    data    = {'service': service}
+    try:
+        res = requests.post(CLOUD_DOMAIN+'/api/capture/auth/validate_service', headers=headers, json=data)
+        if res.status_code == 200:
+            return res.json
+    except Exception as erro:
+        return is_valid
+
+    return is_valid
 
 def main():
     # list of command line arguments
