@@ -37,6 +37,7 @@ from worker_scripts.model_upload_worker import upload_model
 from worker_scripts.job_manager import insert_job, push_analytics_to_cloud, get_next_analytics_batch
 from timemachine.installer import *
 from timemachine.cleanup import cleanup_timemachine_records
+from timemachine.zip_push import push_event_records, get_unprocessed_events
 import platform 
 
 if platform.processor() != 'aarch64':
@@ -402,7 +403,9 @@ class EnableTimemachine(Resource):
         if 'type' in j:
             if j['type'] in tm_types:
                 if j['type'] == 'local' or j['type'] == 'zip_push':
-                    did_install = local_zip_push_install(j['type'])
+                    install_job = job_queue.enqueue(local_zip_push_install, j['type'], job_timeout=99999999, result_ttl=-1)
+                    job = insert_job(install_job.id, 'installing time machine locally')
+                    did_install = True
                 else:
                     did_install =  cloud_install()
             else:
@@ -841,6 +844,11 @@ class SyncAnalytics(Resource):
                 j_push    = job_queue.enqueue(push_analytics_to_cloud, CLOUD_DOMAIN, access_token, job_timeout=99999999, result_ttl=-1)
                 if j_push: insert_job(j_push.id, 'Syncing_'+str(num_data)+'_with_cloud')
 
+            events = get_unprocessed_events()
+            if events['count'] > 0:
+                er_push = job_queue.enqueue(push_event_records, CLOUD_DOMAIN, access_token, events, job_timeout=99999999, result_ttl=-1)
+                if er_push: insert_job(er_push.id, 'Pushing '+str(events['count'])+' events to cloud')
+
 class DeAuthorize(Resource):
     @auth.requires_auth
     def get(self):
@@ -881,7 +889,6 @@ api.add_resource(DeAuthorize, '/deauthorize')
 api.add_resource(EnableTimemachine, '/enable_timemachine')
 api.add_resource(DisableTimemachine, '/disable_timemachine')
 api.add_resource(CleanupTimemachine, '/cleanup_timemachine')
-
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0',port='5001')

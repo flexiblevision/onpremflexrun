@@ -2,6 +2,14 @@ import requests
 import getopt, sys
 from datetime import datetime
 import os
+from redis import Redis
+from rq import Queue, Worker, Connection
+from rq.job import Job
+from worker_scripts.job_manager import insert_job
+import time
+
+redis_con   = Redis('localhost', 6379, password=None)
+job_queue   = Queue('default', connection=redis_con)
 
 CLOUD_DOMAIN = "https://clouddeploy.api.flexiblevision.com"
 cloud_path   = os.path.expanduser('~/flex-run/setup_constants/cloud_domain.txt')
@@ -14,10 +22,15 @@ def cloud_install():
     os.system("sh "+os.environ['HOME']+"/flex-run/system_server/timemachine/cloud.sh ")
 
 def local_zip_push_install(tm_type):
+    time.sleep(5)
     #run local setup
     os.system("chmod +x "+os.environ['HOME']+"/flex-run/system_server/timemachine/local_zip_push.sh")
     os.system("sh "+os.environ['HOME']+"/flex-run/system_server/timemachine/local_zip_push.sh "+tm_type)
-    return verify_local_install()
+
+    verify_install = job_queue.enqueue(verify_local_install, job_timeout=10000, result_ttl=-1)
+    insert_job(verify_install.id, 'verify timemachine install')
+
+    return True
 
 def verify_local_install():
     did_install = []
@@ -78,6 +91,8 @@ def main():
         if tm_type == 'local' or tm_type == 'zip_push':
             #run local setup
             local_zip_push_install(tm_type)
+
+            # local_zip_push_install(tm_type)
         elif tm_type == 'cloud':
             #run cloud installer
             cloud_install()

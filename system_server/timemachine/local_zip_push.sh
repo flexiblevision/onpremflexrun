@@ -14,7 +14,7 @@ docker stop eventor
 docker rm eventor
 docker run -p 1934-1945:1934-1945 --network=host --name eventor -d \
     --restart unless-stopped  \
-    -v /home/alec/Videos:/Videos \
+    -v /home/visioncell/Videos:/Videos \
     -e CLOUD_DOMAIN=$CLOUD_DOMAIN \
     -e AUTH0_DOMAIN=$AUTH0_DOMAIN -e AUTH0_CID=$AUTH0_CID \
     -e REDIS_URL=$REDIS_URL -e REDIS_SERVER=$REDIS_SERVER -e REDIS_PORT=$REDIS_PORT \
