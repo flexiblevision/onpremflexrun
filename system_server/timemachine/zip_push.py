@@ -11,6 +11,13 @@ from datetime import datetime
 client            = MongoClient("172.17.0.1")
 tm_records_db     = client["fvonprem"]["event_records"]
 
+
+CLOUD_FUNCTIONS_BASE = 'https://us-central1-flexible-vision-staging.cloudfunctions.net/'
+gcp_functions_path   = os.path.expanduser('~/flex-run/setup_constants/gcp_functions_domain.txt')
+with open(gcp_functions_path, 'r') as file:
+    CLOUD_FUNCTIONS_BASE = file.read().replace('\n', '')
+
+
 def mark_as_processed(batch):
     for pf in batch:
         tm_records_db.update_one({'id': event['id']}, {'$set': {'processed': True, 'processed_time': datetime.now()}})
@@ -26,7 +33,7 @@ def batch_and_process(events):
         if len(batch) == batch_limit:
             file_list.append(batch)
             batch = []
-        event_file = (event['id'], (event['zip_name'], open(event['zip_path'], 'rb'), 'application/zip'))
+        event_file = (event['id'], (event['zip_name'], open('/home/visioncell'+event['zip_path'], 'rb'), 'application/zip'))
         batch.append(event_file)
     file_list.append(batch) #push remaining files
     return file_list
@@ -44,9 +51,9 @@ def push_event_records(cloud_domain, access_token, event_records):
     batches = batch_and_process(event_records['events'])
     for batch in batches:
         try:
-            push_path = '{}/api/capture/time_machine/upload'.format(cloud_domain)
+            push_path = '{}/TMEventIngest'.format(CLOUD_FUNCTIONS_BASE)
             headers   = {'Authorization': 'Bearer '+access_token}
-            r = requests.post(push_path, files=batch)
+            r = requests.post(push_path, files=batch, timeout=5)
             if r.status_code <= 299:
                 mark_as_processed(batch)
         except Exception as error:
