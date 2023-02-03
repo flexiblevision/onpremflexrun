@@ -40,7 +40,7 @@ def batch_and_process(events):
         if len(batch) == batch_limit:
             file_list.append(batch)
             batch = []
-        event_file = (event['id'], (event['zip_name'], open('/home/alec'+event['zip_path'], 'rb'), 'application/zip'))
+        event_file = (event['id'], (event['zip_name'], open('/home/visioncell'+event['zip_path'], 'rb'), 'application/zip'))
         batch.append(event_file)
     file_list.append(batch) #push remaining files
     return file_list

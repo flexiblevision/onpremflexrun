@@ -45,12 +45,11 @@ def cloud_call(url, analytics, headers):
         return True
 
     try:
+        last_record_timestamp = analytics[-1]['prediction_start_time']
+        update_last_sync_on_success(last_record_timestamp)
         res = requests.post(url, json=analytics, headers=headers)
         print(res)
         print('--------------------------------------')
-        last_record_timestamp = analytics[-1]['prediction_start_time']
-        update_last_sync_on_success(last_record_timestamp)
-        time.sleep(2)
         return (res.status_code == 200)
     except:
         print('FAILED TO CALL ', url)
