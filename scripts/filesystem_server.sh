@@ -1,1 +1,1 @@
-forever start -c python3 -m http.server 8000 --directory /home/visioncell/
+forever start -c sh /root/flex-run/scripts/start_fs_server.sh
