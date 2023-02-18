@@ -569,7 +569,8 @@ class DeviceInfo(Resource):
             info['last_known_ip'] = domain
         
         lan_ips = get_lan_ips()
-        for ip in lan_ips.values():
+        for lan in lan_ips:
+            ip = lan['ip']
             if ip != 'not assigned' and ip != 'LAN IP not assigned':
                 info['last_known_ip'] = '{};{}'.format(ip, info['last_known_ip'])
 
