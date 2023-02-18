@@ -1,4 +1,3 @@
-from datetime import timedelta
 from flask import make_response, request, current_app
 from functools import update_wrapper
 
@@ -8,7 +7,6 @@ import json
 from json import dumps
 import subprocess
 import os
-import datetime
 import auth
 import requests
 import re
@@ -39,6 +37,7 @@ from timemachine.installer import *
 from timemachine.cleanup import cleanup_timemachine_records
 from timemachine.zip_push import push_event_records, get_unprocessed_events
 import platform 
+import datetime
 
 if platform.processor() != 'aarch64':
     from gpio.gpio_helper import toggle_pin
