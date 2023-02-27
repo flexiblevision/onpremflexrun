@@ -846,7 +846,8 @@ class SyncAnalytics(Resource):
 
             events = get_unprocessed_events()
             if events['count'] > 0:
-                er_push = job_queue.enqueue(push_event_records, CLOUD_DOMAIN, access_token, events, job_timeout=99999999, result_ttl=-1)
+                er_push = job_queue.enqueue(push_event_records, CLOUD_DOMAIN, access_token, 
+                            events, job_timeout=99999999, result_ttl=-1, retry=Retry(max=10, interval=60))                            
                 if er_push: insert_job(er_push.id, 'Pushing '+str(events['count'])+' events to cloud')
 
 class DeAuthorize(Resource):

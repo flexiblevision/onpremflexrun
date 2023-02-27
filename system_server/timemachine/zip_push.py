@@ -10,7 +10,9 @@ from datetime import datetime
 
 client            = MongoClient("172.17.0.1")
 tm_records_db     = client["fvonprem"]["event_records"]
-
+utils_db          = client["fvonprem"]["utils"]
+dev_ref           = utils_db.find_one({'type':'device_id'})
+DEV_ID            =  None if not dev_ref else dev_ref['id']
 
 CLOUD_FUNCTIONS_BASE = 'https://us-central1-flexible-vision-staging.cloudfunctions.net/'
 gcp_functions_path   = os.path.expanduser('~/flex-run/setup_constants/gcp_functions_domain.txt')
@@ -40,7 +42,9 @@ def batch_and_process(events):
         if len(batch) == batch_limit:
             file_list.append(batch)
             batch = []
-        event_file = (event['id'], (event['zip_name'], open('/home/visioncell'+event['zip_path'], 'rb'), 'application/zip'))
+
+        dev_id = DEV_ID if DEV_ID else event['id']
+        event_file = (dev_id, (event['zip_name'], open('/home/visioncell'+event['zip_path'], 'rb'), 'application/zip'))
         batch.append(event_file)
     file_list.append(batch) #push remaining files
     return file_list
