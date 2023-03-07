@@ -13,9 +13,11 @@ from pymongo import MongoClient
 import datetime
 import string
 
-client            = MongoClient("172.17.0.1")
-job_collection    = client["fvonprem"]["jobs"]
-models_collection = client["fvonprem"]["models"]
+client             = MongoClient("172.17.0.1")
+job_collection     = client["fvonprem"]["jobs"]
+models_collection  = client["fvonprem"]["models"]
+presets_collection = client["fvonprem"]["io_presets"]
+
 
 CLOUD_DOMAIN = "https://clouddeploy.api.flexiblevision.com"
 cloud_path   = os.path.expanduser('~/flex-run/setup_constants/cloud_domain.txt')
@@ -135,8 +137,8 @@ def retrieve_models(data, token):
         save_models_versions(models_versions.values(), model_type)
         
         if model_type in LITE_MODEL_TYPES:
-            os.system("docker exec predictlite rm -rf /data/models")
-            print('pushing models into predictlite server')
+            os.system("docker exec predictlite rm -rf /data/lite_models")
+            print('pushing models into predictlite server: ', BASE_PATH_TO_MODELS)
             os.system("docker cp "+BASE_PATH_TO_MODELS+" predictlite:/data/")
         else:
             os.system("docker exec localprediction rm -rf /models")
@@ -175,6 +177,18 @@ def save_models_versions(models_versions, model_type):
         model_list[model_type] = mv[model_type]
         model_query = {'type': mv['type']}
         models_collection.update_one(model_query, {'$set': model_list}, True)
+        try:
+            assign_preset_to_latest_version(mv['type'], mv[model_type], model_type)
+        except Exception as error:
+            print(error)
+
+def assign_preset_to_latest_version(model, versions, model_type):
+    type_map = {'versions': 'high_accuracy', 'high_speed': 'high_speed'}
+    versions.sort()
+    latest_version = versions[-1]
+    presets = presets_collection.find({'modelName': model, 'modelType': type_map[model_type]})
+    for preset in presets:
+        presets_collection.update({'presetId': preset['presetId']}, {'$set': {'modelVersion': latest_version}})
 
 def format_filename(s):
     valid_chars = "-_.() %s%s" % (string.ascii_letters, string.digits)
