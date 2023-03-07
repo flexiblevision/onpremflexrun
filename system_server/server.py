@@ -525,6 +525,17 @@ class DownloadModels(Resource):
         if j_progs: insert_job(j_progs.id, 'Downloading programs')
         return True
 
+class DownloadPrograms(Resource):
+    @auth.requires_auth
+    def post(self):
+        data           = request.json
+        access_token   = request.headers.get('Access-Token')
+        
+        j_progs  = job_queue.enqueue(retrieve_programs, data, access_token, job_timeout=9999999, result_ttl=-1) 
+        if j_progs: insert_job(j_progs.id, 'Downloading programs')
+
+        return True    
+
 class SystemVersions(Resource):
     def get(self):
         backend_version    = get_current_container_version('capdev')
@@ -868,6 +879,7 @@ api.add_resource(Restart, '/restart')
 api.add_resource(Upgrade, '/upgrade')
 api.add_resource(CategoryIndex, '/category_index/<string:model>/<string:version>')
 api.add_resource(DownloadModels, '/download_models')
+api.add_resource(DownloadPrograms, '/download_programs')
 api.add_resource(SystemVersions, '/system_versions')
 api.add_resource(SystemIsUptodate, '/system_uptodate')
 api.add_resource(DeviceInfo, '/device_info')
