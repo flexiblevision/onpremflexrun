@@ -27,7 +27,7 @@ def retrieve_programs(resp_data, token):
     project_ids = resp_data['models'].keys()
     for project_id in project_ids:
         headers = {"Authorization": "Bearer "+token, 'Content-Type': 'application/json'}
-        url     = CLOUD_DOMAIN+"/api/capture/programs/"+project_id+"/0/9999"
+        url     = CLOUD_DOMAIN+"/api/capture/programs/"+project_id+"/0/9999?use_latest=true"
         res     = requests.get(url, headers=headers, timeout=5)
         data    = res.json()
 
