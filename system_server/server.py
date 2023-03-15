@@ -1,4 +1,3 @@
-from datetime import timedelta
 from flask import make_response, request, current_app
 from functools import update_wrapper
 
@@ -8,7 +7,6 @@ import json
 from json import dumps
 import subprocess
 import os
-import datetime
 import auth
 import requests
 import re
@@ -35,7 +33,11 @@ from worker_scripts.retrieve_programs import retrieve_programs
 from worker_scripts.retrieve_masks import retrieve_masks
 from worker_scripts.model_upload_worker import upload_model
 from worker_scripts.job_manager import insert_job, push_analytics_to_cloud, get_next_analytics_batch
+from timemachine.installer import *
+from timemachine.cleanup import cleanup_timemachine_records
+from timemachine.zip_push import push_event_records, get_unprocessed_events
 import platform 
+import datetime
 
 if platform.processor() != 'aarch64':
     from gpio.gpio_helper import toggle_pin
@@ -45,6 +47,13 @@ from rq import Queue, Worker, Connection
 from rq.job import Job
 import socket
 import tempfile
+
+from pymongo import MongoClient, ASCENDING
+from bson import json_util, ObjectId
+
+client            = MongoClient("172.17.0.1")
+interfaces_db     = client["fvonprem"]["interfaces"]
+tm_records_db     = client["fvonprem"]["event_records"]
 
 app = Flask(__name__)
 api = Api(app)
@@ -140,6 +149,60 @@ def set_static_ips(network = None):
     
     os.system("sudo netplan apply")
 
+def set_ips(settings):
+    store_netplan_settings(settings)
+    build_set_netplan()
+
+def build_set_netplan():
+    interfaces = []
+    res = interfaces_db.find()
+    interfaces = json.loads(json_util.dumps(res))
+
+    if os.path.exists('/etc/netplan/'):
+        with open ('/etc/netplan/fv-net-init.yaml', 'w') as f:
+            f.write('network:\n')
+            f.write('  version: 2\n')
+            f.write('  ethernets:\n')
+            for i in interfaces:
+                f.write('    '+i['iname']+':\n')
+                f.write('      dhcp4: '+str(i['dhcp'])+'\n')
+                f.write('      mtu: 9000\n')
+                f.write('      addresses: '+i['ip_string'])
+        
+        os.system("sudo netplan apply")
+    else:
+        print('netplan path does not exist')
+
+def store_netplan_settings(i_config):
+    try:
+        #store in interfaces db
+        iname, ip, dhcp = i_config['lanPort'], i_config['ip'], i_config['dhcp']
+
+        ips = []
+        if is_valid_ip(ip):
+            ips.append(ip+'/24')
+        else:
+            raise Exception('Failed')
+
+        #ips.append(static_ip+'/24') #append static ip
+        ip_string = '['
+        for ip in ips: ip_string += (ip) 
+        ip_string = ip_string + ']'
+
+        i_entry = {
+            '_id': iname,
+            'ip': ip,
+            'ip_string': ip_string,
+            'updated': str(datetime.datetime.now()),
+            'dhcp': dhcp,
+            'iname': iname
+        }
+
+        interfaces_db.update_one(
+                {"iname": iname},
+                {"$set": i_entry}, True)
+    except Exception as error:
+        print(error)
 
 def get_mac_id():
     ifconfig  = subprocess.Popen(['ifconfig'], stdout=subprocess.PIPE).communicate()[0].decode('utf-8')
@@ -175,7 +238,7 @@ def get_eth_port_names():
     names = os.popen('basename -a /sys/class/net/*').read()
     lan_port_num = 1
     for idx, n in enumerate(names.split('\n')):
-        if 'en' in n:
+        if re.match(r"^eth|^en", n):
             eth_names.append(n)
             
     return eth_names
@@ -193,14 +256,21 @@ def list_usb_paths():
     return mount_paths
 
 def get_lan_ips():
-    lanIps   = {'LAN1': 'not assigned', 'LAN2': 'not assigned'}
-    
+    #lanIps   = {'LAN1': 'not assigned', 'LAN2': 'not assigned'}
+    lans = []
     eth_names = get_eth_port_names()
     for idx, eth in enumerate(eth_names):
+        lanIps = {}
         idx += 1
         lan_port = 'LAN'+str(idx)
+        lanIps['ip']   = 'not assigned'
+        lanIps['port'] = eth
+        lanIps['name'] = lan_port
+        lanIps['dhcp'] = True
         interface = subprocess.Popen(['ifconfig', eth], stdout=subprocess.PIPE).communicate()[0].decode('utf-8')
-        
+        i_entry   = interfaces_db.find_one({'iname': eth})
+        if i_entry: lanIps['dhcp'] = i_entry['dhcp']
+
         ip6 = None
         if 'inet6' in interface:
             ip6 = interface.split('inet6')[1].split(' ')[1]
@@ -210,9 +280,10 @@ def get_lan_ips():
             ip = 'LAN IP not assigned'
 
         if ip6 and ip6 == ip: ip = 'LAN IP not assigned'
-        lanIps[lan_port] = ip
+        lanIps['ip'] = ip
+        lans.append(lanIps)
 
-    return lanIps
+    return lans
 
 class MacId(Resource):
     def get(self):
@@ -317,6 +388,49 @@ class UpgradeFlexRun(Resource):
         os.system("chmod +x "+os.environ['HOME']+"/flex-run/upgrades/upgrade_flex_run.sh")
         os.system("sh "+os.environ['HOME']+"/flex-run/upgrades/upgrade_flex_run.sh")
 
+class EnableTimemachine(Resource):
+    @auth.requires_auth
+    def post(self):
+        j = request.json
+        access_token = request.headers.get('Access-Token')
+        if not access_token: return 'Access-Token header is required', 403
+
+        tm_types    = ['local', 'cloud', 'zip_push']
+        did_install = False
+        authorized  = validate_account('time_machine', access_token)
+        if not authorized: return 'Account is not authorized to use the Time Machine feature.', 403
+        if 'type' in j:
+            if j['type'] in tm_types:
+                if j['type'] == 'local' or j['type'] == 'zip_push':
+                    install_job = job_queue.enqueue(local_zip_push_install, j['type'], job_timeout=99999999, result_ttl=-1)
+                    job = insert_job(install_job.id, 'installing time machine locally')
+                    did_install = True
+                else:
+                    did_install =  cloud_install()
+            else:
+                return 'type must be one of the following: [local, cloud, zip_push]', 500
+        else:
+            return 'missing type key. Type key must be passed',500
+
+        if did_install:
+            return True, 200
+        else:
+            return False, 500
+
+class DisableTimemachine(Resource):
+    @auth.requires_auth
+    def delete(self):
+        j = request.json
+        tm_types = ['local', 'cloud', 'zip_push']
+        if 'type' in j:
+            if j['type'] == 'local' or j['type'] == 'zip_push':
+                os.system('sh '+os.environ['HOME']+'/flex-run/system_server/timemachine/uninstaller.sh')
+            else:
+                print('uninstall cloud timemachine')
+            return True, 200
+        else:
+            return 'missing type key. Type key must be passed',500
+
 class AuthToken(Resource):
     @auth.requires_auth
     def get(self):
@@ -411,6 +525,17 @@ class DownloadModels(Resource):
         if j_progs: insert_job(j_progs.id, 'Downloading programs')
         return True
 
+class DownloadPrograms(Resource):
+    @auth.requires_auth
+    def post(self):
+        data           = request.json
+        access_token   = request.headers.get('Access-Token')
+        
+        j_progs  = job_queue.enqueue(retrieve_programs, data, access_token, job_timeout=9999999, result_ttl=-1) 
+        if j_progs: insert_job(j_progs.id, 'Downloading programs')
+
+        return True    
+
 class SystemVersions(Resource):
     def get(self):
         backend_version    = get_current_container_version('capdev')
@@ -455,7 +580,8 @@ class DeviceInfo(Resource):
             info['last_known_ip'] = domain
         
         lan_ips = get_lan_ips()
-        for ip in lan_ips.values():
+        for lan in lan_ips:
+            ip = lan['ip']
             if ip != 'not assigned' and ip != 'LAN IP not assigned':
                 info['last_known_ip'] = '{};{}'.format(ip, info['last_known_ip'])
 
@@ -591,14 +717,18 @@ class UpdateIp(Resource):
         ifconfig = subprocess.Popen(['ifconfig'], stdout=subprocess.PIPE).communicate()[0].decode('utf-8')
 
         eth_names = get_eth_port_names()
-        if len(eth_names) > 0:
-            interface_name = eth_names[-1]
+        if 'lanPort' in data and data['lanPort'] in eth_names:
+            idx = eth_names.index(data['lanPort'])
+            interface_name = eth_names[idx]
         else:
-            return 'ethernet interface not found'
+            return 'ethernet interface not found', 500
         
         if data['ip'] != '' and is_valid_ip(data['ip']):
-            set_static_ips(data['ip'])
+            # set_static_ips(data['ip'])
+            set_ips(data)
             os.system('sudo ifconfig ' + interface_name + ' '  + data['ip'] + ' netmask 255.255.255.0')
+        else:
+            return 'IP address invalid', 500
 
         interface = subprocess.Popen(['ifconfig', interface_name], stdout=subprocess.PIPE).communicate()[0].decode('utf-8')
 
@@ -725,10 +855,21 @@ class SyncAnalytics(Resource):
                 j_push    = job_queue.enqueue(push_analytics_to_cloud, CLOUD_DOMAIN, access_token, job_timeout=99999999, result_ttl=-1)
                 if j_push: insert_job(j_push.id, 'Syncing_'+str(num_data)+'_with_cloud')
 
+            events = get_unprocessed_events()
+            if events['count'] > 0:
+                er_push = job_queue.enqueue(push_event_records, CLOUD_DOMAIN, access_token, 
+                            events, job_timeout=99999999, result_ttl=-1, retry=Retry(max=10, interval=60))                            
+                if er_push: insert_job(er_push.id, 'Pushing '+str(events['count'])+' events to cloud')
+
 class DeAuthorize(Resource):
     @auth.requires_auth
     def get(self):
         os.system("rm "+os.environ['HOME']+"/flex-run/system_server/creds.txt")
+
+class CleanupTimemachine(Resource):
+    @auth.requires_auth
+    def delete(self):
+        return cleanup_timemachine_records(), 200
 
 api.add_resource(AuthToken, '/auth_token')
 api.add_resource(Networks, '/networks')
@@ -738,6 +879,7 @@ api.add_resource(Restart, '/restart')
 api.add_resource(Upgrade, '/upgrade')
 api.add_resource(CategoryIndex, '/category_index/<string:model>/<string:version>')
 api.add_resource(DownloadModels, '/download_models')
+api.add_resource(DownloadPrograms, '/download_programs')
 api.add_resource(SystemVersions, '/system_versions')
 api.add_resource(SystemIsUptodate, '/system_uptodate')
 api.add_resource(DeviceInfo, '/device_info')
@@ -757,6 +899,9 @@ api.add_resource(EnableFtp, '/enable_ftp')
 api.add_resource(SyncAnalytics, '/sync_analytics')
 api.add_resource(UpgradeFlexRun, '/upgrade_flex_run')
 api.add_resource(DeAuthorize, '/deauthorize')
+api.add_resource(EnableTimemachine, '/enable_timemachine')
+api.add_resource(DisableTimemachine, '/disable_timemachine')
+api.add_resource(CleanupTimemachine, '/cleanup_timemachine')
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0',port='5001')

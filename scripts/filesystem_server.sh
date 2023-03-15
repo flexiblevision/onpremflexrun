@@ -1,0 +1,1 @@
+forever start -c sh /root/flex-run/scripts/start_fs_server.sh
