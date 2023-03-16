@@ -27,7 +27,7 @@ def retrieve_masks(resp_data, token):
     for project_id in project_ids:
         headers = {"Authorization": "Bearer "+token, 'Content-Type': 'application/json'}
         url     = CLOUD_DOMAIN+"/api/capture/mask/get_masks/"+project_id
-        res     = requests.get(url, headers=headers)
+        res     = requests.get(url, headers=headers, timeout=30)
         data    = res.json()
 
         if data:
