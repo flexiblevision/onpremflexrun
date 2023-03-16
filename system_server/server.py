@@ -43,7 +43,7 @@ if platform.processor() != 'aarch64':
     from gpio.gpio_helper import toggle_pin
 
 from redis import Redis
-from rq import Queue, Worker, Connection
+from rq import Queue, Retry, Worker, Connection
 from rq.job import Job
 import socket
 import tempfile
