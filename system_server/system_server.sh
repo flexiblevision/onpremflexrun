@@ -24,6 +24,7 @@ pip3 install 'itsdangerous==1.1.0'
 pip3 install 'Werkzeug==1.0.1'
 pip3 install 'Jinja2==2.11.2'
 pip3 install 'Markupsafe==2.0.1'
+pip3 install "boto3==1.26.96"
 
 chmod +x $HOME/flex-run/scripts/fv_system_server_start.sh
 chmod +x $HOME/flex-run/scripts/worker_server_start.sh

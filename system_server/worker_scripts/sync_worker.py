@@ -9,17 +9,26 @@ import base64
 import re
 import subprocess
 import os
+import sys
 
+settings_path = os.environ['HOME']+'/flex-run'
+sys.path.append(settings_path)
+import settings
 
 HOST = 'http://172.17.0.1'
 PORT = '5000'
 HEADERS = {'referer': HOST}
+use_aws = False
 
 s = requests.Session()
 s.headers.update({'referer': HOST})
 
 client   = MongoClient("172.17.0.1")
 util_ref = client["fvonprem"]["utils"]
+
+if 'use_aws' in settings.config and settings.config['use_aws']:
+    use_aws    = True
+    aws_client = settings.kinesis
 
 def get_refresh_token():
     cmd = subprocess.Popen(['cat', os.environ['HOME']+'/flex-run/system_server/creds.txt'], stdout=subprocess.PIPE)
@@ -128,6 +137,10 @@ time.sleep(120)
 
 while True:
     time.sleep(1)
+    if use_aws:
+        get_auth_token()
+        aws_client.validate_expiry()
+
     if can_sync():
         #wait to see if browser window handled syncing
         time.sleep(10)

@@ -5,11 +5,24 @@ import requests
 from bson import json_util, ObjectId
 import time
 import json
+import sys
+import os 
+
+settings_path = os.environ['HOME']+'/flex-run'
+sys.path.append(settings_path)
+import settings
 
 client            = MongoClient("172.17.0.1")
 job_collection    = client["fvonprem"]["jobs"]
 analytics_coll    = client["fvonprem"]["img_analytics"]
 util_collection   = client["fvonprem"]["utils"]
+use_aws           = False 
+aws_client        = None
+config            = settings.config
+
+if 'use_aws' in config and config['use_aws']:
+    use_aws    = True
+    aws_client = settings.kinesis
 
 def insert_job(job_id, msg):
     job_collection.insert({
@@ -55,6 +68,21 @@ def cloud_call(url, analytics, headers):
         print('FAILED TO CALL ', url)
         return False
 
+def kinesis_call():
+    if not analytics:
+        return True
+    try:
+        last_record_timestamp = analytics[-1]['prediction_start_time']
+        update_last_sync_on_success(last_record_timestamp)
+
+        did_send = aws_client.send_stream(analytics)
+        print(did_send)
+        print('--------------------------------------')
+        return did_send
+    except:
+        print('FAILED TO POST TO KINESIS')
+        return False
+
 def update_last_sync_on_success(last_record_timestamp):
     util_collection.update_one(
             {"type": "predict_sync"},
@@ -71,7 +99,10 @@ def push_analytics_to_cloud(domain, access_token):
 
     while num_analytics > entries_limit:
         analytics = analytics[:entries_limit] #take <entries_limit> from the analytics array
-        did_sync  = cloud_call(url, analytics, headers)
+        if use_aws:
+            did_sync  = kinesis_call()
+        else:
+            did_sync  = cloud_call(url, analytics, headers)
         if not did_sync:
             print('BREAKING FROM ANALYTICS LOOP')
             break
