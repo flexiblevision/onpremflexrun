@@ -68,15 +68,14 @@ def cloud_call(url, analytics, headers):
         print('FAILED TO CALL ', url)
         return False
 
-def kinesis_call():
+def kinesis_call(analytics):
     if not analytics:
         return True
     try:
-        last_record_timestamp = analytics[-1]['prediction_start_time']
-        update_last_sync_on_success(last_record_timestamp)
-
-        did_send = aws_client.send_stream(analytics)
-        print(did_send)
+        for a in analytics:
+            did_send = aws_client.send_stream(analytics)
+            update_last_sync_on_success(a['prediction_start_time'])
+            print(did_send)
         print('--------------------------------------')
         return did_send
     except:
@@ -100,7 +99,7 @@ def push_analytics_to_cloud(domain, access_token):
     while num_analytics > entries_limit:
         analytics = analytics[:entries_limit] #take <entries_limit> from the analytics array
         if use_aws:
-            did_sync  = kinesis_call()
+            did_sync  = kinesis_call(analytics)
         else:
             did_sync  = cloud_call(url, analytics, headers)
         if not did_sync:
@@ -111,7 +110,10 @@ def push_analytics_to_cloud(domain, access_token):
         num_analytics = len(analytics)
     else:
         analytics = get_next_analytics_batch()
-        cloud_call(url, analytics, headers)
+        if use_aws:
+            kinesis_call(analytics)
+        else:
+            cloud_call(url, analytics, headers)
 
 
     return True
