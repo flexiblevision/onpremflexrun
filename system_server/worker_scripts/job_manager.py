@@ -12,6 +12,12 @@ settings_path = os.environ['HOME']+'/flex-run'
 sys.path.append(settings_path)
 import settings
 
+from redis import Redis
+from rq import Queue, Retry, Worker, Connection
+from rq.job import Job
+redis_con   = Redis('localhost', 6379, password=None)
+job_queue   = Queue('default', connection=redis_con)
+
 client            = MongoClient("172.17.0.1")
 job_collection    = client["fvonprem"]["jobs"]
 analytics_coll    = client["fvonprem"]["img_analytics"]
@@ -43,7 +49,7 @@ def get_next_analytics_batch():
     sync_obj = find_utility('predict_sync')
     if sync_obj:
         time      = sync_obj[0]['ms_time']
-        analytics = analytics_coll.find({"prediction_start_time": {"$gt": int(time) }})
+        analytics = analytics_coll.find({"modified": {"$gt": int(time) }}).sort("modified", 1)
         result    = json.loads(json_util.dumps(analytics))
         return result
     else:
@@ -52,14 +58,40 @@ def get_next_analytics_batch():
             "ms_time": str(time_now_ms())
         })
 
+def get_unsynced_records():
+    sync_obj = find_utility('predict_sync')
+    if sync_obj:
+        time      = sync_obj[0]['ms_time']
+        analytics = analytics_coll.find({"synced": False})
+        result    = json.loads(json_util.dumps(analytics))
+
+        for i in analytics:
+            mark_as_processing(i['id'])
+
+        result    = json.loads(json_util.dumps(analytics))
+        return result
+    else:
+        util_collection.insert({
+            "type": "predict_sync",
+            "ms_time": str(time_now_ms())
+        })
+
+def mark_as_processing(record_id):
+    analytics_coll.update_one({"id": record_id},
+        {"$set": {"synced": "processing"}}, True)
+
+def mark_as_synced(record_id):
+    analytics_coll.update_one(
+        {"id": record_id},
+        {"$set": {"synced": True}}, True)
+
 def cloud_call(url, analytics, headers):
     if not analytics:
         # update_last_sync_on_success(time_now_ms())
         return True
-
     try:
-        last_record_timestamp = analytics[-1]['prediction_start_time']
-        update_last_sync_on_success(last_record_timestamp)
+        # last_record_timestamp = analytics[-1]['modified']
+        # update_last_sync_on_success(last_record_timestamp)
         res = requests.post(url, json=analytics, headers=headers)
         print(res)
         print('--------------------------------------')
@@ -73,12 +105,12 @@ def kinesis_call(analytics):
         return True
     try:
         for a in analytics:
-            did_send = aws_client.send_stream(analytics)
-            update_last_sync_on_success(a['prediction_start_time'])
+            did_send = aws_client.send_stream(a)
             print(did_send)
+            mark_as_synced(a['id'])
         print('--------------------------------------')
         return did_send
-    except:
+    except Exception as error:
         print('FAILED TO POST TO KINESIS')
         return False
 
@@ -90,30 +122,48 @@ def update_last_sync_on_success(last_record_timestamp):
 def push_analytics_to_cloud(domain, access_token):
     analytics     = get_next_analytics_batch()
     num_analytics = len(analytics)
-    entries_limit = 10
+    entries_limit = 20
+
+    if num_analytics == 0:
+        return
 
     print('#Analytics: ', num_analytics)
     headers = {"Authorization": "Bearer "+access_token, 'Content-Type': 'application/json'}
     url     = domain+"/api/capture/devices/upload_prediction"
 
-    while num_analytics > entries_limit:
-        analytics = analytics[:entries_limit] #take <entries_limit> from the analytics array
-        if use_aws:
-            did_sync  = kinesis_call(analytics)
-        else:
-            did_sync  = cloud_call(url, analytics, headers)
-        if not did_sync:
-            print('BREAKING FROM ANALYTICS LOOP')
-            break
+    update_last_sync_on_success(analytics[-1]['modified'])
+    start, end, count = 0, entries_limit, 0
+    while count < num_analytics:
 
-        analytics     = get_next_analytics_batch()
-        num_analytics = len(analytics)
-    else:
-        analytics = get_next_analytics_batch()
+        a = analytics[start:end] #take <entries_limit> from the analytics array
         if use_aws:
-            kinesis_call(analytics)
-        else:
-            cloud_call(url, analytics, headers)
+            j_push = job_queue.enqueue(kinesis_call, a, job_timeout=99999999, result_ttl=-1)
+            if j_push: insert_job(j_push.id, 'Syncing_'+str(len(a))+'_with_cloud')
 
+            # did_sync  = kinesis_call(analytics)
+        else:
+            j_push = job_queue.enqueue(cloud_call, url, a, headers, job_timeout=99999999, result_ttl=-1)
+            if j_push: insert_job(j_push.id, 'Syncing_'+str(len(a))+'_with_cloud')
+
+            # did_sync  = cloud_call(url, a, headers)
+
+        start += entries_limit
+        end += entries_limit
+        count += len(a)
+
+
+        # if not did_sync:
+        #     print('BREAKING FROM ANALYTICS LOOP')
+        #     break
+
+        # analytics     = get_next_analytics_batch()
+        # num_analytics = len(analytics)
+
+    # else:
+    #     analytics = get_next_analytics_batch()
+    #     if use_aws:
+    #         kinesis_call(analytics)
+    #     else:
+    #         cloud_call(url, analytics, headers)
 
     return True
