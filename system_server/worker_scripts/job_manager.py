@@ -105,9 +105,10 @@ def kinesis_call(analytics):
         return True
     try:
         for a in analytics:
+            if '_id' in a: del a['_id']
             did_send = aws_client.send_stream(a)
-            print(did_send)
             mark_as_synced(a['id'])
+            print(did_send)
         print('--------------------------------------')
         return did_send
     except Exception as error:
