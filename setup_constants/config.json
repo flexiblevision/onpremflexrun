@@ -1,5 +1,5 @@
 {
-    "use_aws": true,
+    "use_aws": false,
     "auth0_CID": "512rYG6XL32k3uiFg38HQ8fyubOOUUKf",
     "auth0_domain": "auth.flexiblevision.com",
     "cloud_domain": "https://v1.cloud.flexiblevision.com",

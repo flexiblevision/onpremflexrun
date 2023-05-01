@@ -30,7 +30,6 @@ class Kinesis(object):
     def authorize(self):
         #pull aws keys from cloud
         access_token = self.get_auth_token()
-        print(access_token)
         auth_token   = 'Bearer {}'.format(access_token)
         headers      = {'Authorization': auth_token}
         url          = '{}pull_foreign_auth'.format(CLOUD_FUNCTIONS_BASE)
