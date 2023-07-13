@@ -49,7 +49,7 @@ def get_next_analytics_batch():
     sync_obj = find_utility('predict_sync')
     if sync_obj:
         time      = sync_obj[0]['ms_time']
-        analytics = analytics_coll.find({"modified": {"$gt": int(time) }}).sort("modified", 1)
+        analytics = analytics_coll.find({"modified": {"$gt": int(time), "$lt": int(time+5000)}}).sort("modified", 1)
         result    = json.loads(json_util.dumps(analytics))
         return result
     else:
@@ -62,13 +62,12 @@ def get_unsynced_records():
     sync_obj = find_utility('predict_sync')
     if sync_obj:
         time      = sync_obj[0]['ms_time']
-        analytics = analytics_coll.find({"synced": False})
+        analytics = analytics_coll.find({"synced": False}).limit(20)
         result    = json.loads(json_util.dumps(analytics))
 
-        for i in analytics:
+        for i in result:
             mark_as_processing(i['id'])
 
-        result    = json.loads(json_util.dumps(analytics))
         return result
     else:
         util_collection.insert({
@@ -95,7 +94,11 @@ def cloud_call(url, analytics, headers):
         res = requests.post(url, json=analytics, headers=headers)
         print(res)
         print('--------------------------------------')
-        return (res.status_code == 200)
+        success = res.status_code == 200)
+        if success:
+            for i in analytics: mark_as_processing(i['id'])
+
+        return success
     except:
         print('FAILED TO CALL ', url)
         return False
@@ -120,8 +123,9 @@ def update_last_sync_on_success(last_record_timestamp):
             {"type": "predict_sync"},
             {"$set": {"ms_time": last_record_timestamp}}, True)
 
-def push_analytics_to_cloud(domain, access_token):
-    analytics     = get_next_analytics_batch()
+def push_analytics_to_cloud_batch(domain, access_token):
+    #analytics     = get_next_analytics_batch()
+    analytics     = get_unsynced_records()
     num_analytics = len(analytics)
     entries_limit = 20
 
@@ -166,5 +170,24 @@ def push_analytics_to_cloud(domain, access_token):
     #         kinesis_call(analytics)
     #     else:
     #         cloud_call(url, analytics, headers)
+
+    return True
+
+def push_analytics_to_cloud(domain, access_token):
+    headers = {"Authorization": "Bearer "+access_token, 'Content-Type': 'application/json'}
+    url     = domain+"/api/capture/devices/upload_prediction"
+
+    num_analytics = 1
+    while num_analytics > 0:
+        analytics = get_unsynced_records()
+        num_analytics = len(analytics)
+        if num_analytics <= 0: return True
+        print('#Analytics: ', num_analytics)
+        if use_aws:
+            j_push = job_queue.enqueue(kinesis_call, analytics, job_timeout=99999999, result_ttl=-1)
+            if j_push: insert_job(j_push.id, 'Syncing_'+str(len(analytics))+'_with_cloud')
+        else:
+            j_push = job_queue.enqueue(cloud_call, url, analytics, headers, job_timeout=99999999, result_ttl=-1)
+            if j_push: insert_job(j_push.id, 'Syncing_'+str(len(analytics))+'_with_cloud')
 
     return True

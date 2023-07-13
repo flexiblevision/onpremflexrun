@@ -141,7 +141,7 @@ def set_static_ips(network = None):
     with open ('/etc/netplan/fv-net-init.yaml', 'w') as f:
         f.write('network:\n')
         f.write('  version: 2\n')
-        f.write('  ethernets:\n')
+        f.write('  ethernets:')
         f.write('    '+interface_name+':\n')
         f.write('      dhcp4: false\n')
         f.write('      mtu: 9000\n')
@@ -162,9 +162,9 @@ def build_set_netplan():
         with open ('/etc/netplan/fv-net-init.yaml', 'w') as f:
             f.write('network:\n')
             f.write('  version: 2\n')
-            f.write('  ethernets:\n')
+            f.write('  ethernets:')
             for i in interfaces:
-                f.write('    '+i['iname']+':\n')
+                f.write('\n    '+i['iname']+':\n')
                 f.write('      dhcp4: '+str(i['dhcp'])+'\n')
                 f.write('      mtu: 9000\n')
                 f.write('      addresses: '+i['ip_string'])
