@@ -213,7 +213,7 @@ if [ $VISIONTOOLS_UPTD != 'True' ]; then
         docker stop visiontools
         docker rm visiontools
     } || {
-        echo 'captureui does not exist to remove'
+        echo 'visiontools does not exist to remove'
     }
     docker run -d --name=visiontools -p 0.0.0.0:5021:5021 --restart unless-stopped \
         --network imagerie_nw --gpus all -e MONGODB_URL=$MONGODB_URL \
