@@ -5,6 +5,7 @@ SYSTEM_ARCH=$4
 PREDICT_LITE_VERSION=$5
 VISION_VERSION=$6
 CREATOR_VERSION=$7
+VISIONTOOLS_VERSION=$8
 
 REDIS_VERSION='5.0.6'
 MONGO_VERSION='4.2'
@@ -17,6 +18,8 @@ REDIS_PORT='6379'
 DB_NAME='fvonprem'
 MONGO_SERVER='172.17.0.1'
 MONGO_PORT='27017'
+MONGODB_URL='mongodb://localhost:27017'
+REMBG_MODEL='u2netp'
 CLOUD_DOMAIN="$(cat ~/flex-run/setup_constants/cloud_domain.txt)"
 GCP_FUNCTIONS_DOMAIN="$(cat ~/flex-run/setup_constants/gcp_functions_domain.txt)"
 
@@ -83,3 +86,9 @@ docker run -d --name=nodecreator -p 0.0.0.0:1880:1880 \
     --log-opt max-size=50m --log-opt max-file=5 \
     -v /home/visioncell/Documents:/Documents \
     --network host -t fvonprem/$4-nodecreator:$CREATOR_VERSION 
+
+docker run -d --name=visiontools -p 0.0.0.0:5021:5021 --restart unless-stopped \
+    --network imagerie_nw --gpus all -e MONGODB_URL=$MONGODB_URL \
+    -e DB_NAME=$DB_NAME -e MONGO_SERVER=$MONGO_SERVER -e MONGO_PORT=$MONGO_PORT \
+    -e REMBG_MODEL=$REMBG_MODEL -e PYTHONUNBUFFERED=1 \
+    -d fvonprem/x86-visiontools:VISIONTOOLS_VERSION

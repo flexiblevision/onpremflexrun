@@ -84,7 +84,7 @@ class Kinesis(object):
         if client:
             client.put_record(
                 StreamARN=self.stream,
-                Data=json.dumps(data),
+                Data=json.dumps(data)+'\n',
                 PartitionKey=str(partition_key)
             )
             return True
