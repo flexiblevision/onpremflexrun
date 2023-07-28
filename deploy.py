@@ -144,6 +144,7 @@ def step_2():
     predictlite_version = is_container_uptodate('predictlite')[1]
     vision_version = is_container_uptodate('vision')[1]
     creator_version = is_container_uptodate('nodecreator')[1]
+    visiontools_version = is_container_uptodate('visiontools')[1]
 
     subprocess.call([
         "sh", 
@@ -153,7 +154,8 @@ def step_2():
         prediction_version, 
         predictlite_version, 
         vision_version,
-        creator_version
+        creator_version,
+        visiontools_version
     ])
 
 def step_3():

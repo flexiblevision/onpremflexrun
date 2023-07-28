@@ -69,7 +69,8 @@ CONTAINERS  = {
     'predict lite': 'predictlite',
     'nodecreator': 'nodecreator',
     'vision': 'vision',
-    'database': 'mongo' 
+    'database': 'mongo',
+    'visiontools': 'visiontools'
 }
 
 CLOUD_DOMAIN = "https://clouddeploy.api.flexiblevision.com"
@@ -141,7 +142,7 @@ def set_static_ips(network = None):
     with open ('/etc/netplan/fv-net-init.yaml', 'w') as f:
         f.write('network:\n')
         f.write('  version: 2\n')
-        f.write('  ethernets:\n')
+        f.write('  ethernets:')
         f.write('    '+interface_name+':\n')
         f.write('      dhcp4: false\n')
         f.write('      mtu: 9000\n')
@@ -162,9 +163,9 @@ def build_set_netplan():
         with open ('/etc/netplan/fv-net-init.yaml', 'w') as f:
             f.write('network:\n')
             f.write('  version: 2\n')
-            f.write('  ethernets:\n')
+            f.write('  ethernets:')
             for i in interfaces:
-                f.write('    '+i['iname']+':\n')
+                f.write('\n    '+i['iname']+':\n')
                 f.write('      dhcp4: '+str(i['dhcp'])+'\n')
                 f.write('      mtu: 9000\n')
                 f.write('      addresses: '+i['ip_string'])
@@ -358,12 +359,13 @@ class TogglePin(Resource):
 class Upgrade(Resource):
     @auth.requires_auth
     def get(self):
-        cap_uptd     = is_container_uptodate('backend')[1]
-        capui_uptd   = is_container_uptodate('frontend')[1]
-        predict_uptd = is_container_uptodate('prediction')[1]
+        cap_uptd         = is_container_uptodate('backend')[1]
+        capui_uptd       = is_container_uptodate('frontend')[1]
+        predict_uptd     = is_container_uptodate('prediction')[1]
         predictlite_uptd = is_container_uptodate('predictlite')[1]
         vision_uptd      = is_container_uptodate('vision')[1]
         creator_uptd     = is_container_uptodate('nodecreator')[1]
+        visiontools_uptd = is_container_uptodate('visiontools')[1]
 
         try:
             host    = 'http://172.17.0.1'
@@ -380,7 +382,7 @@ class Upgrade(Resource):
 
         #upgrade containers 
         os.system("chmod +x "+os.environ['HOME']+"/flex-run/system_server/upgrade_system.sh")
-        os.system("sh "+os.environ['HOME']+"/flex-run/system_server/upgrade_system.sh "+cap_uptd+" "+capui_uptd+" "+predict_uptd+" "+predictlite_uptd+" "+vision_uptd+" "+creator_uptd)
+        os.system("sh "+os.environ['HOME']+"/flex-run/system_server/upgrade_system.sh "+cap_uptd+" "+capui_uptd+" "+predict_uptd+" "+predictlite_uptd+" "+vision_uptd+" "+creator_uptd+" "+visiontools_uptd)
 
 class UpgradeFlexRun(Resource):
     @auth.requires_auth
@@ -544,6 +546,7 @@ class SystemVersions(Resource):
         predictlite_version = get_current_container_version('predictlite')
         vision_version      = get_current_container_version('vision')
         creator_version     = get_current_container_version('nodecreator')
+        visiontools_version = get_current_container_version('visiontools')
 
         
         return {'backend_version': backend_version,
@@ -551,7 +554,8 @@ class SystemVersions(Resource):
                 'prediction_version': prediction_version,
                 'predictlite_version': predictlite_version,
                 'vision_version': vision_version,
-                'creator_version': creator_version
+                'creator_version': creator_version,
+                'visiontools_version': vision_version
                 }
 
 class SystemIsUptodate(Resource):
@@ -562,7 +566,8 @@ class SystemIsUptodate(Resource):
             is_container_uptodate('prediction')[0], 
             is_container_uptodate('predictlite')[0],
             is_container_uptodate('vision')[0],
-            is_container_uptodate('nodecreator')[0]
+            is_container_uptodate('nodecreator')[0],
+            is_container_uptodate('visiontools')[0]
         ])
 
 class DeviceInfo(Resource):
@@ -849,11 +854,13 @@ class SyncAnalytics(Resource):
         access_token = request.headers.get('Access-Token')
 
         if access_token:
-            analytics = get_next_analytics_batch()
-            if analytics:
-                num_data  = len(analytics)
-                j_push    = job_queue.enqueue(push_analytics_to_cloud, CLOUD_DOMAIN, access_token, job_timeout=99999999, result_ttl=-1)
-                if j_push: insert_job(j_push.id, 'Syncing_'+str(num_data)+'_with_cloud')
+            push_analytics_to_cloud(CLOUD_DOMAIN, access_token)
+            # analytics = get_next_analytics_batch()
+            # if analytics:
+            #     num_data  = len(analytics)
+            #     j_push    = job_queue.enqueue(push_analytics_to_cloud, CLOUD_DOMAIN, access_token, job_timeout=99999999, result_ttl=-1)
+            #     if j_push: insert_job(j_push.id, 'Syncing_'+str(num_data)+'_with_cloud')
+
 
             events = get_unprocessed_events()
             if events['count'] > 0:

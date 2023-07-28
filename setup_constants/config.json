@@ -1,0 +1,12 @@
+{
+    "use_aws": false,
+    "auth0_CID": "512rYG6XL32k3uiFg38HQ8fyubOOUUKf",
+    "auth0_domain": "auth.flexiblevision.com",
+    "cloud_domain": "https://v1.cloud.flexiblevision.com",
+    "branch": "master",
+    "gcp_functions_domain": "https://us-central1-flexible-vision-staging.cloudfunctions.net/",
+    "interface_name": "enp0s31f6",
+    "latest_stable_ref": "latest_stable_version",
+    "static_ip": "192.168.10.35",
+    "system_user": "visioncell"
+}

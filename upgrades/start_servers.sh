@@ -18,11 +18,17 @@ sudo crontab -r
 (sudo crontab -l; echo '@reboot sudo sh '$HOME'/flex-run/scripts/redis_server_start.sh') | sudo crontab -
 (sudo crontab -l; echo '@reboot sudo sh '$HOME'/flex-run/scripts/tcp_server_start.sh') | sudo crontab -
 (sudo crontab -l; echo '@reboot sudo sh '$HOME'/flex-run/scripts/gpio_server_start.sh') | sudo crontab -
-(sudo crontab -l; echo '@reboot sudo sh '$HOME'/flex-run/scripts/worker_server_start.sh') | sudo crontab -
+#---workers-----
+(sudo crontab -l; echo '@reboot sleep 30 && sudo sh '$HOME'/flex-run/scripts/worker_server_start.sh') | sudo crontab -
+(sudo crontab -l; echo '@reboot sleep 30 && sudo sh '$HOME'/flex-run/scripts/worker_server_start.sh') | sudo crontab -
+(sudo crontab -l; echo '@reboot sleep 30 && sudo sh '$HOME'/flex-run/scripts/worker_server_start.sh') | sudo crontab -
+(sudo crontab -l; echo '@reboot sleep 30 && sudo sh '$HOME'/flex-run/scripts/worker_server_start.sh') | sudo crontab -
+(sudo crontab -l; echo '@reboot sleep 30 && sudo sh '$HOME'/flex-run/scripts/worker_server_start.sh') | sudo crontab -
+#----------------
 (sudo crontab -l; echo '@reboot sudo sh '$HOME'/flex-run/scripts/sync_worker_start.sh') | sudo crontab -
 (sudo crontab -l; echo '@reboot sudo sh '$HOME'/flex-run/scripts/filesystem_server.sh') | sudo crontab -
 (sudo crontab -l; echo '@reboot sudo sh '$HOME'/flex-run/scripts/mediasystem_server.sh') | sudo crontab -
-
+(sudo crontab -l; echo '0 */8 * * * docker exec vision rm -rf /tmp') | sudo crontab -
 (sudo crontab -l; echo '@reboot sleep 30 && sudo  sh '$HOME'/flex-run/scripts/hotspot.sh') | sudo crontab -
 (sudo crontab -l; echo '@reboot sudo sh '$HOME'/flex-run/scripts/allocate_usbfs_memory.sh') | sudo crontab -
 (sudo crontab -l; echo '@reboot sleep 50 && sudo sh '$HOME'/flex-run/scripts/restart_localprediction.sh') | sudo crontab -

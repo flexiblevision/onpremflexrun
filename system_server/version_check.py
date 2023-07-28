@@ -8,7 +8,8 @@ CONTAINERS  = {
     'prediction':'localprediction',
     'predictlite': 'predictlite',
     'vision': 'vision',
-    'nodecreator': 'nodecreator'
+    'nodecreator': 'nodecreator',
+    'visiontools': 'visiontools'
 }
 
 CLOUD_FUNCTIONS_BASE = 'https://us-central1-flexible-vision-staging.cloudfunctions.net/'
@@ -30,7 +31,6 @@ def get_current_container_version(container):
     if not base_data: return False
     data = base_data.split(':')[1].replace("'", "")
     return data
-
 
 def get_latest_image_versions(image):
     data    = {"arch": system_arch(), "image": image}

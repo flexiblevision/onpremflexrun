@@ -5,6 +5,7 @@ SYSTEM_ARCH=$4
 PREDLITE_UPTD=$5
 VISION_UPTD=$6
 CREATOR_UPTD=$7
+VISIONTOOLS_UPTD=$8
 
 REDIS_VERSION='5.0.6'
 MONGO_VERSION='4.2'
@@ -17,6 +18,8 @@ REDIS_PORT='6379'
 DB_NAME='fvonprem'
 MONGO_SERVER='172.17.0.1'
 MONGO_PORT='27017'
+MONGODB_URL='mongodb://localhost:27017'
+REMBG_MODEL='u2netp'
 CLOUD_DOMAIN="$(cat ~/flex-run/setup_constants/cloud_domain.txt)"
 GCP_FUNCTIONS_DOMAIN="$(cat ~/flex-run/setup_constants/gcp_functions_domain.txt)"
 TZ="$(cat /etc/timezone)"
@@ -199,6 +202,27 @@ if [ $CREATOR_UPTD  != 'True' ]; then
 
     cur_step=$((cur_step+1))
     python3 $r_path -i $uuid -t 'updated nodecreator server' -c $cur_step
+fi
+
+if [ $VISIONTOOLS_UPTD != 'True' ]; then
+    python3 $r_path -i $uuid -t 'updating visiontools server' -c $cur_step
+
+    docker pull fvonprem/$4-visiontools:$VISIONTOOLS_UPTD
+    # update visiontools
+    {
+        docker stop visiontools
+        docker rm visiontools
+    } || {
+        echo 'visiontools does not exist to remove'
+    }
+    docker run -d --name=visiontools -p 0.0.0.0:5021:5021 --restart unless-stopped \
+        --network imagerie_nw --gpus all -e MONGODB_URL=$MONGODB_URL \
+        -e DB_NAME=$DB_NAME -e MONGO_SERVER=$MONGO_SERVER -e MONGO_PORT=$MONGO_PORT \
+        -e REMBG_MODEL=$REMBG_MODEL -e PYTHONUNBUFFERED=1 \
+        -d fvonprem/$4-visiontools:$VISIONTOOLS_UPTD
+
+    cur_step=$((cur_step+1))
+    python3 $r_path -i $uuid -t 'updated visiontools server' -c $cur_step
 fi
 
 if [ $CAPUI_UPTD != 'True' ]; then
