@@ -219,7 +219,7 @@ if [ $VISIONTOOLS_UPTD != 'True' ]; then
         --network imagerie_nw --gpus all -e MONGODB_URL=$MONGODB_URL \
         -e DB_NAME=$DB_NAME -e MONGO_SERVER=$MONGO_SERVER -e MONGO_PORT=$MONGO_PORT \
         -e REMBG_MODEL=$REMBG_MODEL -e PYTHONUNBUFFERED=1 \
-        -d fvonprem/x86-visiontools:$VISIONTOOLS_VERSION
+        -d fvonprem/$4-visiontools:$VISIONTOOLS_UPTD
 
     cur_step=$((cur_step+1))
     python3 $r_path -i $uuid -t 'updated visiontools server' -c $cur_step
