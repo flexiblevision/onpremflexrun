@@ -94,7 +94,7 @@ def cloud_call(url, analytics, headers):
         res = requests.post(url, json=analytics, headers=headers)
         print(res)
         print('--------------------------------------')
-        success = res.status_code == 200)
+        success = res.status_code == 200
         if success:
             for i in analytics: mark_as_processing(i['id'])
 
