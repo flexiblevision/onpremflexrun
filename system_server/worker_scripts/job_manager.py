@@ -80,9 +80,10 @@ def mark_as_processing(record_id):
         {"$set": {"synced": "processing"}}, True)
 
 def mark_as_synced(record_id):
-    analytics_coll.update_one(
-        {"id": record_id},
-        {"$set": {"synced": True}}, True)
+    analytics_coll.remove({"id": record_id})
+    # analytics_coll.update_one(
+    #     {"id": record_id},
+    #     {"$set": {"synced": True}}, True)
 
 def cloud_call(url, analytics, headers):
     if not analytics:
@@ -96,7 +97,7 @@ def cloud_call(url, analytics, headers):
         print('--------------------------------------')
         success = res.status_code == 200
         if success:
-            for i in analytics: mark_as_processing(i['id'])
+            for i in analytics: mark_as_synced(i['id'])
 
         return success
     except:
