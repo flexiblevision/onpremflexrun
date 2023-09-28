@@ -216,7 +216,7 @@ if [ $VISIONTOOLS_UPTD != 'True' ]; then
         echo 'visiontools does not exist to remove'
     }
     docker run -d --name=visiontools -p 0.0.0.0:5021:5021 --restart unless-stopped \
-        --network imagerie_nw --gpus all -e MONGODB_URL=$MONGODB_URL \
+        --network imagerie_nw --runtime=nvidia -e MONGODB_URL=$MONGODB_URL \
         -e DB_NAME=$DB_NAME -e MONGO_SERVER=$MONGO_SERVER -e MONGO_PORT=$MONGO_PORT \
         -e REMBG_MODEL=$REMBG_MODEL -e PYTHONUNBUFFERED=1 \
         -d fvonprem/$4-visiontools:$VISIONTOOLS_UPTD
