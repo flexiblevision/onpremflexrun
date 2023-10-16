@@ -62,7 +62,10 @@ def get_unsynced_records():
     sync_obj = find_utility('predict_sync')
     if sync_obj:
         time      = sync_obj[0]['ms_time']
-        analytics = analytics_coll.find({"synced": False}).limit(20)
+
+        sync_time = time_now_ms() - 30000
+        query     = {"synced": False, "modified": {"$lt": int(sync_time)}}
+        analytics = analytics_coll.find(query).limit(20)
         result    = json.loads(json_util.dumps(analytics))
 
         for i in result:
