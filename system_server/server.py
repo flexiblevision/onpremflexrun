@@ -40,7 +40,7 @@ import platform
 import datetime
 
 if platform.processor() != 'aarch64':
-    from gpio.gpio_helper import toggle_pin
+    from gpio.gpio_helper import toggle_pin, set_pin_state
 
 from redis import Redis
 from rq import Queue, Retry, Worker, Connection
@@ -355,6 +355,14 @@ class TogglePin(Resource):
                 return False
         else:
             return False
+
+class SetPin(Resource):
+    def put(self):
+        j = request.json
+        if 'pin_num' in j and 'state' in j:
+            return set_pin_state(j['pin_num'], j['state'])
+        else:
+            return -1
 
 class Upgrade(Resource):
     @auth.requires_auth
@@ -906,6 +914,7 @@ api.add_resource(UpdateIp, '/update_ip')
 api.add_resource(GetLanIps, '/get_lan_ips')
 api.add_resource(GetCameraUID, '/camera_uid/<string:idx>')
 api.add_resource(TogglePin, '/toggle_pin')
+api.add_resource(SetPin, '/set_pin')
 api.add_resource(RestartBackend, '/refresh_backend')
 api.add_resource(ListServices, '/list_services')
 api.add_resource(UploadModel, '/upload_model')
