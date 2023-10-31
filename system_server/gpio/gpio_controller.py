@@ -25,12 +25,16 @@ functions = CDLL(so_file)
 # value - HIGH = 1
 # value - LOW  = 0
 
+def ms_timestamp():
+    return int(datetime.datetime.now().timestamp()*1000)
+
 class GPIO:
     def __init__(self):
         self.state_query      = {'type': 'gpio_pin_state'}
         self.cur_pin_state    = pin_state_ref.find_one(self.state_query)
         self.last_input_state = "wait"
         self.debounce_delay   = .001
+        self.last_pin_state   = None
 
     def get_pass_fail_entry(self, model, version):
         query = {'modelName': model, 'modelVersion': version}
@@ -159,6 +163,13 @@ class GPIO:
         self.cur_pin_state = pin_state_ref.find_one(self.state_query)
         pin_state_ref.update_one(self.state_query, {'$set': self.cur_pin_state}, True)
 
+    def send_pin_status(self, pin_state):
+        data = {
+            'state': pin_state,
+            'timestamp': ms_timestamp()
+        }
+        resp = requests.post('http://172.17.0.1:1880/io', json=pin_state, timeout=2)
+        return resp
 
     def run(self):
         self.default_pin_state()
@@ -177,6 +188,10 @@ class GPIO:
 
             if 0 in all_pin_state:
                 cur_pin = all_pin_state.index(0)+1
+                if self.last_pin_state != None and self.last_pin_state != all_pin_state:
+                    thr = threading.Thread(target=self.send_pin_status, args=({'state': all_pin_state}), daemon=True)
+                    thr.start()
+
             else:
                 #clear input state
                 self.last_input_state = "wait"
