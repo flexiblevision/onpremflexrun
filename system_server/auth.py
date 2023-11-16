@@ -12,6 +12,8 @@ AUTH0_DOMAIN = settings.config['auth0_domain'] if 'auth0_domain' in settings.con
 alg_type     = settings.config['auth_alg'] if 'auth_alg' in settings.config else 'RS256'
 ALGORITHMS   = [alg_type]
 CLIENT_ID    = settings.config['auth0_CID'] if 'auth0_CID' in settings.config else '512rYG6XL32k3uiFg38HQ8fyubOOUUKf'
+ENVIRON      = settings.config['environ'] if 'environ' in settings.config else "cloud"
+AUDIENCE     = settings.config['auth0_audience'] if 'auth0_audience' in settings.config else 'https://flexiblevision/api'
 
 APP = Flask(__name__)
 
@@ -75,16 +77,26 @@ def requires_auth(f):
                     "e": key["e"]
                 }
 
+        if ENVIRON == 'local':
+            rsa_key = True
         if rsa_key:
             try:
-                payload = jwt.decode(
-                    token,
-                    rsa_key,
-                    algorithms=ALGORITHMS,
-                    audience=CLIENT_ID,
-                    issuer="https://"+AUTH0_DOMAIN+"/",
-                    options={'verify_exp': False}
-                )
+                if ENVIRON == 'local':
+                    payload = jwt.decode(
+                        token, 
+                        settings.config['jwt_secret_key'], 
+                        issuer="https://"+os.environ['AUTH0_DOMAIN']+"/", 
+                        audience=AUDIENCE, algorithms=ALGORITHMS
+                    )
+                else:
+                    payload = jwt.decode(
+                        token,
+                        rsa_key,
+                        algorithms=ALGORITHMS,
+                        audience=CLIENT_ID,
+                        issuer="https://"+AUTH0_DOMAIN+"/",
+                        options={'verify_exp': False}
+                    )
             except jwt.ExpiredSignatureError:
                 raise AuthError({"code": "token_expired",
                                 "description": "token is expired"}, 401)

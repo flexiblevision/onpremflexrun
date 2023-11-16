@@ -5,6 +5,7 @@ from scripts.name_generator import generate_name
 CLOUD = {
     "environ": "cloud",
     "use_aws": False,
+    "auth0_audience": "https://flexiblevision/api",
     "auth0_CID": "512rYG6XL32k3uiFg38HQ8fyubOOUUKf",
     "auth0_domain": "auth.flexiblevision.com",
     "cloud_domain": "https://v1.cloud.flexiblevision.com",
@@ -14,6 +15,7 @@ CLOUD = {
     "latest_stable_ref": "latest_stable_version",
     "static_ip": "192.168.10.35",
     "system_user": "visioncell",
+    "jwt_secret_key": "123",
     "auth_alg": "RS256"
 }
 
@@ -21,6 +23,7 @@ LOCAL = {
     "environ": "local",
     "use_aws": False,
     "auth0_CID": "123",
+    "auth0_audience": "https://flexiblevision/api",
     "auth0_domain": "auth.flexiblevision.com",
     "cloud_domain": "http://localhost",
     "branch": "master",
@@ -29,7 +32,8 @@ LOCAL = {
     "latest_stable_ref": "latest_stable_version",
     "static_ip": "192.168.10.35",
     "system_user": "visioncell",
-    "auth_alg": "HS256"
+    "auth_alg": "HS256",
+    "jwt_secret_key": "123"
 }
 
 def generate_environment_config(environment='cloud', override=False):
