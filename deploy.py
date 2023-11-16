@@ -9,39 +9,6 @@ import platform
 from system_server.version_check import is_container_uptodate
 from setup.management import generate_environment_config
 
-# def deploy_local_cam():
-#     check_gcp_login()
-#     exists = os.path.isfile('cloud_config/input.tfvars')
-#     if not exists:
-#         sys.stdout.write("File cloud_config/output.tfvars does not exist.\n")
-#         sys.stdout.write("Deploy Cloud Components before continuing.\n")
-#     p = query_yes_no("Deploy a Flexible Vision local camera server?")
-#     if p:
-#         sys.stdout.write("######################      Warning     ########################\n")
-#         sys.stdout.write("Local Camera Servers Must :\n")
-#         sys.stdout.write("\t1. Have A local NVIDIA Graphics Card\n")
-#         sys.stdout.write("\t2. Be Running Ubuntu 18.04\n")
-#         sys.stdout.write("\t3. Be Available through SSH\n")
-#         sys.stdout.write("\t4. Have a USB Camera Attached\n")
-#         p = query_yes_no("Does your local camera server meet these requirements ? ")
-#         if p:
-#             sys.stdout.write("What is the IP Address or Host Name of the local camera server ? ")
-#             ip = input().lower()
-#             sys.stdout.write("What is the SSH username to attach to the local camera server ? ")
-#             user = input().lower()
-#             password = getpass.getpass("What is the SSH Password to access the local camera server ? ")
-#             with open ("cloud_config/output.tfvars", "r") as varfile:
-#                 config = varfile.read()
-#             config += "camera_server = \"{}\"\n".format(ip)
-#             config += "ssh_username = \"{}\"\n".format(user)
-#             config += "ssh_password = \"{}\"\n".format(password)
-#             with open ("/tmp/input.tfvars", "w") as varfile:
-#                 varfile.write(config)
-#             subprocess.call([terraform,"init","local_setup/"])
-#             subprocess.call([terraform,"apply","-var-file=/tmp/input.tfvars","-auto-approve","-state=local_config_{}/terraform.tfstate".format(ip),"local_setup/"])
-#             os.remove("/tmp/input.tfvars")
-
-# UTIL FUNCTIONS------------------
 def clear_text_color():
     print("\033[0m")
 
