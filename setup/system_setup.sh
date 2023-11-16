@@ -58,7 +58,7 @@ docker run -d --name=capdev -p 0.0.0.0:5000:5000 --restart unless-stopped --priv
     --log-opt max-size=50m --log-opt max-file=5 \
     -d fvonprem/$4-backend:$CAPDEV_VERSION
 
-if [ "$ENVIRON" = "local" ]; then
+if [ "$ENVIRON"==local ]; then
     docker run -p 0.0.0.0:3000:3000 --restart unless-stopped \
         --name captureui -e CAPTURE_SERVER=http://172.17.0.1:5000 -e PROCESS_SERVER=http://172.17.0.1 -d --network imagerie_nw \
         --log-opt max-size=50m --log-opt max-file=5 -e REACT_APP_ARCH=$4 \
@@ -96,7 +96,7 @@ docker run -d --name=nodecreator -p 0.0.0.0:1880:1880 \
     --network host -t fvonprem/$4-nodecreator:$CREATOR_VERSION 
 
 docker run -d --name=visiontools -p 0.0.0.0:5021:5021 --restart unless-stopped \
-    --network imagerie_nw --gpus all -e MONGODB_URL=$MONGODB_URL \
+    --network imagerie_nw --runtime=nvidia -e MONGODB_URL=$MONGODB_URL \
     -e DB_NAME=$DB_NAME -e MONGO_SERVER=$MONGO_SERVER -e MONGO_PORT=$MONGO_PORT \
     -e REMBG_MODEL=$REMBG_MODEL -e PYTHONUNBUFFERED=1 \
     -d fvonprem/x86-visiontools:$VISIONTOOLS_VERSION

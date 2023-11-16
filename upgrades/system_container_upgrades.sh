@@ -217,7 +217,7 @@ if [ $VISIONTOOLS_UPTD != 'True' ]; then
         echo 'visiontools does not exist to remove'
     }
     docker run -d --name=visiontools -p 0.0.0.0:5021:5021 --restart unless-stopped \
-        --network imagerie_nw --gpus all -e MONGODB_URL=$MONGODB_URL \
+        --network imagerie_nw --runtime=nvidia -e MONGODB_URL=$MONGODB_URL \
         -e DB_NAME=$DB_NAME -e MONGO_SERVER=$MONGO_SERVER -e MONGO_PORT=$MONGO_PORT \
         -e REMBG_MODEL=$REMBG_MODEL -e PYTHONUNBUFFERED=1 \
         -d fvonprem/$4-visiontools:$VISIONTOOLS_UPTD
@@ -238,7 +238,7 @@ if [ $CAPUI_UPTD != 'True' ]; then
         echo 'captureui does not exist to remove'
     }
 
-    if [ "$ENVIRON" = "local" ]; then
+    if [ "$ENVIRON"==local ]; then
         docker run -p 0.0.0.0:3000:3000 --restart unless-stopped \
             --name captureui -e CAPTURE_SERVER=http://172.17.0.1:5000 -e PROCESS_SERVER=http://172.17.0.1 -d --network imagerie_nw \
             --log-opt max-size=50m --log-opt max-file=5 -e REACT_APP_ARCH=$4 \
