@@ -55,6 +55,7 @@ docker run -d --name=capdev -p 0.0.0.0:5000:5000 --restart unless-stopped --priv
     -e REDIS_URL=$REDIS_URL -e REDIS_SERVER=$REDIS_SERVER -e REDIS_PORT=$REDIS_PORT \
     -e DB_NAME=$DB_NAME -e MONGO_SERVER=$MONGO_SERVER -e MONGO_PORT=$MONGO_PORT \
     -e GCP_FUNCTIONS_DOMAIN=$GCP_FUNCTIONS_DOMAIN -e CLOUD_DOMAIN=$CLOUD_DOMAIN \
+    -e ENVIRON=$ENVIRON \
     --log-opt max-size=50m --log-opt max-file=5 \
     -d fvonprem/$4-backend:$CAPDEV_VERSION
 
@@ -99,4 +100,4 @@ docker run -d --name=visiontools -p 0.0.0.0:5021:5021 --restart unless-stopped \
     --network imagerie_nw --runtime=nvidia -e MONGODB_URL=$MONGODB_URL \
     -e DB_NAME=$DB_NAME -e MONGO_SERVER=$MONGO_SERVER -e MONGO_PORT=$MONGO_PORT \
     -e REMBG_MODEL=$REMBG_MODEL -e PYTHONUNBUFFERED=1 \
-    -d fvonprem/x86-visiontools:$VISIONTOOLS_VERSION
+    -t fvonprem/x86-visiontools:$VISIONTOOLS_VERSION
