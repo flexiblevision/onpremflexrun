@@ -1,3 +1,8 @@
+import os
+import sys
+settings_path = os.environ['HOME']+'/flex-run'
+sys.path.append(settings_path)
+
 from flask import make_response, request, current_app
 from functools import update_wrapper
 
@@ -6,7 +11,6 @@ from flask_restful import Resource, Api
 import json
 from json import dumps
 import subprocess
-import os
 import auth
 import requests
 import re
@@ -16,8 +20,6 @@ from flask_cors import CORS
 from flask import jsonify
 from pathlib import Path
 
-import os
-import sys
 import zipfile, io
 import base64
 import io
@@ -38,6 +40,7 @@ from timemachine.cleanup import cleanup_timemachine_records
 from timemachine.zip_push import push_event_records, get_unprocessed_events
 import platform 
 import datetime
+import settings
 
 if platform.processor() != 'aarch64':
     from gpio.gpio_helper import toggle_pin, set_pin_state
@@ -73,10 +76,7 @@ CONTAINERS  = {
     'visiontools': 'visiontools'
 }
 
-CLOUD_DOMAIN = "https://clouddeploy.api.flexiblevision.com"
-cloud_path   = os.path.expanduser('~/flex-run/setup_constants/cloud_domain.txt')
-with open(cloud_path, 'r') as file: 
-    CLOUD_DOMAIN = file.read().replace('\n', '')
+CLOUD_DOMAIN = settings.config['cloud_domain'] if 'cloud_domain' in settings.config else "https://clouddeploy.api.flexiblevision.com"
 
 daemon_services_list = {
     "FlexRun Server": "server.py",
@@ -105,23 +105,18 @@ def is_valid_ip(ip):
     return bool(m) and all(map(lambda n: 0 <= int(n) <= 255, m.groups()))
 
 def get_static_ip_ref():
-    static_ip  = '192.168.10.35'
-    path_ref   = os.path.expanduser('~/flex-run/setup_constants/static_ip.txt')
-    try:
-        with open(path_ref, 'r') as file:
-            static_ip = file.read().replace('\n', '')
-    except: return static_ip
+    static_ip  = settings.config['static_ip'] if 'static_ip' in settings.config else '192.168.10.35'
+    # path_ref   = os.path.expanduser('~/flex-run/setup_constants/static_ip.txt')
+    # try:
+    #     with open(path_ref, 'r') as file:
+    #         static_ip = file.read().replace('\n', '')
+    # except: return static_ip
     return static_ip
 
 def get_interface_name_ref():
     eth_ports = get_eth_port_names()
     if len(eth_ports) <= 1:
         interface_name  = 'enp0s31f6'
-        path_ref        = os.path.expanduser('~/flex-run/setup_constants/interface_name.txt')
-        try:
-            with open(path_ref, 'r') as file:
-                interface_name = file.read().replace('\n', '')
-        except: return interface_name
     else:
         interface_name = get_eth_port_names()[-1]
 
@@ -600,17 +595,8 @@ class DeviceInfo(Resource):
         info['system']        = system_info()
         info['arch']          = system_arch()
         info['mac_id']        = get_mac_id()
-        info['hotspot']       = ''
+        info['hotspot']       = settngs.config['ssid'] if 'ssid' in settings.config else 'not configured'
         info['last_active']   = str(datetime.datetime.now())
-
-        try:
-            cmd = subprocess.Popen(['cat', os.environ['HOME']+'/flex-run/setup_constants/visioncell_ssid.txt'], stdout=subprocess.PIPE)
-            cmd_out, cmd_err = cmd.communicate()
-            cleanStr = cmd_out.strip().decode("utf-8")
-            info['hotspot'] = cleanStr
-        except Exception as error:
-            print(error)
-
 
         return info
 

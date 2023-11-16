@@ -20,8 +20,8 @@ MONGO_SERVER='172.17.0.1'
 MONGO_PORT='27017'
 MONGODB_URL='mongodb://localhost:27017'
 REMBG_MODEL='u2netp'
-CLOUD_DOMAIN="$(cat ~/flex-run/setup_constants/cloud_domain.txt)"
-GCP_FUNCTIONS_DOMAIN="$(cat ~/flex-run/setup_constants/gcp_functions_domain.txt)"
+CLOUD_DOMAIN="$(jq '.cloud_domain' ~/fvconfig.json)"
+GCP_FUNCTIONS_DOMAIN="$(jq '.gcp_functions_domain' ~/fvconfig.json)"
 TZ="$(cat /etc/timezone)"
 
 uuid="$(uuidgen)"

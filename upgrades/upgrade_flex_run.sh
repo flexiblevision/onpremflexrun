@@ -1,4 +1,4 @@
-git clone --single-branch --branch "$(cat ~/flex-run/setup_constants/flex_run_branch.txt)" https://github.com/flexiblevision/onpremflexrun.git ~/flex-run-temp
+git clone --single-branch --branch "$(jq '.branch' ~/fvconfig.json)" https://github.com/flexiblevision/onpremflexrun.git ~/flex-run-temp
 cp -r ~/flex-run-temp/* ~/flex-run/
 rm -rf ~/flex-run-temp
 

@@ -5,19 +5,13 @@ from flask import Flask, request, jsonify, _request_ctx_stack
 
 from six.moves.urllib.request import urlopen
 from jose import jwt
+import sys
+import settings
 
-AUTH0_DOMAIN = 'auth.flexiblevision.com'
-ALGORITHMS   = ["RS256"]
-CLIENT_ID    = '512rYG6XL32k3uiFg38HQ8fyubOOUUKf'
-
-auth0_domain_path = os.path.expanduser('~/flex-run/setup_constants/auth0_domain.txt')
-with open(auth0_domain_path, 'r') as file:
-    AUTH0_DOMAIN = file.read().replace('\n', '')
-
-auth0_cid_path = os.path.expanduser('~/flex-run/setup_constants/auth0_CID.txt')
-with open(auth0_cid_path, 'r') as file:
-    CLIENT_ID = file.read().replace('\n', '')
-
+AUTH0_DOMAIN = settings.config['auth0_domain'] if 'auth0_domain' in settings.config else 'auth.flexiblevision.com'
+alg_type     = settings.config['auth_alg'] if 'auth_alg' in settings.config else 'RS256'
+ALGORITHMS   = [alg_type]
+CLIENT_ID    = settings.config['auth0_CID'] if 'auth0_CID' in settings.config else '512rYG6XL32k3uiFg38HQ8fyubOOUUKf'
 
 APP = Flask(__name__)
 

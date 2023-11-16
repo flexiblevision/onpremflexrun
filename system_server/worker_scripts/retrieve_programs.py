@@ -12,16 +12,13 @@ from io import BytesIO
 from pymongo import MongoClient
 import datetime
 import string
+import settings
 
 client              = MongoClient("172.17.0.1")
 job_collection      = client["fvonprem"]["jobs"]
 programs_collection = client["fvonprem"]["programs"]
 
-CLOUD_DOMAIN = "https://clouddeploy.api.flexiblevision.com"
-cloud_path   = os.path.expanduser('~/flex-run/setup_constants/cloud_domain.txt')
-with open(cloud_path, 'r') as file: 
-    CLOUD_DOMAIN = file.read().replace('\n', '')
-
+CLOUD_DOMAIN = settings.config['cloud_domain'] if 'cloud_domain' in settings.config else "https://clouddeploy.api.flexiblevision.com"
 
 def retrieve_programs(resp_data, token):
     project_ids = resp_data['models'].keys()

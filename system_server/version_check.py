@@ -1,6 +1,7 @@
 import requests
 import subprocess
 import os
+import settings
 
 CONTAINERS  = {
     'backend':'capdev', 
@@ -12,15 +13,8 @@ CONTAINERS  = {
     'visiontools': 'visiontools'
 }
 
-CLOUD_FUNCTIONS_BASE = 'https://us-central1-flexible-vision-staging.cloudfunctions.net/'
-gcp_functions_path   = os.path.expanduser('~/flex-run/setup_constants/gcp_functions_domain.txt')
-with open(gcp_functions_path, 'r') as file:
-    CLOUD_FUNCTIONS_BASE = file.read().replace('\n', '')
-
-LATEST_STABLE_REF  = 'latest_stable_version'
-latest_stable_path = os.path.expanduser('~/flex-run/setup_constants/latest_stable_ref.txt')
-with open(latest_stable_path, 'r') as file:
-    LATEST_STABLE_REF = file.read().replace('\n', '')
+CLOUD_FUNCTIONS_BASE = settings.config['gcp_functions_domain'] if 'gcp_functions_domain' in settings.config else 'https://us-central1-flexible-vision-staging.cloudfunctions.net/'
+LATEST_STABLE_REF    = settings.config['latest_stable_ref'] if 'latest_stable_ref' in settings.config else 'latest_stable_version'
 
 def get_current_container_version(container):
     cmd = subprocess.Popen(['docker', 'inspect', "--format='{{.Config.Image}}'", container], stdout=subprocess.PIPE)
