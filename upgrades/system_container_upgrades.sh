@@ -22,6 +22,7 @@ MONGODB_URL='mongodb://localhost:27017'
 REMBG_MODEL='u2netp'
 CLOUD_DOMAIN="$(jq '.cloud_domain' ~/fvconfig.json)"
 GCP_FUNCTIONS_DOMAIN="$(jq '.gcp_functions_domain' ~/fvconfig.json)"
+ENVIRON="$(jq '.environ' ~/fvconfig.json)"
 TZ="$(cat /etc/timezone)"
 
 uuid="$(uuidgen)"
@@ -236,10 +237,20 @@ if [ $CAPUI_UPTD != 'True' ]; then
     } || {
         echo 'captureui does not exist to remove'
     }
-    docker run -p 0.0.0.0:80:3000 --restart unless-stopped \
-        --name captureui -e CAPTURE_SERVER=http://172.17.0.1:5000 -e PROCESS_SERVER=http://172.17.0.1 -d --network imagerie_nw \
-        --log-opt max-size=50m --log-opt max-file=5 -e REACT_APP_ARCH=$4 \
-        fvonprem/$4-frontend:$CAPUI_UPTD
+
+    if [ "$ENVIRON" = "cloud" ]; then
+        docker run -p 0.0.0.0:80:3000 --restart unless-stopped \
+            --name captureui -e CAPTURE_SERVER=http://172.17.0.1:5000 -e PROCESS_SERVER=http://172.17.0.1 -d --network imagerie_nw \
+            --log-opt max-size=50m --log-opt max-file=5 -e REACT_APP_ARCH=$4 \
+            fvonprem/$4-frontend:$CAPTUREUI_VERSION
+    fi
+
+    if [ "$ENVIRON" = "cloud" ]; then
+        docker run -p 0.0.0.0:3000:3000 --restart unless-stopped \
+            --name captureui -e CAPTURE_SERVER=http://172.17.0.1:5000 -e PROCESS_SERVER=http://172.17.0.1 -d --network imagerie_nw \
+            --log-opt max-size=50m --log-opt max-file=5 -e REACT_APP_ARCH=$4 \
+            fvonprem/$4-frontend:$CAPTUREUI_VERSION
+    fi
 
     cur_step=$((cur_step+1))
     python3 $r_path -i $uuid -t 'updated frontend server' -c $cur_step

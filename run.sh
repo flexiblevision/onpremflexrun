@@ -5,6 +5,6 @@ fi
 sudo apt-get update
 sudo apt-get install -y python3.6
 sudo apt-get install -y net-tools
-sudo apt-get install -y jq
+sudo apt install -y jq
 
 python3 deploy.py
