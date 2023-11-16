@@ -5,7 +5,7 @@ SYSTEM_ARCH=$4
 PREDICT_LITE_VERSION=$5
 VISION_VERSION=$6
 CREATOR_VERSION=$7
-VISIONTOOLS_VERSION=$8
+$VISIONTOOLS_VERSION=$8
 
 REDIS_VERSION='5.0.6'
 MONGO_VERSION='4.2'
@@ -58,15 +58,13 @@ docker run -d --name=capdev -p 0.0.0.0:5000:5000 --restart unless-stopped --priv
     --log-opt max-size=50m --log-opt max-file=5 \
     -d fvonprem/$4-backend:$CAPDEV_VERSION
 
-if [ "$ENVIRON" = "cloud" ]; then
-    docker run -p 0.0.0.0:80:3000 --restart unless-stopped \
+if [ "$ENVIRON" = "local" ]; then
+    docker run -p 0.0.0.0:3000:3000 --restart unless-stopped \
         --name captureui -e CAPTURE_SERVER=http://172.17.0.1:5000 -e PROCESS_SERVER=http://172.17.0.1 -d --network imagerie_nw \
         --log-opt max-size=50m --log-opt max-file=5 -e REACT_APP_ARCH=$4 \
         fvonprem/$4-frontend:$CAPTUREUI_VERSION
-fi
-
-if [ "$ENVIRON" = "cloud" ]; then
-    docker run -p 0.0.0.0:3000:3000 --restart unless-stopped \
+else
+    docker run -p 0.0.0.0:80:3000 --restart unless-stopped \
         --name captureui -e CAPTURE_SERVER=http://172.17.0.1:5000 -e PROCESS_SERVER=http://172.17.0.1 -d --network imagerie_nw \
         --log-opt max-size=50m --log-opt max-file=5 -e REACT_APP_ARCH=$4 \
         fvonprem/$4-frontend:$CAPTUREUI_VERSION
@@ -101,4 +99,4 @@ docker run -d --name=visiontools -p 0.0.0.0:5021:5021 --restart unless-stopped \
     --network imagerie_nw --gpus all -e MONGODB_URL=$MONGODB_URL \
     -e DB_NAME=$DB_NAME -e MONGO_SERVER=$MONGO_SERVER -e MONGO_PORT=$MONGO_PORT \
     -e REMBG_MODEL=$REMBG_MODEL -e PYTHONUNBUFFERED=1 \
-    -d fvonprem/x86-visiontools:VISIONTOOLS_VERSION
+    -d fvonprem/x86-visiontools:$VISIONTOOLS_VERSION

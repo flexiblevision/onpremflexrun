@@ -238,15 +238,13 @@ if [ $CAPUI_UPTD != 'True' ]; then
         echo 'captureui does not exist to remove'
     }
 
-    if [ "$ENVIRON" = "cloud" ]; then
-        docker run -p 0.0.0.0:80:3000 --restart unless-stopped \
+    if [ "$ENVIRON" = "local" ]; then
+        docker run -p 0.0.0.0:3000:3000 --restart unless-stopped \
             --name captureui -e CAPTURE_SERVER=http://172.17.0.1:5000 -e PROCESS_SERVER=http://172.17.0.1 -d --network imagerie_nw \
             --log-opt max-size=50m --log-opt max-file=5 -e REACT_APP_ARCH=$4 \
             fvonprem/$4-frontend:$CAPTUREUI_VERSION
-    fi
-
-    if [ "$ENVIRON" = "cloud" ]; then
-        docker run -p 0.0.0.0:3000:3000 --restart unless-stopped \
+    else
+        docker run -p 0.0.0.0:80:3000 --restart unless-stopped \
             --name captureui -e CAPTURE_SERVER=http://172.17.0.1:5000 -e PROCESS_SERVER=http://172.17.0.1 -d --network imagerie_nw \
             --log-opt max-size=50m --log-opt max-file=5 -e REACT_APP_ARCH=$4 \
             fvonprem/$4-frontend:$CAPTUREUI_VERSION
