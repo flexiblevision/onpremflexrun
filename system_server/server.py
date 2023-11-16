@@ -35,6 +35,7 @@ from worker_scripts.retrieve_programs import retrieve_programs
 from worker_scripts.retrieve_masks import retrieve_masks
 from worker_scripts.model_upload_worker import upload_model
 from worker_scripts.job_manager import insert_job, push_analytics_to_cloud, get_next_analytics_batch
+from helpers.config_helper import write_settings_to_config
 from timemachine.installer import *
 from timemachine.cleanup import cleanup_timemachine_records
 from timemachine.zip_push import push_event_records, get_unprocessed_events
@@ -448,6 +449,9 @@ class AuthToken(Resource):
     def post(self):
         j = request.json
         if j:
+            if 'server_ip' in j:
+                settings.config['cloud_domain'] = 'http://{}'.format(j['server_ip'])
+                write_settings_to_config()
             os.system('echo '+j['refresh_token']+' > '+os.environ['HOME']+'/flex-run/system_server/creds.txt')
             return True
         return False
