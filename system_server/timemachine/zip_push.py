@@ -7,6 +7,7 @@ import os
 import time
 import pymongo
 from datetime import datetime
+import settings
 
 client            = MongoClient("172.17.0.1")
 tm_records_db     = client["fvonprem"]["event_records"]
@@ -14,10 +15,7 @@ utils_db          = client["fvonprem"]["utils"]
 dev_ref           = utils_db.find_one({'type':'device_id'})
 DEV_ID            =  None if not dev_ref else dev_ref['id']
 
-CLOUD_FUNCTIONS_BASE = 'https://us-central1-flexible-vision-staging.cloudfunctions.net/'
-gcp_functions_path   = os.path.expanduser('~/flex-run/setup_constants/gcp_functions_domain.txt')
-with open(gcp_functions_path, 'r') as file:
-    CLOUD_FUNCTIONS_BASE = file.read().replace('\n', '')
+CLOUD_FUNCTIONS_BASE = settings.config['gcp_functions_domain'] if 'gcp_functions_domain' in settings.config else 'https://us-central1-flexible-vision-staging.cloudfunctions.net/'
 
 def mark_as_processed(batch):
     for pf in batch:

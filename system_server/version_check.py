@@ -13,7 +13,7 @@ CONTAINERS  = {
     'visiontools': 'visiontools'
 }
 
-CLOUD_FUNCTIONS_BASE = settings.config['gcp_functions_domain'] if 'gcp_functions_domain' in settings.config else 'https://us-central1-flexible-vision-staging.cloudfunctions.net/'
+CLOUD_FUNCTIONS_BASE = settings.config['container_check_domain'] if 'container_check_domain' in settings.config else 'https://us-central1-flexible-vision-staging.cloudfunctions.net/'
 LATEST_STABLE_REF    = settings.config['latest_stable_ref'] if 'latest_stable_ref' in settings.config else 'latest_stable_version'
 
 def get_current_container_version(container):
