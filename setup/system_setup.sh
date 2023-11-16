@@ -11,7 +11,9 @@ REDIS_VERSION='5.0.6'
 MONGO_VERSION='4.2'
 
 AUTH0_DOMAIN='auth.flexiblevision.com'
-AUTH0_CID='512rYG6XL32k3uiFg38HQ8fyubOOUUKf'
+AUTH0_CID="$(jq '.auth0_CID' ~/fvconfig.json)"
+AUTH0_ALGORITHMS="$(jq '.auth_alg' ~/fvconfig.json)"
+JWT_SECRET="$(jq '.jwt_secret_key' ~/fvconfig.json)"
 REDIS_URL='redis://localhost:6379'
 REDIS_SERVER='172.17.0.1'
 REDIS_PORT='6379'
@@ -55,7 +57,7 @@ docker run -d --name=capdev -p 0.0.0.0:5000:5000 --restart unless-stopped --priv
     -e REDIS_URL=$REDIS_URL -e REDIS_SERVER=$REDIS_SERVER -e REDIS_PORT=$REDIS_PORT \
     -e DB_NAME=$DB_NAME -e MONGO_SERVER=$MONGO_SERVER -e MONGO_PORT=$MONGO_PORT \
     -e GCP_FUNCTIONS_DOMAIN=$GCP_FUNCTIONS_DOMAIN -e CLOUD_DOMAIN=$CLOUD_DOMAIN \
-    -e ENVIRON=$ENVIRON \
+    -e ENVIRON=$ENVIRON -e AUTH0_ALGORITHMS=$AUTH0_ALGORITHMS -e JWT_SECRET=$JWT_SECRET \
     --log-opt max-size=50m --log-opt max-file=5 \
     -d fvonprem/$4-backend:$CAPDEV_VERSION
 

@@ -5,7 +5,6 @@ from scripts.name_generator import generate_name
 CLOUD = {
     "environ": "cloud",
     "use_aws": False,
-    "auth0_audience": "https://flexiblevision/api",
     "auth0_CID": "512rYG6XL32k3uiFg38HQ8fyubOOUUKf",
     "auth0_domain": "auth.flexiblevision.com",
     "cloud_domain": "https://v1.cloud.flexiblevision.com",
@@ -24,7 +23,6 @@ LOCAL = {
     "environ": "local",
     "use_aws": False,
     "auth0_CID": "123",
-    "auth0_audience": "https://flexiblevision/api",
     "auth0_domain": "auth.flexiblevision.com",
     "cloud_domain": "http://localhost",
     "branch": "master",

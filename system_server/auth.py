@@ -13,7 +13,7 @@ alg_type     = settings.config['auth_alg'] if 'auth_alg' in settings.config else
 ALGORITHMS   = [alg_type]
 CLIENT_ID    = settings.config['auth0_CID'] if 'auth0_CID' in settings.config else '512rYG6XL32k3uiFg38HQ8fyubOOUUKf'
 ENVIRON      = settings.config['environ'] if 'environ' in settings.config else "cloud"
-AUDIENCE     = settings.config['auth0_audience'] if 'auth0_audience' in settings.config else 'https://flexiblevision/api'
+AUDIENCE     = 'https://flexiblevision/api'
 
 APP = Flask(__name__)
 
