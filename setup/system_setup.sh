@@ -11,9 +11,9 @@ REDIS_VERSION='5.0.6'
 MONGO_VERSION='4.2'
 
 AUTH0_DOMAIN='auth.flexiblevision.com'
-AUTH0_CID="$(jq '.auth0_CID' ~/fvconfig.json)"
-AUTH0_ALGORITHMS="$(jq '.auth_alg' ~/fvconfig.json)"
-JWT_SECRET="$(jq '.jwt_secret_key' ~/fvconfig.json)"
+AUTH0_CID="$(jq -r '.auth0_CID' ~/fvconfig.json)"
+AUTH0_ALGORITHMS="$(jq -r '.auth_alg' ~/fvconfig.json)"
+JWT_SECRET="$(jq -r '.jwt_secret_key' ~/fvconfig.json)"
 REDIS_URL='redis://localhost:6379'
 REDIS_SERVER='172.17.0.1'
 REDIS_PORT='6379'
@@ -22,9 +22,9 @@ MONGO_SERVER='172.17.0.1'
 MONGO_PORT='27017'
 MONGODB_URL='mongodb://localhost:27017'
 REMBG_MODEL='u2netp'
-CLOUD_DOMAIN="$(jq '.cloud_domain' ~/fvconfig.json)"
-GCP_FUNCTIONS_DOMAIN="$(jq '.gcp_functions_domain' ~/fvconfig.json)"
-ENVIRON="$(jq '.environ' ~/fvconfig.json)"
+CLOUD_DOMAIN="$(jq -r '.cloud_domain' ~/fvconfig.json)"
+GCP_FUNCTIONS_DOMAIN="$(jq -r '.gcp_functions_domain' ~/fvconfig.json)"
+ENVIRON="$(jq -r '.environ' ~/fvconfig.json)"
 
 docker run -p $MONGO_PORT:$MONGO_PORT --restart unless-stopped  --name mongo -d mongo:$MONGO_VERSION
 

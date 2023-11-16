@@ -7,7 +7,7 @@ REDIS_PORT='6379'
 DB_NAME='fvonprem'
 MONGO_SERVER='172.17.0.1'
 MONGO_PORT='27017'
-CLOUD_DOMAIN="$(jq '.cloud_domain' ~/fvconfig.json)"
+CLOUD_DOMAIN="$(jq -r '.cloud_domain' ~/fvconfig.json)"
 
 #start eventor server
 docker stop eventor
