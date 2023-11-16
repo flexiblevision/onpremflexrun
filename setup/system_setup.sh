@@ -102,4 +102,4 @@ docker run -d --name=visiontools -p 0.0.0.0:5021:5021 --restart unless-stopped \
     --network imagerie_nw --runtime=nvidia -e MONGODB_URL=$MONGODB_URL \
     -e DB_NAME=$DB_NAME -e MONGO_SERVER=$MONGO_SERVER -e MONGO_PORT=$MONGO_PORT \
     -e REMBG_MODEL=$REMBG_MODEL -e PYTHONUNBUFFERED=1 \
-    -t fvonprem/x86-visiontools:$VISIONTOOLS_VERSION
+    -t fvonprem/$4-visiontools:$VISIONTOOLS_VERSION

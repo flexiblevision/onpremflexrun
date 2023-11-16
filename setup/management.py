@@ -47,7 +47,7 @@ def generate_environment_config(environment='cloud', override=False):
     else:
         config['ssid'] = generate_name()
         with open(PATH, 'w') as outfile:  
-            json.dump(config, outfile)
+            json.dump(config, outfile, indent=4, sort_keys=True)
         print('CONFIG CREATED FOR {} ENVIRONMENT'.format(environment))
 
 
