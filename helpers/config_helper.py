@@ -1,5 +1,7 @@
 import requests
 import settings
+import os
+import json 
 
 PATH = os.environ['HOME']+'/fvconfig.json'
 

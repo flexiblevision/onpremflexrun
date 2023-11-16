@@ -66,16 +66,17 @@ def requires_auth(f):
         jsonurl = urlopen("http://localhost:5000/api/capture/auth/jwks")
         jwks = json.loads(jsonurl.read())
         unverified_header = jwt.get_unverified_header(token)
-        rsa_key = {}
-        for key in jwks["keys"]:
-            if key["kid"] == unverified_header["kid"]:
-                rsa_key = {
-                    "kty": key["kty"],
-                    "kid": key["kid"],
-                    "use": key["use"],
-                    "n": key["n"],
-                    "e": key["e"]
-                }
+        if ENVIRON != 'local':
+            rsa_key = {}
+            for key in jwks["keys"]:
+                if key["kid"] == unverified_header["kid"]:
+                    rsa_key = {
+                        "kty": key["kty"],
+                        "kid": key["kid"],
+                        "use": key["use"],
+                        "n": key["n"],
+                        "e": key["e"]
+                    }
 
         if ENVIRON == 'local':
             rsa_key = True
@@ -84,8 +85,8 @@ def requires_auth(f):
                 if ENVIRON == 'local':
                     payload = jwt.decode(
                         token, 
-                        settings.config['jwt_secret_key'], 
-                        issuer="https://"+os.environ['AUTH0_DOMAIN']+"/", 
+                        [settings.config['jwt_secret_key']], 
+                        issuer="https://"+AUTH0_DOMAIN+"/", 
                         audience=AUDIENCE, algorithms=ALGORITHMS
                     )
                 else:

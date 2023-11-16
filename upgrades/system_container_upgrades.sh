@@ -10,7 +10,7 @@ VISIONTOOLS_UPTD=$8
 REDIS_VERSION='5.0.6'
 MONGO_VERSION='4.2'
 
-AUTH0_DOMAIN='auth.flexiblevision.com'
+AUTH0_DOMAIN="$(jq -r '.auth0_domain' ~/fvconfig.json)"
 AUTH0_CID='512rYG6XL32k3uiFg38HQ8fyubOOUUKf'
 AUTH0_ALGORITHMS="$(jq -r '.auth_alg' ~/fvconfig.json)"
 JWT_SECRET="$(jq -r '.jwt_secret_key' ~/fvconfig.json)"
