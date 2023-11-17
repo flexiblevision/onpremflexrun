@@ -1,4 +1,8 @@
 import os
+import sys
+settings_path = os.environ['HOME']+'/flex-run'
+sys.path.append(settings_path)
+
 import redis
 from rq import Worker, Queue, Connection
 

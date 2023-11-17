@@ -599,7 +599,7 @@ class DeviceInfo(Resource):
         info['system']        = system_info()
         info['arch']          = system_arch()
         info['mac_id']        = get_mac_id()
-        info['hotspot']       = settngs.config['ssid'] if 'ssid' in settings.config else 'not configured'
+        info['hotspot']       = settings.config['ssid'] if 'ssid' in settings.config else 'not configured'
         info['last_active']   = str(datetime.datetime.now())
 
         return info
