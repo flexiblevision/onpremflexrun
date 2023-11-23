@@ -9,6 +9,7 @@ apt-get -y install curl
 apt-get -y install hostapd
 apt install -y redis-server
 apt install -y openssh-server
+apt-get install isc-dhcp-server
 make install -C $HOME/flex-run/scripts/create_ap
 npm install forever@3.0.0 -g
 pip3 install 'requests==2.18.4'
