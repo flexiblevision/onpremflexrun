@@ -271,20 +271,20 @@ def get_lan_ips():
         if i_entry: lanIps['dhcp'] = i_entry['dhcp']
 
         ip6 = None
+        ip  = 'LAN IP not assigned'
         if 'inet6' in interface:
             ip6 = interface.split('inet6')[1].split(' ')[1]
         if 'inet' in interface:
             ip = interface.split('inet')[1].split(' ')[1]
         else:
-            if idx > 1:
+            if idx > 2:
                 #assign port a default IP
-                ip   = '192.168.{}.10'.format(5+idx)
-                data = {'ip': ip, 'lanPort': eth, 'dhcp': False}
-                if data['ip'] != '' and is_valid_ip(data['ip']):
-                    set_ips(data)
-                    os.system('sudo ifconfig ' + eth + ' '  + data['ip'] + ' netmask 255.255.255.0')
-            else:
-                ip = 'LAN IP not assigned'
+                if not i_entry:
+                    ip   = '192.168.{}.10'.format(5+idx)
+                    data = {'ip': ip, 'lanPort': eth, 'dhcp': False}
+                    if data['ip'] != '' and is_valid_ip(data['ip']):
+                        set_ips(data)
+                        os.system('sudo ifconfig ' + eth + ' '  + data['ip'] + ' netmask 255.255.255.0')
 
         if ip6 and ip6 == ip: ip = 'LAN IP not assigned'
         lanIps['ip'] = ip
