@@ -1,4 +1,5 @@
-apt install vsftpd
+apt install -y vsftpd
+apt-get -y install isc-dhcp-server
 usermod -aG dialout visioncell
 
 sudo rm /etc/xdg/autostart/update-notifier.desktop

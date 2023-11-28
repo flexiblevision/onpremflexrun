@@ -35,7 +35,7 @@ from worker_scripts.retrieve_programs import retrieve_programs
 from worker_scripts.retrieve_masks import retrieve_masks
 from worker_scripts.model_upload_worker import upload_model
 from worker_scripts.job_manager import insert_job, push_analytics_to_cloud, get_next_analytics_batch
-from helpers.config_helper import write_settings_to_config
+from helpers.config_helper import write_settings_to_config, set_dhcp
 from timemachine.installer import *
 from timemachine.cleanup import cleanup_timemachine_records
 from timemachine.zip_push import push_event_records, get_unprocessed_events
@@ -149,6 +149,7 @@ def set_static_ips(network = None):
 def set_ips(settings):
     store_netplan_settings(settings)
     build_set_netplan()
+    set_dhcp()
 
 def build_set_netplan():
     interfaces = []
@@ -237,7 +238,8 @@ def get_eth_port_names():
     for idx, n in enumerate(names.split('\n')):
         if re.match(r"^eth|^en", n):
             eth_names.append(n)
-            
+    
+    eth_names.sort()
     return eth_names
 
 def list_usb_paths():
@@ -263,7 +265,7 @@ def get_lan_ips():
         lanIps['ip']   = 'not assigned'
         lanIps['port'] = eth
         lanIps['name'] = lan_port
-        lanIps['dhcp'] = True
+        lanIps['dhcp'] = False
         interface = subprocess.Popen(['ifconfig', eth], stdout=subprocess.PIPE).communicate()[0].decode('utf-8')
         i_entry   = interfaces_db.find_one({'iname': eth})
         if i_entry: lanIps['dhcp'] = i_entry['dhcp']
@@ -274,7 +276,15 @@ def get_lan_ips():
         if 'inet' in interface:
             ip = interface.split('inet')[1].split(' ')[1]
         else:
-            ip = 'LAN IP not assigned'
+            if idx > 1:
+                #assign port a default IP
+                ip   = '192.168.{}.10'.format(5+idx)
+                data = {'ip': ip, 'lanPort': eth, 'dhcp': False}
+                if data['ip'] != '' and is_valid_ip(data['ip']):
+                    set_ips(data)
+                    os.system('sudo ifconfig ' + eth + ' '  + data['ip'] + ' netmask 255.255.255.0')
+            else:
+                ip = 'LAN IP not assigned'
 
         if ip6 and ip6 == ip: ip = 'LAN IP not assigned'
         lanIps['ip'] = ip
