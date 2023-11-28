@@ -46,7 +46,6 @@ def setup_port_subnets(interfaces):
     body += "authoritative;\n\n"
 
     for idx, p in enumerate(interfaces):
-        print(p)
         subnet = p['ip'].split(".")[2]
         body += "subnet 192.168."+ str(subnet) +".0 netmask 255.255.255.0 {\n"
         body += "  range 192.168.{}.50 192.168.{}.150;\n".format(subnet, subnet)
