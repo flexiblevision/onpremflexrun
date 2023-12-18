@@ -47,7 +47,8 @@ if [ "$SYSTEM_ARCH" = "x86" ]; then
     apt update
     apt-get install -y nvidia-docker2
     pkill -SIGHUP dockerd
-    docker run --runtime=nvidia --rm nvidia/cuda:9.0-base nvidia-smi
+d    docker run --runtime=nvidia --rm nvidia/cuda:12.0.1-cudnn8-runtime-ubuntu20.04 nvidia-smi
+    systemctl restart docker
 fi
 
 docker run -d --name=capdev -p 0.0.0.0:5000:5000 --restart unless-stopped --privileged -v /dev:/dev -v /sys:/sys \
@@ -73,7 +74,7 @@ else
         fvonprem/$4-frontend:$CAPTUREUI_VERSION
 fi
 
-docker run -p 8500:8500 -p 8501:8501 --runtime=nvidia --name localprediction  -d -e AWS_ACCESS_KEY_ID=imagerie -e AWS_SECRET_ACCESS_KEY=imagerie -e AWS_REGION=us-east-1 \
+docker run -p 8500:8500 -p 8501:8501 --gpus device=0 --name localprediction  -d -e AWS_ACCESS_KEY_ID=imagerie -e AWS_SECRET_ACCESS_KEY=imagerie -e AWS_REGION=us-east-1 \
     --restart unless-stopped --network imagerie_nw  \
     --log-opt max-size=50m --log-opt max-file=5 \
     -t fvonprem/$4-prediction:$PREDICTION_VERSION
@@ -99,7 +100,7 @@ docker run -d --name=nodecreator -p 0.0.0.0:1880:1880 \
     --network host -t fvonprem/$4-nodecreator:$CREATOR_VERSION 
 
 docker run -d --name=visiontools -p 0.0.0.0:5021:5021 --restart unless-stopped \
-    --network imagerie_nw --runtime=nvidia -e MONGODB_URL=$MONGODB_URL \
+    --network imagerie_nw --gpus device=0 -e MONGODB_URL=$MONGODB_URL \
     -e DB_NAME=$DB_NAME -e MONGO_SERVER=$MONGO_SERVER -e MONGO_PORT=$MONGO_PORT \
     -e REMBG_MODEL=$REMBG_MODEL -e PYTHONUNBUFFERED=1 \
     -t fvonprem/$4-visiontools:$VISIONTOOLS_VERSION

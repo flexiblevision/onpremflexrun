@@ -91,7 +91,7 @@ if [ $PREDICT_UPTD != 'True' ]; then
     } || {
         echo 'localprediction does not exist to remove'
     }
-    docker run -p 8500:8500 -p 8501:8501 --runtime=nvidia --name localprediction  -d -e AWS_ACCESS_KEY_ID=imagerie -e AWS_SECRET_ACCESS_KEY=imagerie -e AWS_REGION=us-east-1 \
+    docker run -p 8500:8500 -p 8501:8501 --gpus device=0 --name localprediction  -d -e AWS_ACCESS_KEY_ID=imagerie -e AWS_SECRET_ACCESS_KEY=imagerie -e AWS_REGION=us-east-1 \
         --restart unless-stopped --network imagerie_nw  \
         --log-opt max-size=50m --log-opt max-file=5 \
         -t fvonprem/$4-prediction:$PREDICT_UPTD
@@ -220,7 +220,7 @@ if [ $VISIONTOOLS_UPTD != 'True' ]; then
         echo 'visiontools does not exist to remove'
     }
     docker run -d --name=visiontools -p 0.0.0.0:5021:5021 --restart unless-stopped \
-        --network imagerie_nw --runtime=nvidia -e MONGODB_URL=$MONGODB_URL \
+        --network imagerie_nw --gpus device=0 -e MONGODB_URL=$MONGODB_URL \
         -e DB_NAME=$DB_NAME -e MONGO_SERVER=$MONGO_SERVER -e MONGO_PORT=$MONGO_PORT \
         -e REMBG_MODEL=$REMBG_MODEL -e PYTHONUNBUFFERED=1 \
         -d fvonprem/$4-visiontools:$VISIONTOOLS_UPTD
