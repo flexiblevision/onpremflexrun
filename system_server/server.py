@@ -40,7 +40,7 @@ import platform
 import datetime
 
 if platform.processor() != 'aarch64':
-    from gpio.gpio_helper import toggle_pin
+    from gpio.gpio_helper import toggle_pin, set_pin_state
 
 from redis import Redis
 from rq import Queue, Retry, Worker, Connection
@@ -356,6 +356,14 @@ class TogglePin(Resource):
         else:
             return False
 
+class SetPin(Resource):
+    def put(self):
+        j = request.json
+        if 'pin_num' in j and 'state' in j:
+            return set_pin_state(j['pin_num'], j['state'])
+        else:
+            return -1
+
 class Upgrade(Resource):
     @auth.requires_auth
     def get(self):
@@ -574,7 +582,6 @@ class DeviceInfo(Resource):
     def get(self):
         info = {}
         domain = request.headers.get('Host').split(':')[0]
-
         ifconfig  = subprocess.Popen(['ifconfig'], stdout=subprocess.PIPE).communicate()[0].decode('utf-8')
         interface = 'wl' + ifconfig.split('wl')[1].split(':')[0]
         wlp       = subprocess.Popen(['ifconfig', interface], stdout=subprocess.PIPE).communicate()[0].decode('utf-8')
@@ -593,7 +600,18 @@ class DeviceInfo(Resource):
         info['system']        = system_info()
         info['arch']          = system_arch()
         info['mac_id']        = get_mac_id()
+        info['hotspot']       = ''
         info['last_active']   = str(datetime.datetime.now())
+
+        try:
+            cmd = subprocess.Popen(['cat', os.environ['HOME']+'/flex-run/setup_constants/visioncell_ssid.txt'], stdout=subprocess.PIPE)
+            cmd_out, cmd_err = cmd.communicate()
+            cleanStr = cmd_out.strip().decode("utf-8")
+            info['hotspot'] = cleanStr
+        except Exception as error:
+            print(error)
+
+
         return info
 
 class SaveImage(Resource):
@@ -865,7 +883,7 @@ class SyncAnalytics(Resource):
             events = get_unprocessed_events()
             if events['count'] > 0:
                 er_push = job_queue.enqueue(push_event_records, CLOUD_DOMAIN, access_token, 
-                            events, job_timeout=99999999, result_ttl=-1, retry=Retry(max=10, interval=60))                            
+                            events, job_timeout=80000, result_ttl=-1, retry=Retry(max=10, interval=60))                            
                 if er_push: insert_job(er_push.id, 'Pushing '+str(events['count'])+' events to cloud')
 
 class DeAuthorize(Resource):
@@ -896,6 +914,7 @@ api.add_resource(UpdateIp, '/update_ip')
 api.add_resource(GetLanIps, '/get_lan_ips')
 api.add_resource(GetCameraUID, '/camera_uid/<string:idx>')
 api.add_resource(TogglePin, '/toggle_pin')
+api.add_resource(SetPin, '/set_pin')
 api.add_resource(RestartBackend, '/refresh_backend')
 api.add_resource(ListServices, '/list_services')
 api.add_resource(UploadModel, '/upload_model')
