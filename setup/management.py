@@ -6,7 +6,7 @@ CLOUD = {
     "environ": "cloud",
     "use_aws": False,
     "auth0_CID": "512rYG6XL32k3uiFg38HQ8fyubOOUUKf",
-    "auth0_domain": "flexiblevision.auth0.com",
+    "auth0_domain": "auth.flexiblevision.com",
     "cloud_domain": "https://v1.cloud.flexiblevision.com",
     "branch": "master",
     "gcp_functions_domain": "https://us-central1-flexible-vision-staging.cloudfunctions.net/",
