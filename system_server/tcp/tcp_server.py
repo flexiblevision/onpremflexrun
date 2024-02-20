@@ -9,6 +9,7 @@ from pymongo import MongoClient
 import datetime
 import string
 import json
+import time
 
 client   = MongoClient("172.17.0.1")
 io_ref   = client["fvonprem"]["io_presets"]
@@ -23,6 +24,17 @@ def take_action(actions):
             params+='&did='+str(actions[key])
 
     return params 
+
+def set_pin_state(pin_num, state):
+    query = {'type':'gpio_pin_state'}
+    pin_key       = 'GPO'+str(pin_num)
+    if state == True:
+        res = functions.set_gpio(1, int(pin_num), 0)
+    else:
+        res = functions.set_gpio(1, int(pin_num), 1)
+
+    pin_state_ref.update_one(query, {'$set': {pin_key: state}}, True)
+    return str(res)
 
 import platform 
 if platform.processor() != 'aarch64':
@@ -76,16 +88,25 @@ while True:
                 data = connections.recv(100)
                 print('received: ', data)
                 if data:
-                    incoming_command = data.decode('utf-8')
-                    command          = None
-                    actions          = None
-                    params           = ''
                     try:
+                        incoming_command = data.decode('utf-8')
+                        command          = None
+                        actions          = None
+                        params           = ''
+
                         incoming_command = json.loads(incoming_command)
                         command          = list(incoming_command.keys())[0]
                         actions          = incoming_command[command]
-                        params           = take_action(actions)
-                    except:
+                        if len(command) == 1:
+                            #treat as an output pin command
+                            state = set_pin_state(command, actions)
+                            bstate = str.encode(state + '\n')
+                            connections.send(bstate)
+                            continue
+                        else:
+                            params           = take_action(actions)
+                    except Exception as error:
+                        print(error, ' <<<<<<< error')
                         print('INVALID COMMAND PARSE')
 
                     if command in valid_commands.keys():
