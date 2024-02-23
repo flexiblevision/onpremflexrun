@@ -12,6 +12,9 @@ from io import BytesIO
 from pymongo import MongoClient
 import datetime
 import string
+
+settings_path = os.environ['HOME']+'/flex-run'
+sys.path.append(settings_path)
 import settings
 
 client            = MongoClient("172.17.0.1")

@@ -896,6 +896,23 @@ class CleanupTimemachine(Resource):
     def delete(self):
         return cleanup_timemachine_records(), 200
 
+class SyncFlow(Resource):
+    @auth.requires_auth
+    def get(self):
+        access_token = request.headers.get('Access-Token')
+        flow_path = "{}/flows.json".format(os.environ['HOME'])
+        os.system("docker cp nodecreator:/root/.node-red/flows.json "+flow_path)
+        utils_db  = client["fvonprem"]["utils"]
+        dev_ref   = utils_db.find_one({'type':'device_id'})
+        device_id =  None if not dev_ref else dev_ref['id']
+
+        if not device_id: return 'device id not found', 404
+
+        url = '{}/api/capture/devices/{}/flow'.format(CLOUD_DOMAIN, device_id)
+        headers = {'Authorization' : 'Bearer {}'.format(access_token), 'Accept' : 'application/json', 'Content-Type' : 'application/json'}
+        r = requests.post(url, data=open(flow_path, 'rb'), headers=headers)
+        return r.text, r.status_code
+
 api.add_resource(AuthToken, '/auth_token')
 api.add_resource(Networks, '/networks')
 api.add_resource(MacId, '/mac_id')
@@ -928,6 +945,7 @@ api.add_resource(DeAuthorize, '/deauthorize')
 api.add_resource(EnableTimemachine, '/enable_timemachine')
 api.add_resource(DisableTimemachine, '/disable_timemachine')
 api.add_resource(CleanupTimemachine, '/cleanup_timemachine')
+api.add_resource(SyncFlow, '/sync_flow')
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0',port='5001')
