@@ -39,6 +39,7 @@ from helpers.config_helper import write_settings_to_config, set_dhcp
 from timemachine.installer import *
 from timemachine.cleanup import cleanup_timemachine_records
 from timemachine.zip_push import push_event_records, get_unprocessed_events
+from setup.management import generate_environment_config
 import platform 
 import datetime
 import settings
@@ -391,6 +392,7 @@ class Upgrade(Resource):
             print(e)
 
         #upgrade flex run 
+        generate_environment_config()
         os.system("chmod +x "+os.environ['HOME']+"/flex-run/upgrades/upgrade_flex_run.sh")
         os.system("sh "+os.environ['HOME']+"/flex-run/upgrades/upgrade_flex_run.sh")
 
@@ -873,13 +875,6 @@ class SyncAnalytics(Resource):
 
         if access_token:
             push_analytics_to_cloud(CLOUD_DOMAIN, access_token)
-            # analytics = get_next_analytics_batch()
-            # if analytics:
-            #     num_data  = len(analytics)
-            #     j_push    = job_queue.enqueue(push_analytics_to_cloud, CLOUD_DOMAIN, access_token, job_timeout=99999999, result_ttl=-1)
-            #     if j_push: insert_job(j_push.id, 'Syncing_'+str(num_data)+'_with_cloud')
-
-
             events = get_unprocessed_events()
             if events['count'] > 0:
                 er_push = job_queue.enqueue(push_event_records, CLOUD_DOMAIN, access_token, 
