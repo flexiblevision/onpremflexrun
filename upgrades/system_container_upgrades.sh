@@ -232,9 +232,7 @@ fi
 if [ $CAPUI_UPTD != 'True' ]; then
     python3 $r_path -i $uuid -t 'updating frontend server' -c $cur_step
 
-    echo '--------------'
-    echo $4
-    echo '-----------'
+
 
     docker pull fvonprem/$4-frontend:$CAPUI_UPTD
     # update captureui
@@ -245,24 +243,16 @@ if [ $CAPUI_UPTD != 'True' ]; then
         echo 'captureui does not exist to remove'
     }
 
-    echo '--------------'
-    echo $4
-    echo '-----------'
-
-
     if [ "$ENVIRON" = "local" ]; then
         docker run -p 0.0.0.0:3000:3000 --restart unless-stopped \
             --name captureui -e CAPTURE_SERVER=http://172.17.0.1:5000 -e PROCESS_SERVER=http://172.17.0.1 --network imagerie_nw \
             --log-opt max-size=50m --log-opt max-file=5 -e REACT_APP_ARCH=$4 \
-            -d fvonprem/$4-frontend:$CAPTUREUI_VERSION
+            -d fvonprem/$4-frontend:$CAPUI_UPTD
     else
-        echo '--------------'
-        echo $4
-        echo '-----------'
         docker run -p 0.0.0.0:80:3000 --restart unless-stopped \
             --name captureui -e CAPTURE_SERVER=http://172.17.0.1:5000 -e PROCESS_SERVER=http://172.17.0.1 --network imagerie_nw \
             --log-opt max-size=50m --log-opt max-file=5 -e REACT_APP_ARCH=$4 \
-            -d fvonprem/$4-frontend:$CAPTUREUI_VERSION
+            -d fvonprem/$4-frontend:$CAPUI_UPTD
     fi
 
     cur_step=$((cur_step+1))
