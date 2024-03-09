@@ -183,7 +183,6 @@ def store_netplan_settings(i_config):
         else:
             raise Exception('Failed')
 
-        #ips.append(static_ip+'/24') #append static ip
         ip_string = '['
         for ip in ips: ip_string += (ip) 
         ip_string = ip_string + ']'

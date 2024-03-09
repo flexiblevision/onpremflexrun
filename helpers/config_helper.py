@@ -60,7 +60,7 @@ def restart_service():
     return status
 
 def set_dhcp():
-    res = interfaces_db.find({'dhcp': False})
+    res = interfaces_db.find({'dhcp': True})
     interfaces = json.loads(json_util.dumps(res))
 
     # /etc/default/isc-dhcp-server
