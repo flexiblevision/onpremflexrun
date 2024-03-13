@@ -22,7 +22,10 @@ class Kinesis(object):
         self.CLIENT      = None
         self.authorized  = False
 
-        self.authorize()
+        try:
+            self.authorize()
+        except Exception as error:
+            print(error)
 
     def authorize(self):
         #pull aws keys from cloud
