@@ -39,13 +39,21 @@ from helpers.config_helper import write_settings_to_config, set_dhcp
 from timemachine.installer import *
 from timemachine.cleanup import cleanup_timemachine_records
 from timemachine.zip_push import push_event_records, get_unprocessed_events
-from setup.management import generate_environment_config
+from setup.management import generate_environment_config, update_config
 import platform 
 import datetime
 import settings
 
 if platform.processor() != 'aarch64':
     from gpio.gpio_helper import toggle_pin, set_pin_state
+
+if 'use_aws' in settings.config and settings.config['use_aws'] and settings.FireOperator == None:
+    from aws.FireOperator import FireOperator
+    try:
+        FireOperator  = FireOperator()
+        settings.FireOperator = FireOperator
+    except Exception as error:
+        print(error, ' << initializing fire operator')
 
 from redis import Redis
 from rq import Queue, Retry, Worker, Connection
@@ -56,9 +64,10 @@ import tempfile
 from pymongo import MongoClient, ASCENDING
 from bson import json_util, ObjectId
 
-client            = MongoClient("172.17.0.1")
-interfaces_db     = client["fvonprem"]["interfaces"]
-tm_records_db     = client["fvonprem"]["event_records"]
+client        = MongoClient("172.17.0.1")
+interfaces_db = client["fvonprem"]["interfaces"]
+tm_records_db = client["fvonprem"]["event_records"]
+utils_db      = client["fvonprem"]["utils"]
 
 app = Flask(__name__)
 api = Api(app)
@@ -896,7 +905,6 @@ class SyncFlow(Resource):
         access_token = request.headers.get('Access-Token')
         flow_path = "{}/flows.json".format(os.environ['HOME'])
         os.system("docker cp nodecreator:/root/.node-red/flows.json "+flow_path)
-        utils_db  = client["fvonprem"]["utils"]
         dev_ref   = utils_db.find_one({'type':'device_id'})
         device_id =  None if not dev_ref else dev_ref['id']
 
@@ -906,6 +914,32 @@ class SyncFlow(Resource):
         headers = {'Authorization' : 'Bearer {}'.format(access_token), 'Accept' : 'application/json', 'Content-Type' : 'application/json'}
         r = requests.post(url, data=open(flow_path, 'rb'), headers=headers)
         return r.text, r.status_code
+
+class InspectionStatus(Resource):
+    def post(self):
+        data = request.json
+        if settings.FireOperator:
+            settings.FireOperator.update_status(data)
+            return 'Updated', 200
+        else:
+            return 'Operator not running', 404
+
+class AwsWarehouseZone(Resource):
+    def get(self):
+        results = {'warehouse': "", 'zone': ""}
+        station = settings.config['fire_operator']['document']
+        wz      = station.split('_')
+        if len(wz) == 2:
+            results['warehouse'] = wz[0]
+            results['zone']      = wz[1]
+        return results
+    
+    def put(self):
+        data = request.json
+        if 'warehouse' in data and 'zone' in data:
+            doc_key = f"{data['warehouse']}_{data['zone']}"
+            settings.config['fire_operator']['document'] = doc_key
+            update_config(settings.config)
 
 api.add_resource(AuthToken, '/auth_token')
 api.add_resource(Networks, '/networks')
@@ -940,6 +974,11 @@ api.add_resource(EnableTimemachine, '/enable_timemachine')
 api.add_resource(DisableTimemachine, '/disable_timemachine')
 api.add_resource(CleanupTimemachine, '/cleanup_timemachine')
 api.add_resource(SyncFlow, '/sync_flow')
+
+if 'use_aws' in settings.config and settings.config['use_aws']:
+    api.add_resource(InspectionStatus, '/inspection_status')
+    api.add_resource(AwsWarehouseZone, '/aws_warehouse_zone')
+
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0',port='5001')

@@ -16,7 +16,8 @@ CLOUD = {
     "static_ip": "192.168.10.35",
     "system_user": "visioncell",
     "jwt_secret_key": "123",
-    "auth_alg": "RS256"
+    "auth_alg": "RS256",
+    "fire_operator": {"db_name": "", "document": "", "trigger_dest": "http://172.17.0.1:1880/trigger"}
 }
 
 LOCAL = {
@@ -50,4 +51,8 @@ def generate_environment_config(environment='cloud', override=False):
             json.dump(config, outfile, indent=4, sort_keys=True)
         print('CONFIG CREATED FOR {} ENVIRONMENT'.format(environment))
 
-
+def update_config(config):
+    PATH = os.environ['HOME']+'/fvconfig.json'
+    if os.path.exists(PATH):
+        with open(PATH, 'w') as outfile:  
+            json.dump(config, outfile, indent=4, sort_keys=True)
