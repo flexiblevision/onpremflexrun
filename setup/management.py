@@ -56,3 +56,5 @@ def update_config(config):
     if os.path.exists(PATH):
         with open(PATH, 'w') as outfile:  
             json.dump(config, outfile, indent=4, sort_keys=True)
+
+generate_environment_config()

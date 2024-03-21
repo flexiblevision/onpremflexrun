@@ -48,8 +48,8 @@ if platform.processor() != 'aarch64':
     from gpio.gpio_helper import toggle_pin, set_pin_state
 
 if 'use_aws' in settings.config and settings.config['use_aws'] and settings.FireOperator == None:
-    from aws.FireOperator import FireOperator
     try:
+        from aws.FireOperator import FireOperator
         FireOperator  = FireOperator()
         settings.FireOperator = FireOperator
     except Exception as error:
