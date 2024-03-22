@@ -1,6 +1,7 @@
 apt install -y vsftpd
 apt-get -y install isc-dhcp-server
 apt-get -y install jq
+apt-get -y --only-upgrade install google-chrome-stable
 usermod -aG dialout visioncell
 
 sudo rm /etc/xdg/autostart/update-notifier.desktop
