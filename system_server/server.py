@@ -916,6 +916,14 @@ class SyncFlow(Resource):
         return r.text, r.status_code
 
 class InspectionStatus(Resource):
+    def get(self):
+        data = request.json
+        if settings.FireOperator:
+            data = settings.FireOperator.get_status()
+            return data, 200
+        else:
+            return 'Operator not running', 404
+        
     def post(self):
         data = request.json
         if settings.FireOperator:

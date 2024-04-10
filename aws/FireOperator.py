@@ -31,6 +31,7 @@ class FireOperator:
         self.thread       = threading.Event()
         self.trigger_dest = trigger_dest
         self.last_read_time = None
+        self.intialized   = False
 
         self.start_listener()
 
@@ -39,7 +40,10 @@ class FireOperator:
             print(f"Received document snapshot: {doc.id}")
             trigger_record = doc.to_dict()
             self.last_read_time = read_time
-            requests.post(self.trigger_dest, json=trigger_record)
+            if self.intialized: 
+                requests.post(self.trigger_dest, json=trigger_record)
+            else:
+                self.intialized = True
 
         self.thread.set()
 
@@ -48,3 +52,11 @@ class FireOperator:
 
     def update_status(self, status):
         self.status_doc.set(status)
+
+    def get_status(self):
+        status_ref = self.status_doc
+        doc = status_ref.get()
+        if doc.exists:
+            return doc.to_dict()
+        else:
+            return None
