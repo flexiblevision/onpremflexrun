@@ -1,1 +1,0 @@
-https://us-central1-flexible-vision-staging.cloudfunctions.net/

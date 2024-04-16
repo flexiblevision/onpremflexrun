@@ -26,7 +26,7 @@ s.headers.update({'referer': HOST})
 client   = MongoClient("172.17.0.1")
 util_ref = client["fvonprem"]["utils"]
 
-if 'use_aws' in settings.config and settings.config['use_aws']:
+if 'use_aws' in settings.config and settings.config['use_aws'] and settings.kinesis != None:
     use_aws    = True
     aws_client = settings.kinesis
 

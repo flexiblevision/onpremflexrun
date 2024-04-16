@@ -5,19 +5,15 @@ from flask import Flask, request, jsonify, _request_ctx_stack
 
 from six.moves.urllib.request import urlopen
 from jose import jwt
+import sys
+import settings
 
-AUTH0_DOMAIN = 'auth.flexiblevision.com'
-ALGORITHMS   = ["RS256"]
-CLIENT_ID    = '512rYG6XL32k3uiFg38HQ8fyubOOUUKf'
-
-auth0_domain_path = os.path.expanduser('~/flex-run/setup_constants/auth0_domain.txt')
-with open(auth0_domain_path, 'r') as file:
-    AUTH0_DOMAIN = file.read().replace('\n', '')
-
-auth0_cid_path = os.path.expanduser('~/flex-run/setup_constants/auth0_CID.txt')
-with open(auth0_cid_path, 'r') as file:
-    CLIENT_ID = file.read().replace('\n', '')
-
+AUTH0_DOMAIN = settings.config['auth0_domain'] if 'auth0_domain' in settings.config else 'auth.flexiblevision.com'
+alg_type     = settings.config['auth_alg'] if 'auth_alg' in settings.config else 'RS256'
+ALGORITHMS   = [alg_type]
+CLIENT_ID    = settings.config['auth0_CID'] if 'auth0_CID' in settings.config else '512rYG6XL32k3uiFg38HQ8fyubOOUUKf'
+ENVIRON      = settings.config['environ'] if 'environ' in settings.config else "cloud"
+AUDIENCE     = 'https://flexiblevision/api'
 
 APP = Flask(__name__)
 
@@ -70,27 +66,38 @@ def requires_auth(f):
         jsonurl = urlopen("http://localhost:5000/api/capture/auth/jwks")
         jwks = json.loads(jsonurl.read())
         unverified_header = jwt.get_unverified_header(token)
-        rsa_key = {}
-        for key in jwks["keys"]:
-            if key["kid"] == unverified_header["kid"]:
-                rsa_key = {
-                    "kty": key["kty"],
-                    "kid": key["kid"],
-                    "use": key["use"],
-                    "n": key["n"],
-                    "e": key["e"]
-                }
+        if ENVIRON != 'local':
+            rsa_key = {}
+            for key in jwks["keys"]:
+                if key["kid"] == unverified_header["kid"]:
+                    rsa_key = {
+                        "kty": key["kty"],
+                        "kid": key["kid"],
+                        "use": key["use"],
+                        "n": key["n"],
+                        "e": key["e"]
+                    }
 
+        if ENVIRON == 'local':
+            rsa_key = True
         if rsa_key:
             try:
-                payload = jwt.decode(
-                    token,
-                    rsa_key,
-                    algorithms=ALGORITHMS,
-                    audience=CLIENT_ID,
-                    issuer="https://"+AUTH0_DOMAIN+"/",
-                    options={'verify_exp': False}
-                )
+                if ENVIRON == 'local':
+                    payload = jwt.decode(
+                        token, 
+                        [settings.config['jwt_secret_key']], 
+                        issuer="https://"+AUTH0_DOMAIN+"/", 
+                        audience=AUDIENCE, algorithms=ALGORITHMS
+                    )
+                else:
+                    payload = jwt.decode(
+                        token,
+                        rsa_key,
+                        algorithms=ALGORITHMS,
+                        audience=CLIENT_ID,
+                        issuer="https://"+AUTH0_DOMAIN+"/",
+                        options={'verify_exp': False}
+                    )
             except jwt.ExpiredSignatureError:
                 raise AuthError({"code": "token_expired",
                                 "description": "token is expired"}, 401)

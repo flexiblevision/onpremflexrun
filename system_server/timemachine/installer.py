@@ -7,14 +7,12 @@ from rq import Queue, Worker, Connection
 from rq.job import Job
 from worker_scripts.job_manager import insert_job
 import time
+import settings
 
 redis_con   = Redis('localhost', 6379, password=None)
 job_queue   = Queue('default', connection=redis_con)
 
-CLOUD_DOMAIN = "https://clouddeploy.api.flexiblevision.com"
-cloud_path   = os.path.expanduser('~/flex-run/setup_constants/cloud_domain.txt')
-with open(cloud_path, 'r') as file: 
-    CLOUD_DOMAIN = file.read().replace('\n', '')
+CLOUD_DOMAIN = settings.config['cloud_domain'] if 'cloud_domain' in settings.config else "https://clouddeploy.api.flexiblevision.com"
 
 def cloud_install():
     #call to setup servers in the cloud

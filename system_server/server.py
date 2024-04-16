@@ -1,3 +1,8 @@
+import os
+import sys
+settings_path = os.environ['HOME']+'/flex-run'
+sys.path.append(settings_path)
+
 from flask import make_response, request, current_app
 from functools import update_wrapper
 
@@ -6,7 +11,6 @@ from flask_restful import Resource, Api
 import json
 from json import dumps
 import subprocess
-import os
 import auth
 import requests
 import re
@@ -16,8 +20,6 @@ from flask_cors import CORS
 from flask import jsonify
 from pathlib import Path
 
-import os
-import sys
 import zipfile, io
 import base64
 import io
@@ -33,14 +35,25 @@ from worker_scripts.retrieve_programs import retrieve_programs
 from worker_scripts.retrieve_masks import retrieve_masks
 from worker_scripts.model_upload_worker import upload_model
 from worker_scripts.job_manager import insert_job, push_analytics_to_cloud, get_next_analytics_batch
+from helpers.config_helper import write_settings_to_config, set_dhcp
 from timemachine.installer import *
 from timemachine.cleanup import cleanup_timemachine_records
 from timemachine.zip_push import push_event_records, get_unprocessed_events
+from setup.management import generate_environment_config, update_config
 import platform 
 import datetime
+import settings
 
 if platform.processor() != 'aarch64':
     from gpio.gpio_helper import toggle_pin, set_pin_state
+
+if 'use_aws' in settings.config and settings.config['use_aws'] and settings.FireOperator == None:
+    try:
+        from aws.FireOperator import FireOperator
+        FireOperator  = FireOperator()
+        settings.FireOperator = FireOperator
+    except Exception as error:
+        print(error, ' << initializing fire operator')
 
 from redis import Redis
 from rq import Queue, Retry, Worker, Connection
@@ -51,9 +64,10 @@ import tempfile
 from pymongo import MongoClient, ASCENDING
 from bson import json_util, ObjectId
 
-client            = MongoClient("172.17.0.1")
-interfaces_db     = client["fvonprem"]["interfaces"]
-tm_records_db     = client["fvonprem"]["event_records"]
+client        = MongoClient("172.17.0.1")
+interfaces_db = client["fvonprem"]["interfaces"]
+tm_records_db = client["fvonprem"]["event_records"]
+utils_db      = client["fvonprem"]["utils"]
 
 app = Flask(__name__)
 api = Api(app)
@@ -73,10 +87,7 @@ CONTAINERS  = {
     'visiontools': 'visiontools'
 }
 
-CLOUD_DOMAIN = "https://clouddeploy.api.flexiblevision.com"
-cloud_path   = os.path.expanduser('~/flex-run/setup_constants/cloud_domain.txt')
-with open(cloud_path, 'r') as file: 
-    CLOUD_DOMAIN = file.read().replace('\n', '')
+CLOUD_DOMAIN = settings.config['cloud_domain'] if 'cloud_domain' in settings.config else "https://clouddeploy.api.flexiblevision.com"
 
 daemon_services_list = {
     "FlexRun Server": "server.py",
@@ -105,23 +116,18 @@ def is_valid_ip(ip):
     return bool(m) and all(map(lambda n: 0 <= int(n) <= 255, m.groups()))
 
 def get_static_ip_ref():
-    static_ip  = '192.168.10.35'
-    path_ref   = os.path.expanduser('~/flex-run/setup_constants/static_ip.txt')
-    try:
-        with open(path_ref, 'r') as file:
-            static_ip = file.read().replace('\n', '')
-    except: return static_ip
+    static_ip  = settings.config['static_ip'] if 'static_ip' in settings.config else '192.168.10.35'
+    # path_ref   = os.path.expanduser('~/flex-run/setup_constants/static_ip.txt')
+    # try:
+    #     with open(path_ref, 'r') as file:
+    #         static_ip = file.read().replace('\n', '')
+    # except: return static_ip
     return static_ip
 
 def get_interface_name_ref():
     eth_ports = get_eth_port_names()
     if len(eth_ports) <= 1:
         interface_name  = 'enp0s31f6'
-        path_ref        = os.path.expanduser('~/flex-run/setup_constants/interface_name.txt')
-        try:
-            with open(path_ref, 'r') as file:
-                interface_name = file.read().replace('\n', '')
-        except: return interface_name
     else:
         interface_name = get_eth_port_names()[-1]
 
@@ -153,6 +159,7 @@ def set_static_ips(network = None):
 def set_ips(settings):
     store_netplan_settings(settings)
     build_set_netplan()
+    set_dhcp()
 
 def build_set_netplan():
     interfaces = []
@@ -185,7 +192,6 @@ def store_netplan_settings(i_config):
         else:
             raise Exception('Failed')
 
-        #ips.append(static_ip+'/24') #append static ip
         ip_string = '['
         for ip in ips: ip_string += (ip) 
         ip_string = ip_string + ']'
@@ -241,7 +247,8 @@ def get_eth_port_names():
     for idx, n in enumerate(names.split('\n')):
         if re.match(r"^eth|^en", n):
             eth_names.append(n)
-            
+    
+    eth_names.sort()
     return eth_names
 
 def list_usb_paths():
@@ -267,18 +274,26 @@ def get_lan_ips():
         lanIps['ip']   = 'not assigned'
         lanIps['port'] = eth
         lanIps['name'] = lan_port
-        lanIps['dhcp'] = True
+        lanIps['dhcp'] = False
         interface = subprocess.Popen(['ifconfig', eth], stdout=subprocess.PIPE).communicate()[0].decode('utf-8')
         i_entry   = interfaces_db.find_one({'iname': eth})
         if i_entry: lanIps['dhcp'] = i_entry['dhcp']
 
         ip6 = None
+        ip  = 'LAN IP not assigned'
         if 'inet6' in interface:
             ip6 = interface.split('inet6')[1].split(' ')[1]
         if 'inet' in interface:
             ip = interface.split('inet')[1].split(' ')[1]
         else:
-            ip = 'LAN IP not assigned'
+            if idx > 2:
+                #assign port a default IP
+                if not i_entry:
+                    ip   = '192.168.{}.10'.format(5+idx)
+                    data = {'ip': ip, 'lanPort': eth, 'dhcp': False}
+                    if data['ip'] != '' and is_valid_ip(data['ip']):
+                        set_ips(data)
+                        os.system('sudo ifconfig ' + eth + ' '  + data['ip'] + ' netmask 255.255.255.0')
 
         if ip6 and ip6 == ip: ip = 'LAN IP not assigned'
         lanIps['ip'] = ip
@@ -385,6 +400,7 @@ class Upgrade(Resource):
             print(e)
 
         #upgrade flex run 
+        generate_environment_config()
         os.system("chmod +x "+os.environ['HOME']+"/flex-run/upgrades/upgrade_flex_run.sh")
         os.system("sh "+os.environ['HOME']+"/flex-run/upgrades/upgrade_flex_run.sh")
 
@@ -453,6 +469,9 @@ class AuthToken(Resource):
     def post(self):
         j = request.json
         if j:
+            if 'obj' in j and 'server_ip' in j['obj']:
+                settings.config['cloud_domain'] = 'http://{}'.format(j['obj']['server_ip'])
+                write_settings_to_config()
             os.system('echo '+j['refresh_token']+' > '+os.environ['HOME']+'/flex-run/system_server/creds.txt')
             return True
         return False
@@ -600,17 +619,8 @@ class DeviceInfo(Resource):
         info['system']        = system_info()
         info['arch']          = system_arch()
         info['mac_id']        = get_mac_id()
-        info['hotspot']       = ''
+        info['hotspot']       = settings.config['ssid'] if 'ssid' in settings.config else 'not configured'
         info['last_active']   = str(datetime.datetime.now())
-
-        try:
-            cmd = subprocess.Popen(['cat', os.environ['HOME']+'/flex-run/setup_constants/visioncell_ssid.txt'], stdout=subprocess.PIPE)
-            cmd_out, cmd_err = cmd.communicate()
-            cleanStr = cmd_out.strip().decode("utf-8")
-            info['hotspot'] = cleanStr
-        except Exception as error:
-            print(error)
-
 
         return info
 
@@ -873,13 +883,6 @@ class SyncAnalytics(Resource):
 
         if access_token:
             push_analytics_to_cloud(CLOUD_DOMAIN, access_token)
-            # analytics = get_next_analytics_batch()
-            # if analytics:
-            #     num_data  = len(analytics)
-            #     j_push    = job_queue.enqueue(push_analytics_to_cloud, CLOUD_DOMAIN, access_token, job_timeout=99999999, result_ttl=-1)
-            #     if j_push: insert_job(j_push.id, 'Syncing_'+str(num_data)+'_with_cloud')
-
-
             events = get_unprocessed_events()
             if events['count'] > 0:
                 er_push = job_queue.enqueue(push_event_records, CLOUD_DOMAIN, access_token, 
@@ -895,6 +898,56 @@ class CleanupTimemachine(Resource):
     @auth.requires_auth
     def delete(self):
         return cleanup_timemachine_records(), 200
+
+class SyncFlow(Resource):
+    @auth.requires_auth
+    def get(self):
+        access_token = request.headers.get('Access-Token')
+        flow_path = "{}/flows.json".format(os.environ['HOME'])
+        os.system("docker cp nodecreator:/root/.node-red/flows.json "+flow_path)
+        dev_ref   = utils_db.find_one({'type':'device_id'})
+        device_id =  None if not dev_ref else dev_ref['id']
+
+        if not device_id: return 'device id not found', 404
+
+        url = '{}/api/capture/devices/{}/flow'.format(CLOUD_DOMAIN, device_id)
+        headers = {'Authorization' : 'Bearer {}'.format(access_token), 'Accept' : 'application/json', 'Content-Type' : 'application/json'}
+        r = requests.post(url, data=open(flow_path, 'rb'), headers=headers)
+        return r.text, r.status_code
+
+class InspectionStatus(Resource):
+    def get(self):
+        data = request.json
+        if settings.FireOperator:
+            data = settings.FireOperator.get_status()
+            return data, 200
+        else:
+            return 'Operator not running', 404
+        
+    def post(self):
+        data = request.json
+        if settings.FireOperator:
+            settings.FireOperator.update_status(data)
+            return 'Updated', 200
+        else:
+            return 'Operator not running', 404
+
+class AwsWarehouseZone(Resource):
+    def get(self):
+        results = {'warehouse': "", 'zone': ""}
+        station = settings.config['fire_operator']['document']
+        wz      = station.split('_')
+        if len(wz) == 2:
+            results['warehouse'] = wz[0]
+            results['zone']      = wz[1]
+        return results
+    
+    def put(self):
+        data = request.json
+        if 'warehouse' in data and 'zone' in data:
+            doc_key = f"{data['warehouse']}_{data['zone']}"
+            settings.config['fire_operator']['document'] = doc_key
+            update_config(settings.config)
 
 api.add_resource(AuthToken, '/auth_token')
 api.add_resource(Networks, '/networks')
@@ -928,6 +981,12 @@ api.add_resource(DeAuthorize, '/deauthorize')
 api.add_resource(EnableTimemachine, '/enable_timemachine')
 api.add_resource(DisableTimemachine, '/disable_timemachine')
 api.add_resource(CleanupTimemachine, '/cleanup_timemachine')
+api.add_resource(SyncFlow, '/sync_flow')
+
+if 'use_aws' in settings.config and settings.config['use_aws']:
+    api.add_resource(InspectionStatus, '/inspection_status')
+    api.add_resource(AwsWarehouseZone, '/aws_warehouse_zone')
+
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0',port='5001')

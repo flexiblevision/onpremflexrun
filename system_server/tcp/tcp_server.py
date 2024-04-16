@@ -9,12 +9,15 @@ from pymongo import MongoClient
 import datetime
 import string
 import json
+import time
 
 client   = MongoClient("172.17.0.1")
 io_ref   = client["fvonprem"]["io_presets"]
 util_ref = client["fvonprem"]["utils"]
 config_ref = client['fvonprem']['io_configs']
 pin_state_ref = client["fvonprem"]["pin_state"]
+
+#(<direction input=0/output=1>,<pin_index>,<value on=0/off=1>)
 
 def take_action(actions):
     params = ''
@@ -23,6 +26,33 @@ def take_action(actions):
             params+='&did='+str(actions[key])
 
     return params 
+
+def set_pin_state(pin_num, state):
+    query = {'type':'gpio_pin_state'}
+    pin_key       = 'GPO'+str(pin_num)
+    if state == True:
+        res = functions.set_gpio(1, int(pin_num), 0)
+    else:
+        res = functions.set_gpio(1, int(pin_num), 1)
+
+    pin_state_ref.update_one(query, {'$set': {pin_key: state}}, True)
+    return str(res)
+
+def read_input_state():
+    state = {
+        "inputs": {
+            1: functions.read_gpi(1),
+            2: functions.read_gpi(2),
+            3: functions.read_gpi(3),
+            4: functions.read_gpi(4),
+            5: functions.read_gpi(5),
+            6: functions.read_gpi(6),
+            7: functions.read_gpi(7),
+            8: functions.read_gpi(8)
+        }
+    }
+
+    return state
 
 import platform 
 if platform.processor() != 'aarch64':
@@ -76,16 +106,45 @@ while True:
                 data = connections.recv(100)
                 print('received: ', data)
                 if data:
-                    incoming_command = data.decode('utf-8')
-                    command          = None
-                    actions          = None
-                    params           = ''
                     try:
+                        incoming_command = data.decode('utf-8')
+                        command          = None
+                        actions          = None
+                        params           = ''
+                        if incoming_command == "help":
+                            help_map = {
+                                "commands": {
+                                    "Read Input Pins": "GPIread",
+                                    "Set Output Pin State (on/off)": ["{\"1\": True}", "{\"1\": False}"],
+                                    "Run Prediction": {
+                                        "Valid Commands (based on your presets)": list(valid_commands.keys()),
+                                        "Format": "{\"cmd1\": {\"did\": \"12345\"}}"
+                                    }
+                                }
+                            }
+
+                            b_help_string = json.dumps(help_map).encode('utf-8')
+                            connections.send(b_help_string)
+                            continue
+                        elif incoming_command == "GPIread":
+                            io_state_str  = read_input_state()
+                            b_io_state = json.dumps(io_state_str).encode('utf-8')
+                            connections.send(b_io_state)
+                            continue
+
                         incoming_command = json.loads(incoming_command)
                         command          = list(incoming_command.keys())[0]
                         actions          = incoming_command[command]
-                        params           = take_action(actions)
-                    except:
+                        if len(command) == 1:
+                            #treat as an output pin command
+                            state = set_pin_state(command, actions)
+                            bstate = str.encode(state + '\n')
+                            connections.send(bstate)
+                            continue
+                        else:
+                            params           = take_action(actions)
+                    except Exception as error:
+                        print(error, ' <<<<<<< error')
                         print('INVALID COMMAND PARSE')
 
                     if command in valid_commands.keys():

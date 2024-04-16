@@ -25,6 +25,8 @@ util_collection   = client["fvonprem"]["utils"]
 use_aws           = False 
 aws_client        = None
 config            = settings.config
+BATCH_SIZE        = 20
+
 
 if 'use_aws' in config and config['use_aws']:
     use_aws    = True
@@ -65,7 +67,7 @@ def get_unsynced_records():
 
         sync_time = time_now_ms() - 30000
         query     = {"synced": False, "modified": {"$lt": int(sync_time)}}
-        analytics = analytics_coll.find(query).limit(20)
+        analytics = analytics_coll.find(query).limit(BATCH_SIZE)
         result    = json.loads(json_util.dumps(analytics))
 
         for i in result:

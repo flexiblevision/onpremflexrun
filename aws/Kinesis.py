@@ -3,12 +3,9 @@ import os
 import datetime
 import requests
 from pymongo import MongoClient, ASCENDING
+import settings
 
-CLOUD_FUNCTIONS_BASE = 'https://us-central1-flexible-vision-staging.cloudfunctions.net/'
-gcp_functions_path   = os.path.expanduser('~/flex-run/setup_constants/gcp_functions_domain.txt')
-with open(gcp_functions_path, 'r') as file:
-    CLOUD_FUNCTIONS_BASE = file.read().replace('\n', '')
-
+CLOUD_FUNCTIONS_BASE = settings.config['gcp_functions_domain'] if 'gcp_functions_domain' in settings.config else 'https://us-central1-flexible-vision-staging.cloudfunctions.net/'
 client   = MongoClient("172.17.0.1")
 util_ref = client["fvonprem"]["utils"]
 
@@ -25,7 +22,10 @@ class Kinesis(object):
         self.CLIENT      = None
         self.authorized  = False
 
-        self.authorize()
+        try:
+            self.authorize()
+        except Exception as error:
+            print(error)
 
     def authorize(self):
         #pull aws keys from cloud

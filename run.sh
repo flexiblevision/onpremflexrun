@@ -4,6 +4,7 @@ if [ "$EUID" -ne 0 ]
 fi
 sudo apt-get update
 sudo apt-get install -y python3.6
-sudo apt-get install net-tools
+sudo apt-get install -y net-tools
+sudo apt install -y jq
 
 python3 deploy.py

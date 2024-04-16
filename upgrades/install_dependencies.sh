@@ -1,7 +1,11 @@
-apt install vsftpd
+apt install -y vsftpd
+apt-get -y install isc-dhcp-server
+apt-get -y install jq
+apt-get -y --only-upgrade install google-chrome-stable
 usermod -aG dialout visioncell
 
 sudo rm /etc/xdg/autostart/update-notifier.desktop
 apt-mark hold "nvidia*"
-pip3 install 'rq==1.5.0'
-pip3 install "boto3==1.26.96"
+
+python3 $HOME/flex-run/setup/management.py
+pip3 install -r $HOME/flex-run/requirements.txt
