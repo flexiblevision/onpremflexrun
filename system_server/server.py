@@ -948,6 +948,7 @@ class AwsWarehouseZone(Resource):
             doc_key = f"{data['warehouse']}_{data['zone']}"
             settings.config['fire_operator']['document'] = doc_key
             update_config(settings.config)
+            os.system(f"forever restart {os.environ['HOME']}/flex-run/system_server/server.py")
 
 api.add_resource(AuthToken, '/auth_token')
 api.add_resource(Networks, '/networks')
