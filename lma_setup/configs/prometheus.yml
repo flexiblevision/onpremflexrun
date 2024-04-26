@@ -30,3 +30,8 @@ scrape_configs:
   - job_name: "telegraf"
     static_configs:
       - targets: ["localhost:8094"]
+
+
+  - job_name: 'capture_gunicorn'
+    static_configs:
+      - targets: ['localhost:9102']
