@@ -97,7 +97,7 @@ def cloud_call(url, analytics, headers):
     try:
         # last_record_timestamp = analytics[-1]['modified']
         # update_last_sync_on_success(last_record_timestamp)
-        res = requests.post(url, json=analytics, headers=headers)
+        res = requests.post(url, json=analytics, headers=headers, timeout=20)
         print(res)
         print('--------------------------------------')
         success = res.status_code == 200

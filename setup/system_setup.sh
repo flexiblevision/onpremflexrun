@@ -47,7 +47,7 @@ if [ "$SYSTEM_ARCH" = "x86" ]; then
     apt update
     apt-get install -y nvidia-docker2
     pkill -SIGHUP dockerd
-    docker run --runtime=nvidia --rm nvidia/cuda:12.0.1-cudnn8-runtime-ubuntu20.04 nvidia-smi
+    #docker run --gpus device=0 --rm nvidia/cuda:12.0.1-cudnn8-runtime-ubuntu20.04 nvidia-smi
     systemctl restart docker
 fi
 
