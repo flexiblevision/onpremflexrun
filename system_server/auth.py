@@ -87,7 +87,7 @@ def requires_auth(f):
                         token, 
                         [settings.config['jwt_secret_key']], 
                         issuer="https://"+AUTH0_DOMAIN+"/", 
-                        audience=AUDIENCE, algorithms=ALGORITHMS
+                        audience=AUDIENCE, algorithms=ALGORITHMS,
                         options={'verify_exp': False}
                     )
                 else:
