@@ -45,7 +45,7 @@ import datetime
 import settings
 
 if platform.processor() != 'aarch64':
-    from gpio.gpio_helper import toggle_pin, set_pin_state
+    from gpio.gpio_helper import toggle_pin, set_pin_state, read_pin
 
 if 'use_aws' in settings.config and settings.config['use_aws'] and settings.FireOperator == None:
     try:
@@ -376,6 +376,14 @@ class SetPin(Resource):
         j = request.json
         if 'pin_num' in j and 'state' in j:
             return set_pin_state(j['pin_num'], j['state'])
+        else:
+            return -1
+
+class ReadPin(Resource):
+    def post(self):
+        j = request.json
+        if 'pin_num' in j:
+            return read_pin(j['pin_num'])
         else:
             return -1
 
@@ -969,6 +977,7 @@ api.add_resource(GetLanIps, '/get_lan_ips')
 api.add_resource(GetCameraUID, '/camera_uid/<string:idx>')
 api.add_resource(TogglePin, '/toggle_pin')
 api.add_resource(SetPin, '/set_pin')
+api.add_resource(ReadPin, '/read_input_pin')
 api.add_resource(RestartBackend, '/refresh_backend')
 api.add_resource(ListServices, '/list_services')
 api.add_resource(UploadModel, '/upload_model')

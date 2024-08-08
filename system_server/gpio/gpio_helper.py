@@ -22,6 +22,10 @@ functions = CDLL(so_file)
 # value - HIGH = 1
 # value - LOW  = 0
 
+def read_pin(pin_num):
+    state = functions.read_gpi(int(pin_num))
+    return int(state) != int(pin_num)
+
 def toggle_pin(pin_num):
     query = {'type':'gpio_pin_state'}
     cur_pin_state = pin_state_ref.find_one(query)
@@ -37,13 +41,16 @@ def toggle_pin(pin_num):
 def set_pin_state(pin_num, state):
     query = {'type':'gpio_pin_state'}
     pin_key       = 'GPO'+str(pin_num)
+    res = -1
     if state == True:
         functions.set_gpio(1, int(pin_num), 0)
+        res = 'on'
     else:
         functions.set_gpio(1, int(pin_num), 1)
+        res = 'off'
 
     pin_state_ref.update_one(query, {'$set': {pin_key: state}}, True)
-    return functions.read_gpi(int(pin_num))
+    return res
 
 
 
