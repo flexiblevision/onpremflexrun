@@ -34,7 +34,7 @@ class Kinesis(object):
         headers      = {'Authorization': auth_token}
         url          = '{}pull_foreign_auth'.format(CLOUD_FUNCTIONS_BASE)
         data         = {'resource_name': 'aws_kinesis'}
-        resp         = requests.post(url, json=data, headers=headers)
+        resp         = requests.post(url, json=data, headers=headers, timeout=30)
 
         if resp.status_code == 200:
             data = resp.json()
