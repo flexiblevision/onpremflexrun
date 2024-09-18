@@ -3,6 +3,8 @@ import firebase_admin
 from firebase_admin import credentials
 from firebase_admin import firestore
 from google.oauth2 import service_account
+from google.auth.transport.requests import AuthorizedSession
+
 import time
 import requests
 import settings
@@ -60,3 +62,12 @@ class FireOperator:
             return doc.to_dict()
         else:
             return None
+
+    def get_status_by_service_account(self):
+        url = 'https://us-central1-testingprivateapis.cloudfunctions.net/get-status-by-service-account'
+        creds = service_account.IDTokenCredentials.from_service_account_file(
+            FIRESTORE_CREDS, target_audience=url)
+
+        authed_session = AuthorizedSession(creds)
+        resp = authed_session.post(self.document)
+        return resp.json()
