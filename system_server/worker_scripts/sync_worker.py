@@ -47,7 +47,7 @@ def refresh_tokens():
     data   = {'refresh_token': refresh_token}
     url = HOST+':'+PORT+path
     try:
-        res = s.post(url, headers=headers, json=data)
+        res = s.post(url, headers=headers, json=data, timeout=30)
         tokens = res.json()
         if 'id_token' in tokens and 'access_token' in tokens:
             return {'id_token':tokens['id_token'], 'access_token': tokens['access_token']}
@@ -92,7 +92,7 @@ def can_sync():
     path = '/api/capture/system/can_sync'
     url  = HOST+':'+PORT+path
     try:
-        res  = s.get(url)
+        res  = s.get(url, timeout=30)
     except:
         print('Failed to request sync')
         time.sleep(5)
@@ -111,7 +111,7 @@ def check_and_cleanup():
             'Authorization': 'Bearer ' + tokens['id_token']
         }
         try:
-            res = s.post(url, headers=headers)
+            res = s.post(url, headers=headers, timeout=30)
             print('CLEANUP RESPONSE: ',res)
         except:
             print('Failed to cleanup')
@@ -126,7 +126,7 @@ def sync_device():
                   'Access-Token': tokens['access_token']
                 }
         try:
-            res = s.get(url, headers=headers)
+            res = s.get(url, headers=headers, timeout=30)
             time.sleep(5)
             check_and_cleanup()
         except:
