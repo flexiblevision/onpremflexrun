@@ -9,6 +9,8 @@ import time
 import requests
 import settings
 import os
+import datetime
+from pymongo import MongoClient, ASCENDING
 
 cred = None
 FIRESTORE_CREDS = f"{os.environ['HOME']}/fire_creds.json"
@@ -22,6 +24,12 @@ if 'fire_operator' in settings.config:
     trigger_dest = settings.config['fire_operator']['trigger_dest']
 
 db = firestore.Client(project="flexible-vision-staging", credentials=cred, database=db_name) 
+
+client   = MongoClient("172.17.0.1")
+util_ref = client["fvonprem"]["utils"]
+
+def ms_timestamp():
+    return int(datetime.datetime.now().timestamp()*1000)
 
 class FireOperator:
     def __init__(self):
@@ -37,13 +45,30 @@ class FireOperator:
 
         self.start_listener()
 
+    def syncing_alive(self):
+        last_sync_ref = util_ref.find_one({'type': 'predict_sync'}, {'_id': 0})
+        sync_enabled_ref = util_ref.find_one({'type': 'sync'}, {'_id': 0})
+        sync_interval_ref = util_ref.find_one({'type': 'sync_interval'}, {'_id': 0})
+
+        sync_enabled  = sync_enabled_ref['is_enabled']
+        last_sync     = int(last_sync_ref['ms_time'])
+        sync_interval = int(sync_interval_ref['interval'])
+
+        if sync_enabled == False and (last_sync + ((60000*sync_interval) * 10)) > ms_timestamp():
+            return True
+        else:
+            # update status to rejected because of waiting for sync service...
+            status = {}
+            self.update_status(status)
+            return False
+
     def listener(self, doc_snapshot, changes, read_time):
         for doc in doc_snapshot:
             print(f"Received document snapshot: {doc.id}")
             trigger_record = doc.to_dict()
             self.last_read_time = read_time
             if self.intialized: 
-                requests.post(self.trigger_dest, json=trigger_record)
+                requests.post(self.trigger_dest, json=trigger_record, timeout=10)
             else:
                 self.intialized = True
 
