@@ -53,8 +53,6 @@ sudo crontab -r
 (sudo crontab -l; echo '0 */8 * * * docker exec vision rm -rf /tmp') | sudo crontab -
 (sudo crontab -l; echo '0 0 * * * forever restart '$HOME'/flex-run/system_server/worker_scripts/sync_worker.py') | sudo crontab -
 (sudo crontab -l; echo '0 1 * * * rm -rf ~/.cache/google-chrome') | sudo crontab -
-(sudo crontab -l; echo '0 1 * * * busctl --user call org.gnome.Shell /org/gnome/Shell org.gnome.Shell Eval s 'Meta.restart("Restarting...")' > /dev/null 2>&1') | sudo crontab -
-
 
 forever start -c python3 $HOME/flex-run/system_server/server.py
 forever start -c python3 $HOME/flex-run/system_server/worker.py
