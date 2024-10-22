@@ -52,6 +52,9 @@ if [ "$ARCH" = "x86_64" ]; then
     forever start -c python3 $HOME/flex-run/system_server/gpio/gpio_controller.py
 fi
 
+if nvidia-smi --query-gpu=name --format=csv | grep -q 'A4000'; then
+    (sudo crontab -l; echo '@reboot sleep 50 && nvidia-smi --lock-gpu-clocks=1500,1500') | sudo crontab -
+fi
 
 if [ -e /etc/vsftpd.conf ]
 then
