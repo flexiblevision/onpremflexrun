@@ -65,5 +65,10 @@ else
     echo "ftp config not found"
 fi
 
+MAX_MEMORY=10000000000
+MAX_MEMORY_POLICY=allkeys-lru
+echo "maxmemory $MAX_MEMORY" >> /etc/redis/redis.conf
+echo "maxmemory-policy $MAX_MEMORY_POLICY" >> /etc/redis/redis.conf
+systemctl restart redis.service
 
 forever restart $HOME/flex-run/system_server/server.py

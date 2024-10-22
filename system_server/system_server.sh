@@ -69,6 +69,12 @@ if nvidia-smi --query-gpu=name --format=csv | grep -q 'A4000'; then
     (sudo crontab -l; echo '@reboot sleep 50 && nvidia-smi --lock-gpu-clocks=1500,1500') | sudo crontab -
 fi
 
+MAX_MEMORY=10000000000
+MAX_MEMORY_POLICY=allkeys-lru
+echo "maxmemory $MAX_MEMORY" >> /etc/redis/redis.conf
+echo "maxmemory-policy $MAX_MEMORY_POLICY" >> /etc/redis/redis.conf
+systemctl restart redis.service
+
 forever start -c redis-server --daemonize yes
 sudo sh -c 'echo 1000 > /sys/module/usbcore/parameters/usbfs_memory_mb'
 sudo rm /etc/xdg/autostart/update-notifier.desktop
