@@ -166,8 +166,9 @@ def retrieve_models(data, token):
             #push model into ocr continer 
             print('pushing model into ocr container')
             os.system(f"mv {BASE_PATH_TO_MODELS}{model_name} {BASE_PATH_TO_MODELS}ocrmodel")
-
-
+            os.system(f"docker cp {BASE_PATH_TO_MODELS}ocrmodel ocr:/documentocr")
+            os.system(f"rm -rf {BASE_PATH_TO_MODELS}ocrmodel")
+            os.system("docker restart ocr")
         elif model_type in LITE_MODEL_TYPES:
             os.system("docker exec predictlite rm -rf /data/lite_models")
             print('pushing models into predictlite server: ', BASE_PATH_TO_MODELS)

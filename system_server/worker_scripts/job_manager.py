@@ -197,3 +197,7 @@ def push_analytics_to_cloud(domain, access_token):
             if j_push: insert_job(j_push.id, 'Syncing_'+str(len(analytics))+'_with_cloud')
 
     return True
+
+def enable_ocr():
+    install_file = f"{os.environ['HOME']}/flex-run/helpers/install_ocr.sh"
+    os.system(f"sudo sh {install_file}")

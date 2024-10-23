@@ -34,7 +34,7 @@ from worker_scripts.retrieve_models import retrieve_models
 from worker_scripts.retrieve_programs import retrieve_programs
 from worker_scripts.retrieve_masks import retrieve_masks
 from worker_scripts.model_upload_worker import upload_model
-from worker_scripts.job_manager import insert_job, push_analytics_to_cloud, get_next_analytics_batch
+from worker_scripts.job_manager import insert_job, push_analytics_to_cloud, get_next_analytics_batch, enable_ocr
 from helpers.config_helper import write_settings_to_config, set_dhcp
 from timemachine.installer import *
 from timemachine.cleanup import cleanup_timemachine_records
@@ -464,6 +464,32 @@ class DisableTimemachine(Resource):
             return True, 200
         else:
             return 'missing type key. Type key must be passed',500
+
+
+class ManageOcr(Resource):
+    @auth.requires_auth
+    def put(self):
+        j = request.json
+        if 'state' in j:
+            if j['state']:
+                install_job = job_queue.enqueue(enable_ocr, job_timeout=9999, result_ttl=9999)
+                job = insert_job(install_job.id, 'installing and deploying ocr service')
+                return 'enabling...', 200
+            else:
+                os.system("docker stop ocr")
+                os.system("docker rm ocr")
+                return 'disabled', 200
+
+        return 'state key not found', 404
+
+class OcrStatus(Resource):
+    def get(self):
+        try:
+            res = requests.get('http://172.17.0.1:5002/')
+            return res.status_code == 200
+        except Exception as error:
+            print(error)
+            return False, 500
 
 class AuthToken(Resource):
     @auth.requires_auth
@@ -992,6 +1018,8 @@ api.add_resource(EnableTimemachine, '/enable_timemachine')
 api.add_resource(DisableTimemachine, '/disable_timemachine')
 api.add_resource(CleanupTimemachine, '/cleanup_timemachine')
 api.add_resource(SyncFlow, '/sync_flow')
+api.add_resource(OcrStatus, '/ocr_status')
+api.add_resource(ManageOcr, '/manage_ocr')
 
 if 'use_aws' in settings.config and settings.config['use_aws']:
     api.add_resource(InspectionStatus, '/inspection_status')
