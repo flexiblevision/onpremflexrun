@@ -52,7 +52,7 @@ sudo crontab -r
 (sudo crontab -l; echo '@reboot sudo sh '$HOME'/flex-run/scripts/mediasystem_server.sh') | sudo crontab -
 (sudo crontab -l; echo '0 */8 * * * docker exec vision rm -rf /tmp') | sudo crontab -
 (sudo crontab -l; echo '0 0 * * * forever restart '$HOME'/flex-run/system_server/worker_scripts/sync_worker.py') | sudo crontab -
-
+(sudo crontab -l; echo '0 1 * * * rm -rf ~/.cache/google-chrome') | sudo crontab -
 
 forever start -c python3 $HOME/flex-run/system_server/server.py
 forever start -c python3 $HOME/flex-run/system_server/worker.py
@@ -64,6 +64,16 @@ ARCH=$(arch)
 if [ "$ARCH" = "x86_64" ]; then
     forever start -c python3 $HOME/flex-run/system_server/gpio/gpio_controller.py
 fi
+
+if nvidia-smi --query-gpu=name --format=csv | grep -q 'A4000'; then
+    (sudo crontab -l; echo '@reboot sleep 50 && nvidia-smi --lock-gpu-clocks=1500,1500') | sudo crontab -
+fi
+
+MAX_MEMORY=10000000000
+MAX_MEMORY_POLICY=allkeys-lru
+echo "maxmemory $MAX_MEMORY" >> /etc/redis/redis.conf
+echo "maxmemory-policy $MAX_MEMORY_POLICY" >> /etc/redis/redis.conf
+systemctl restart redis.service
 
 forever start -c redis-server --daemonize yes
 sudo sh -c 'echo 1000 > /sys/module/usbcore/parameters/usbfs_memory_mb'
