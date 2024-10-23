@@ -44,6 +44,26 @@ def create_config_file(data):
             f.write('\t}\n')
         f.write('}')
 
+def download_by_link(token, project_id, version, destination):
+    # get link 
+    path = CLOUD_DOMAIN+'/api/capture/models/download_link/'+str(project_id)+'/'+str(version)
+    headers = {'Authorization': 'Bearer '+token}
+    res  = requests.get(path, headers=headers)
+    
+    signed_link = res.json()
+    written     = 0
+    chunk_size  = 8192
+    download = requests.get(signed_link, stream=True)
+    cont_length = download.headers['Content-length']
+    with download as r:
+        r.raise_for_status()
+        with open(destination, 'wb') as f:
+            for chunk in r.iter_content(chunk_size=8192):
+                f.write(chunk)
+                written += chunk_size
+                print(f"{written}/{cont_length}")
+    
+
 def retrieve_models(data, token):
     BASE_PATH_TO_MODELS = base_path()+'models/'
     BASE_PATH_TO_LITE_MODELS = base_path()+'lite_models/'
@@ -51,8 +71,11 @@ def retrieve_models(data, token):
 
 
     model_type = 'versions' if 'model_type' not in data or data['model_type'] != 'high_speed' else data['model_type']
-    print(model_type)
-    if model_type not in LITE_MODEL_TYPES:
+    if 'model_type' in data and data['model_type'] == 'ocr': model_type = 'ocr' 
+    
+    if model_type == 'ocr':
+        BASE_PATH_TO_MODELS = '/tmp/'
+    elif model_type not in LITE_MODEL_TYPES:
         #if model.config exists - remove it
         if os.path.exists(BASE_PATH_TO_MODELS+'model.config'):
             os.system("rm -rf "+BASE_PATH_TO_MODELS+'model.config')
@@ -98,8 +121,11 @@ def retrieve_models(data, token):
                     print('version not found, skipping...', model_folder+'/'+str(version))
             else:
                 print('Syncing '+model_name+' versions '+str(version))
-                path = CLOUD_DOMAIN+'/api/capture/models/download/'+str(project_id)+'/'+str(version)
-                res = os.system(f"curl -X GET {path} -H 'accept: application/json' -H 'Authorization: Bearer {token}' -o {model_folder}/model.zip")
+                if model_type == 'ocr':
+                    download_by_link(token, str(project_id), str(version), f"{model_folder}/model.zip")
+                else:
+                    path = CLOUD_DOMAIN+'/api/capture/models/download/'+str(project_id)+'/'+str(version)
+                    res = os.system(f"curl -X GET {path} -H 'accept: application/json' -H 'Authorization: Bearer {token}' -o {model_folder}/model.zip")
                 
                 if os.path.exists(model_folder+'/model.zip'):
                     try:
@@ -131,12 +157,18 @@ def retrieve_models(data, token):
                 models_versions[model_name] = model_data
 
     if models_versions:
-        if model_type not in LITE_MODEL_TYPES:
+        if model_type not in LITE_MODEL_TYPES and model_type != 'ocr':
             create_config_file(models_versions.values())
 
         save_models_versions(models_versions.values(), model_type)
         
-        if model_type in LITE_MODEL_TYPES:
+        if model_type == 'ocr':
+            #push model into ocr continer 
+            print('pushing model into ocr container')
+            os.system(f"mv {BASE_PATH_TO_MODELS}{model_name} {BASE_PATH_TO_MODELS}ocrmodel")
+
+
+        elif model_type in LITE_MODEL_TYPES:
             os.system("docker exec predictlite rm -rf /data/lite_models")
             print('pushing models into predictlite server: ', BASE_PATH_TO_MODELS)
             os.system("docker cp "+BASE_PATH_TO_MODELS+" predictlite:/data/")
