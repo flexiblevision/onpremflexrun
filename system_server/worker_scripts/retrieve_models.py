@@ -68,6 +68,7 @@ def retrieve_models(data, token):
     BASE_PATH_TO_MODELS = base_path()+'models/'
     BASE_PATH_TO_LITE_MODELS = base_path()+'lite_models/'
     LITE_MODEL_TYPES    = ['high_speed']
+    OCR_MODEL = ""
 
 
     model_type = 'versions' if 'model_type' not in data or data['model_type'] != 'high_speed' else data['model_type']
@@ -109,7 +110,6 @@ def retrieve_models(data, token):
 
         model_data = {'type': model_name}
         model_data[model_type] =[]
-
         #iterate over the models data and request/extract model to models folder
         for version in versions:
             if model_name in exclude_models and version in exclude_models[model_name]:
@@ -122,6 +122,7 @@ def retrieve_models(data, token):
             else:
                 print('Syncing '+model_name+' versions '+str(version))
                 if model_type == 'ocr':
+                    OCR_MODEL = model_folder
                     download_by_link(token, str(project_id), str(version), f"{model_folder}/model.zip")
                 else:
                     path = CLOUD_DOMAIN+'/api/capture/models/download/'+str(project_id)+'/'+str(version)
@@ -147,7 +148,6 @@ def retrieve_models(data, token):
                         model_data[model_type].append(version)
                     except zipfile.BadZipfile:
                         print('bad zipfile in '+model_folder)
-                        
                     os.system("rm -rf "+model_folder+'/model.zip')
 
         if model_data[model_type]:
@@ -164,8 +164,9 @@ def retrieve_models(data, token):
         
         if model_type == 'ocr':
             #push model into ocr continer 
+            os.system("docker exec ocr rm -rf /documentocr/ocrmodel")
             print('pushing model into ocr container')
-            os.system(f"mv {BASE_PATH_TO_MODELS}{model_name} {BASE_PATH_TO_MODELS}ocrmodel")
+            os.system(f"mv {OCR_MODEL} {BASE_PATH_TO_MODELS}ocrmodel")
             os.system(f"docker cp {BASE_PATH_TO_MODELS}ocrmodel ocr:/documentocr")
             os.system(f"rm -rf {BASE_PATH_TO_MODELS}ocrmodel")
             os.system("docker restart ocr")
