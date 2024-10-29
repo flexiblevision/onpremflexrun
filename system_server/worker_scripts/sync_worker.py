@@ -68,10 +68,10 @@ def token_is_valid(token):
     time_now = datetime.datetime.now().timestamp()
     token_expiration = data["exp"]
     if token_expiration < time_now:
-        print('TOKEN EXPIRED -------------------')
+        print('TOKEN EXPIRED -------------------', datetime.datetime.now())
         return False
     else:
-        print('TOKEN VALID ---------------')
+        print('TOKEN VALID ---------------', datetime.datetime.now())
         return True
 
 def get_auth_token():
