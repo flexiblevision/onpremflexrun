@@ -92,7 +92,9 @@ def choose_environment():
     #wait for user choice and generate config based on choice
     choice = None
     while choice == None:
-        var = input("Please select environment option 1 or 2 (1=cloud, 2=local) >  ")
+        print("1 [default]: Connect onprem system to Flexible Vision Cloud")
+        print("2 [cluster]: Connect onprem system to local running Flexible Vision cluster")
+        var = input("Please select environment option 1 or 2 (1=default, 2=cluster) >  ")
         if var == '1':
             choice = 'cloud'
         elif var == '2':
