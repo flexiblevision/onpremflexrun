@@ -26,6 +26,7 @@ use_aws           = False
 aws_client        = None
 config            = settings.config
 BATCH_SIZE        = 20
+BQ_INGEST_PATH    = "https://data-ingest-queue-172198548516.us-central1.run.app"
 
 
 if 'use_aws' in config and config['use_aws']:
@@ -98,9 +99,10 @@ def cloud_call(url, analytics, headers):
         # last_record_timestamp = analytics[-1]['modified']
         # update_last_sync_on_success(last_record_timestamp)
         res = requests.post(url, json=analytics, headers=headers, timeout=20)
-        print(res)
+        bq_res = requests.post(BQ_INGEST_PATH, json=analytics, headers=headers, timeout=20)
+        print(res, bq_res)
         print('--------------------------------------')
-        success = res.status_code == 200
+        success = res.status_code == 200 and bq_res.status_code == 200
         if success:
             for i in analytics: mark_as_synced(i['id'])
 
@@ -133,7 +135,7 @@ def push_analytics_to_cloud_batch(domain, access_token):
     #analytics     = get_next_analytics_batch()
     analytics     = get_unsynced_records()
     num_analytics = len(analytics)
-    entries_limit = 20
+    entries_limit = BATCH_SIZE
 
     if num_analytics == 0:
         return
@@ -150,32 +152,12 @@ def push_analytics_to_cloud_batch(domain, access_token):
         if use_aws:
             j_push = job_queue.enqueue(kinesis_call, a, job_timeout=99999999, result_ttl=-1)
             if j_push: insert_job(j_push.id, 'Syncing_'+str(len(a))+'_with_cloud')
-
-            # did_sync  = kinesis_call(analytics)
         else:
             j_push = job_queue.enqueue(cloud_call, url, a, headers, job_timeout=99999999, result_ttl=-1)
             if j_push: insert_job(j_push.id, 'Syncing_'+str(len(a))+'_with_cloud')
-
-            # did_sync  = cloud_call(url, a, headers)
-
         start += entries_limit
         end += entries_limit
         count += len(a)
-
-
-        # if not did_sync:
-        #     print('BREAKING FROM ANALYTICS LOOP')
-        #     break
-
-        # analytics     = get_next_analytics_batch()
-        # num_analytics = len(analytics)
-
-    # else:
-    #     analytics = get_next_analytics_batch()
-    #     if use_aws:
-    #         kinesis_call(analytics)
-    #     else:
-    #         cloud_call(url, analytics, headers)
 
     return True
 
