@@ -23,7 +23,7 @@ if 'fire_operator' in settings.config:
     document     = settings.config['fire_operator']['document'] #(warehouse_zone)
     trigger_dest = settings.config['fire_operator']['trigger_dest']
 
-db = firestore.Client(project="flexible-vision-staging", credentials=cred, database=db_name) 
+db = firestore.Client(project="testingprivateapis", credentials=cred, database=db_name) 
 
 client   = MongoClient("172.17.0.1")
 util_ref = client["fvonprem"]["utils"]

@@ -9,7 +9,7 @@ CLOUD = {
     "auth0_domain": "auth.flexiblevision.com",
     "cloud_domain": "https://v1.cloud.flexiblevision.com",
     "branch": "master",
-    "gcp_functions_domain": "https://us-central1-flexible-vision-staging.cloudfunctions.net/",
+    "gcp_functions_domain": "https://us-central1-testingprivateapis.cloudfunctions.net/",
     "container_check_domain": "https://us-central1-flexible-vision-staging.cloudfunctions.net/",
     "interface_name": "enp0s31f6",
     "latest_stable_ref": "latest_stable_version",
@@ -17,7 +17,7 @@ CLOUD = {
     "system_user": "visioncell",
     "jwt_secret_key": "123",
     "auth_alg": "RS256",
-    "fire_operator": {"db_name": "", "document": "", "trigger_dest": "http://172.17.0.1:1880/trigger"}
+    "fire_operator": {"db_name": "pod-inspection", "document": "", "trigger_dest": "http://172.17.0.1:1880/trigger"}
 }
 
 LOCAL = {
