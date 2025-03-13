@@ -25,7 +25,7 @@ util_collection   = client["fvonprem"]["utils"]
 use_aws           = False 
 aws_client        = None
 config            = settings.config
-BATCH_SIZE        = 20
+BATCH_SIZE        = 5
 BQ_INGEST_PATH    = "https://data-ingest-queue-172198548516.us-central1.run.app"
 
 
