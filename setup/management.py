@@ -9,7 +9,7 @@ CLOUD = {
     "auth0_domain": "auth.flexiblevision.com",
     "cloud_domain": "https://v1.cloud.flexiblevision.com",
     "branch": "master",
-    "gcp_functions_domain": "https://us-central1-testingprivateapis.cloudfunctions.net/",
+    "gcp_functions_domain": "https://us-central1-flexible-vision-staging.cloudfunctions.net/",
     "container_check_domain": "https://us-central1-flexible-vision-staging.cloudfunctions.net/",
     "interface_name": "enp0s31f6",
     "latest_stable_ref": "latest_stable_version",
