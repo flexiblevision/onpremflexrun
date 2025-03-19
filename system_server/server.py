@@ -34,7 +34,7 @@ from worker_scripts.retrieve_models import retrieve_models
 from worker_scripts.retrieve_programs import retrieve_programs
 from worker_scripts.retrieve_masks import retrieve_masks
 from worker_scripts.model_upload_worker import upload_model
-from worker_scripts.job_manager import insert_job, push_analytics_to_cloud, get_next_analytics_batch, enable_ocr
+from worker_scripts.job_manager import insert_job, push_analytics_to_cloud, enable_ocr
 from helpers.config_helper import write_settings_to_config, set_dhcp
 from timemachine.installer import *
 from timemachine.cleanup import cleanup_timemachine_records
