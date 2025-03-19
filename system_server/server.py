@@ -74,6 +74,7 @@ api = Api(app)
 
 CORS(app)
 NUM_CLASSES = 99
+MAX_JOBS    = 1000
 redis_con   = Redis('localhost', 6379, password=None)
 job_queue   = Queue('default', connection=redis_con)
 CONTAINERS  = {
@@ -436,7 +437,13 @@ class EnableTimemachine(Resource):
         if 'type' in j:
             if j['type'] in tm_types:
                 if j['type'] == 'local' or j['type'] == 'zip_push':
-                    install_job = job_queue.enqueue(local_zip_push_install, j['type'], job_timeout=99999999, result_ttl=-1)
+                    install_job = job_queue.enqueue(
+                                    local_zip_push_install, 
+                                    j['type'], 
+                                    job_timeout=600,
+                                    result_ttl=3600, 
+                                    retry=Retry(max=5, interval=60),
+                                )
                     job = insert_job(install_job.id, 'installing time machine locally')
                     did_install = True
                 else:
@@ -472,7 +479,12 @@ class ManageOcr(Resource):
         j = request.json
         if 'state' in j:
             if j['state']:
-                install_job = job_queue.enqueue(enable_ocr, job_timeout=9999, result_ttl=9999)
+                install_job = job_queue.enqueue(
+                                enable_ocr, 
+                                job_timeout=600,
+                                result_ttl=3600, 
+                                retry=Retry(max=5, interval=60),
+                            )
                 job = insert_job(install_job.id, 'installing and deploying ocr service')
                 return 'enabling...', 200
             else:
@@ -579,9 +591,21 @@ class DownloadModels(Resource):
         data           = request.json
         access_token   = request.headers.get('Access-Token')
         
-        j_models = job_queue.enqueue(retrieve_models, data, access_token, job_timeout=99999999, result_ttl=-1)
-        j_masks  = job_queue.enqueue(retrieve_masks, data, access_token, job_timeout=99999999, result_ttl=-1)
-        j_progs  = job_queue.enqueue(retrieve_programs, data, access_token, job_timeout=9999999, result_ttl=-1) 
+        j_models = job_queue.enqueue(retrieve_models, data, access_token,                                 
+                                job_timeout=1800,
+                                result_ttl=3600, 
+                                retry=Retry(max=5, interval=60),
+                            )
+        j_masks  = job_queue.enqueue(retrieve_masks, data, access_token, 
+                                job_timeout=600,
+                                result_ttl=3600, 
+                                retry=Retry(max=5, interval=60),
+                            )
+        j_progs  = job_queue.enqueue(retrieve_programs, data, access_token, 
+                                job_timeout=600,
+                                result_ttl=3600, 
+                                retry=Retry(max=5, interval=60),
+                            )
 
         if j_models: insert_job(j_models.id, 'Downloading models')
         if j_masks: insert_job(j_masks.id, 'Downloading masks')
@@ -594,7 +618,11 @@ class DownloadPrograms(Resource):
         data           = request.json
         access_token   = request.headers.get('Access-Token')
         
-        j_progs  = job_queue.enqueue(retrieve_programs, data, access_token, job_timeout=9999999, result_ttl=-1) 
+        j_progs  = job_queue.enqueue(retrieve_programs, data, access_token, 
+                                job_timeout=600,
+                                result_ttl=3600, 
+                                retry=Retry(max=5, interval=60),
+                            )
         if j_progs: insert_job(j_progs.id, 'Downloading programs')
 
         return True    
@@ -860,7 +888,12 @@ class UploadModel(Resource):
 
             os.system("rm -rf "+fn)
 
-            j_upload = job_queue.enqueue(upload_model, str(path), str(fl.filename), job_timeout=99999999, result_ttl=-1)
+            j_upload = job_queue.enqueue(upload_model, str(path), str(fl.filename), 
+                            job_timeout=600,
+                            result_ttl=3600, 
+                            retry=Retry(max=5, interval=60),
+                        )
+
             if j_upload: insert_job(j_upload.id, 'Uploading models')
         except zipfile.BadZipfile:
             print('bad zipfile in ',fn)
@@ -914,13 +947,21 @@ class SyncAnalytics(Resource):
     @auth.requires_auth
     def get(self):
         access_token = request.headers.get('Access-Token')
+        num_jobs = job_queue.count
+        if num_jobs > MAX_JOBS:
+            return f"MAX JOBS EXCEEDED: {num_jobs}/{MAX_JOBS} - IGNORING SYNC"
 
         if access_token:
             push_analytics_to_cloud(CLOUD_DOMAIN, access_token)
             events = get_unprocessed_events()
             if events['count'] > 0:
                 er_push = job_queue.enqueue(push_event_records, CLOUD_DOMAIN, access_token, 
-                            events, job_timeout=80000, result_ttl=-1, retry=Retry(max=10, interval=60))                            
+                            events, 
+                            job_timeout=1800,
+                            result_ttl=3600, 
+                            retry=Retry(max=5, interval=60),
+                        )
+
                 if er_push: insert_job(er_push.id, 'Pushing '+str(events['count'])+' events to cloud')
 
 class DeAuthorize(Resource):
