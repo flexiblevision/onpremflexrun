@@ -36,6 +36,7 @@ while True:
         if not j: continue
         if j and j.get_status() == 'finished':
             job_collection.delete_one({'_id': job['_id']})
+            j.delete()
         elif j.get_status() == 'failed':
             insert_failed_job(j)
             job_collection.delete_one({'_id': job['_id']})

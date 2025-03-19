@@ -25,7 +25,13 @@ def local_zip_push_install(tm_type):
     os.system("chmod +x "+os.environ['HOME']+"/flex-run/system_server/timemachine/local_zip_push.sh")
     os.system("sh "+os.environ['HOME']+"/flex-run/system_server/timemachine/local_zip_push.sh "+tm_type)
 
-    verify_install = job_queue.enqueue(verify_local_install, job_timeout=10000, result_ttl=-1)
+    verify_install = job_queue.enqueue(verify_local_install, 
+                        job_timeout=600,
+                        result_ttl=3600, 
+                        retry=Retry(max=5, interval=60),
+                    )
+
+
     insert_job(verify_install.id, 'verify timemachine install')
 
     return True
