@@ -26,7 +26,7 @@ aws_client        = None
 config            = settings.config
 BATCH_SIZE        = 5
 BQ_INGEST_PATH    = "https://data-ingest-queue-172198548516.us-central1.run.app"
-if config['latest_stable_ref'] == 'latest_stable_ref':
+if config['latest_stable_ref'] == 'latest_stable_version':
     #use prod endpoint
     BQ_INGEST_PATH = "https://data-enqueue-prod-172198548516.us-central1.run.app"
 
