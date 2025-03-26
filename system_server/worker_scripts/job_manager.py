@@ -26,7 +26,9 @@ aws_client        = None
 config            = settings.config
 BATCH_SIZE        = 5
 BQ_INGEST_PATH    = "https://data-ingest-queue-172198548516.us-central1.run.app"
-
+if config['latest_stable_ref'] == 'latest_stable_ref':
+    #use prod endpoint
+    BQ_INGEST_PATH = "https://data-enqueue-prod-172198548516.us-central1.run.app"
 
 if 'use_aws' in config and config['use_aws']:
     use_aws    = True
@@ -98,7 +100,7 @@ def cloud_call(url, analytics, headers):
         bq_res = requests.post(BQ_INGEST_PATH, json=analytics, headers=headers, timeout=20)
         print(res, bq_res)
         print('--------------------------------------')
-        success = res.status_code == 200 and bq_res.status_code == 200
+        success = res.status_code == 200
         if success:
             for i in analytics: mark_as_synced(i['id'])
         time.sleep(1)
