@@ -6,6 +6,7 @@ from pymongo import MongoClient, ASCENDING
 import settings
 
 CLOUD_FUNCTIONS_BASE = settings.config['gcp_functions_domain'] if 'gcp_functions_domain' in settings.config else 'https://us-central1-flexible-vision-staging.cloudfunctions.net/'
+FOREIGN_PULL_PATH    = "https://pull-foreign-auth-prod-399393967839.us-central1.run.app"
 client   = MongoClient("172.17.0.1")
 util_ref = client["fvonprem"]["utils"]
 
@@ -32,7 +33,7 @@ class Kinesis(object):
         access_token = self.get_auth_token()
         auth_token   = 'Bearer {}'.format(access_token)
         headers      = {'Authorization': auth_token}
-        url          = '{}pull_foreign_auth'.format(CLOUD_FUNCTIONS_BASE)
+        url          = FOREIGN_PULL_PATH #'{}pull_foreign_auth'.format(CLOUD_FUNCTIONS_BASE)
         data         = {'resource_name': 'aws_kinesis'}
         resp         = requests.post(url, json=data, headers=headers, timeout=30)
 
