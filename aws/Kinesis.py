@@ -33,7 +33,7 @@ class Kinesis(object):
         access_token = self.get_auth_token()
         auth_token   = 'Bearer {}'.format(access_token)
         headers      = {'Authorization': auth_token}
-        url          = FOREIGN_PULL_PATH #'{}pull_foreign_auth'.format(CLOUD_FUNCTIONS_BASE)
+        url          = '{}pull_foreign_auth'.format(CLOUD_FUNCTIONS_BASE)
         data         = {'resource_name': 'aws_kinesis'}
         resp         = requests.post(url, json=data, headers=headers, timeout=30)
 

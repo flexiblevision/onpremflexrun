@@ -118,6 +118,8 @@ def kinesis_call(analytics):
             did_send = aws_client.send_stream(a)
             mark_as_synced(a['id'])
             print(did_send)
+
+        time.sleep(1)
         print('--------------------------------------')
         return did_send
     except Exception as error:
