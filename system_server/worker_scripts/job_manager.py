@@ -24,7 +24,7 @@ util_collection   = client["fvonprem"]["utils"]
 use_aws           = False 
 aws_client        = None
 config            = settings.config
-BATCH_SIZE        = 5
+BATCH_SIZE        = 10
 BQ_INGEST_PATH    = "https://data-ingest-queue-172198548516.us-central1.run.app"
 if config['latest_stable_ref'] == 'latest_stable_version':
     #use prod endpoint
@@ -54,7 +54,7 @@ def get_unsynced_records():
     if sync_obj:
         sync_time = time_now_ms() - 30000
         query     = {"synced": False, "modified": {"$lt": int(sync_time)}}
-        analytics = analytics_coll.find(query).limit(BATCH_SIZE)
+        analytics = analytics_coll.find(query)
         result    = json.loads(json_util.dumps(analytics))
 
         for i in result:
@@ -169,12 +169,14 @@ def push_analytics_to_cloud(domain, access_token):
     headers = {"Authorization": "Bearer "+access_token, 'Content-Type': 'application/json'}
     url     = domain+"/api/capture/devices/upload_prediction"
 
-    num_analytics = 1
-    while num_analytics > 0:
-        analytics = get_unsynced_records()
-        num_analytics = len(analytics)
-        if num_analytics <= 0: return True
-        print('#Analytics: ', num_analytics)
+    latest_analytics = get_unsynced_records()
+    num_analytics = len(latest_analytics)
+    
+    for i in range(0, num_analytics, BATCH_SIZE):
+        analytics = latest_analytics[i:i+BATCH_SIZE]
+        if not analytics: break
+        
+        print('#Analytics: ', len(analytics))
         if use_aws:
             j_push = job_queue.enqueue(
                 kinesis_call, 
