@@ -6,7 +6,7 @@ chmod +x $HOME/flex-run/scripts/allocate_usbfs_memory.sh
 chmod +x $HOME/flex-run/scripts/restart_localprediction.sh
 chmod +x $HOME/flex-run/scripts/tcp_server_start.sh
 chmod +x $HOME/flex-run/scripts/gpio_server_start.sh
-chmod +x $HOME/flex-run/scripts/sync_worker_start.
+chmod +x $HOME/flex-run/scripts/sync_worker_start.sh
 chmod +x $HOME/flex-run/scripts/start_job_watcher.sh
 chmod +x $HOME/flex-run/scripts/start_ftp_server.sh
 chmod +x $HOME/flex-run/scripts/system_cleanup.sh
