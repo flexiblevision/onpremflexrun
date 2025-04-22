@@ -39,8 +39,6 @@ sudo crontab -r
 
 #---workers-----
 (sudo crontab -l; echo '@reboot sleep 30 && sudo sh '$HOME'/flex-run/scripts/worker_server_start.sh') | sudo crontab -
-(sudo crontab -l; echo '@reboot sleep 30 && sudo sh '$HOME'/flex-run/scripts/worker_server_start.sh') | sudo crontab -
-(sudo crontab -l; echo '@reboot sleep 30 && sudo sh '$HOME'/flex-run/scripts/worker_server_start.sh') | sudo crontab -
 #----------------
 
 (sudo crontab -l; echo '@reboot sleep 30 && sudo  sh '$HOME'/flex-run/scripts/hotspot.sh') | sudo crontab -
