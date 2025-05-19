@@ -81,6 +81,7 @@ docker run -p 8500:8500 -p 8501:8501 --gpus device=0 --name localprediction  -d 
 
 docker run -p 8511:8511 --name predictlite  -d  \
     --restart unless-stopped --network imagerie_nw  \
+    --runtime nvidia \
     --log-opt max-size=50m --log-opt max-file=5 \
     -t fvonprem/$4-predictlite:$PREDICT_LITE_VERSION
 

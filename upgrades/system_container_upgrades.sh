@@ -121,6 +121,7 @@ if [ $PREDLITE_UPTD != 'True' ]; then
     
     docker run -p 8511:8511 --name predictlite  -d  \
         --restart unless-stopped --network imagerie_nw  \
+        --runtime nvidia \
         --log-opt max-size=50m --log-opt max-file=5 \
         -t fvonprem/$4-predictlite:$PREDLITE_UPTD
 
