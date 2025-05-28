@@ -36,6 +36,7 @@ from worker_scripts.retrieve_masks import retrieve_masks
 from worker_scripts.model_upload_worker import upload_model
 from worker_scripts.job_manager import insert_job, push_analytics_to_cloud, enable_ocr
 from helpers.config_helper import write_settings_to_config, set_dhcp
+from helpers.system import get_system_metrics
 from timemachine.installer import *
 from timemachine.cleanup import cleanup_timemachine_records
 from timemachine.zip_push import push_event_records, get_unprocessed_events
@@ -683,6 +684,7 @@ class DeviceInfo(Resource):
         info['mac_id']        = get_mac_id()
         info['hotspot']       = settings.config['ssid'] if 'ssid' in settings.config else 'not configured'
         info['last_active']   = str(datetime.datetime.now())
+        info['metrics']       = get_system_metrics()
 
         return info
 
