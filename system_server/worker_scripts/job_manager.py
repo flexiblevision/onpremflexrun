@@ -54,6 +54,9 @@ def get_unsynced_records():
     if sync_obj:
         sync_time = time_now_ms() - 30000
         query     = {"synced": False, "modified": {"$lt": int(sync_time)}}
+        if use_aws:
+            query['complete'] = True
+        
         analytics = analytics_coll.find(query)
         result    = json.loads(json_util.dumps(analytics))
 
