@@ -48,14 +48,6 @@ import settings
 if platform.processor() != 'aarch64':
     from gpio.gpio_helper import toggle_pin, set_pin_state, read_pin
 
-if 'use_aws' in settings.config and settings.config['use_aws'] and settings.FireOperator == None:
-    try:
-        from aws.FireOperator import FireOperator
-        FireOperator  = FireOperator()
-        settings.FireOperator = FireOperator
-    except Exception as error:
-        print(error, ' << initializing fire operator')
-
 from redis import Redis
 from rq import Queue, Retry, Worker, Connection
 from rq.job import Job
@@ -992,41 +984,6 @@ class SyncFlow(Resource):
         r = requests.post(url, data=open(flow_path, 'rb'), headers=headers)
         return r.text, r.status_code
 
-class InspectionStatus(Resource):
-    def get(self):
-        data = request.json
-        if settings.FireOperator:
-            data = settings.FireOperator.get_status()
-            return data, 200
-        else:
-            return 'Operator not running', 404
-        
-    def post(self):
-        data = request.json
-        if settings.FireOperator:
-            settings.FireOperator.update_status(data)
-            return 'Updated', 200
-        else:
-            return 'Operator not running', 404
-
-class AwsWarehouseZone(Resource):
-    def get(self):
-        results = {'warehouse': "", 'zone': ""}
-        station = settings.config['fire_operator']['document']
-        wz      = station.split('_')
-        if len(wz) == 2:
-            results['warehouse'] = wz[0]
-            results['zone']      = wz[1]
-        return results
-    
-    def put(self):
-        data = request.json
-        if 'warehouse' in data and 'zone' in data:
-            doc_key = f"{data['warehouse']}_{data['zone']}"
-            settings.config['fire_operator']['document'] = doc_key
-            update_config(settings.config)
-            os.system(f"forever restart {os.environ['HOME']}/flex-run/system_server/server.py")
-
 api.add_resource(AuthToken, '/auth_token')
 api.add_resource(Networks, '/networks')
 api.add_resource(MacId, '/mac_id')
@@ -1064,10 +1021,10 @@ api.add_resource(SyncFlow, '/sync_flow')
 api.add_resource(OcrStatus, '/ocr_status')
 api.add_resource(ManageOcr, '/manage_ocr')
 
-if 'use_aws' in settings.config and settings.config['use_aws']:
-    api.add_resource(InspectionStatus, '/inspection_status')
-    api.add_resource(AwsWarehouseZone, '/aws_warehouse_zone')
-
 
 if __name__ == '__main__':
+    if 'use_aws' in settings.config and settings.config['use_aws']:
+        from aws.FireOperator import run_operator
+        run_operator()
+
     app.run(host='0.0.0.0',port='5001')

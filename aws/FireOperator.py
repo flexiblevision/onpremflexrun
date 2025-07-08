@@ -10,6 +10,8 @@ import requests
 import settings
 import os
 import datetime
+import subprocess
+import sys
 from pymongo import MongoClient, ASCENDING
 
 cred = None
@@ -96,3 +98,37 @@ class FireOperator:
         authed_session = AuthorizedSession(creds)
         resp = authed_session.post(self.document)
         return resp.json()
+
+def run_operator():
+    if 'use_aws' in settings.config and settings.config['use_aws']:
+        fo_server_path = os.path.join(os.environ.get('HOME', '.'), 'flex-run', 'aws', 'fo_server.py')
+        print(f"Checking if '{fo_server_path}' is already running via 'forever'...")
+
+        try:
+            result = subprocess.run(['forever', 'list'], capture_output=True, text=True, check=True)
+            forever_list_output = result.stdout
+
+            is_fo_server_running = False
+            for line in forever_list_output.splitlines():
+                if fo_server_path in line and "STOPPED" not in line:
+                    is_fo_server_running = True
+                    break # Found a running instance, no need to check further
+
+            if is_fo_server_running:
+                print(f"WARNING: '{fo_server_path}' is already running via 'forever'.")
+                print("Skipping Flask server initialization to avoid conflicts.")
+                return 'skipped'
+            else:
+                print(f"'{fo_server_path}' is not detected as running via 'forever' (or is stopped).")
+                print(f"Starting '{fo_server_path}' using forever...")
+                subprocess.Popen(['forever', 'start', '-c', 'python3', fo_server_path],
+                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                print(f"'{fo_server_path}' started via forever.")
+                return 'started'
+
+        except subprocess.CalledProcessError as e:
+            print(f"ERROR: 'forever list' command failed with exit code {e.returncode}: {e.stderr.strip()}")
+            print("Proceeding with Flask server initialization, but 'forever' check failed.")
+        except Exception as e:
+            print(f"An unexpected error occurred during 'forever' check: {e}")
+            print("Proceeding with Flask server initialization, but 'forever' check failed.")
