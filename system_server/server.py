@@ -984,6 +984,17 @@ class SyncFlow(Resource):
         r = requests.post(url, data=open(flow_path, 'rb'), headers=headers)
         return r.text, r.status_code
 
+class RestartFO(Resource):
+    def get(self):
+        try:
+            os.system("forever restart /root/flex-run/aws/fo_server.py")
+            return "FO server restarted", 200
+        except Exception as e:
+            print("Error restarting FO server:", e)
+            return "Error restarting FO server", 500
+            
+if settings.config['use_aws']:
+    api.add_resource(RestartFO, '/restart_fo')
 api.add_resource(AuthToken, '/auth_token')
 api.add_resource(Networks, '/networks')
 api.add_resource(MacId, '/mac_id')
