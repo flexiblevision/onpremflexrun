@@ -992,8 +992,8 @@ class RestartFO(Resource):
         except Exception as e:
             print("Error restarting FO server:", e)
             return "Error restarting FO server", 500
-            
-if settings.config['use_aws']:
+
+if 'use_aws' in settings.config and settings.config['use_aws']:
     api.add_resource(RestartFO, '/restart_fo')
 api.add_resource(AuthToken, '/auth_token')
 api.add_resource(Networks, '/networks')
