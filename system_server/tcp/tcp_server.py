@@ -6,6 +6,7 @@ import time
 import requests
 from ctypes import *
 from pymongo import MongoClient
+from gpio_helper import *
 import datetime
 import string
 import json
@@ -27,48 +28,15 @@ def take_action(actions):
 
     return params 
 
-def set_pin_state(pin_num, state):
-    query = {'type':'gpio_pin_state'}
-    pin_key       = 'GPO'+str(pin_num)
-    if state == True:
-        res = functions.set_gpio(1, int(pin_num), 0)
+
+def read_gpio_state(type):
+    io_state = read_all_gpio_states_as_json()
+    if type == 'input':
+        return {"inputs": io_state["inputs"]}   
+    elif type == 'output':
+        return {"outputs": io_state["outputs"]}
     else:
-        res = functions.set_gpio(1, int(pin_num), 1)
-
-    pin_state_ref.update_one(query, {'$set': {pin_key: state}}, True)
-    return str(res)
-
-def read_input_state():
-    state = {
-        "inputs": {
-            1: functions.read_gpi(1),
-            2: functions.read_gpi(2),
-            3: functions.read_gpi(3),
-            4: functions.read_gpi(4),
-            5: functions.read_gpi(5),
-            6: functions.read_gpi(6),
-            7: functions.read_gpi(7),
-            8: functions.read_gpi(8)
-        }
-    }
-
-    return state
-
-def read_output_state():
-    state = {
-        "outputs": {
-            1: functions.read_gpo(1),
-            2: functions.read_gpo(2),
-            3: functions.read_gpo(3),
-            4: functions.read_gpo(4),
-            5: functions.read_gpo(5),
-            6: functions.read_gpo(6),
-            7: functions.read_gpo(7),
-            8: functions.read_gpo(8)
-        }
-    }
-
-    return state    
+        return {'error': 'Invalid state type requested'}    
 
 import platform 
 if platform.processor() != 'aarch64':
@@ -144,13 +112,13 @@ while True:
                             connections.send(b_help_string)
                             continue
                         elif incoming_command == "GPIread":
-                            io_state_str  = read_input_state()
+                            io_state_str  = read_gpio_state('input')
                             b_io_state = json.dumps(io_state_str).encode('utf-8')
                             connections.send(b_io_state)
                             continue
 
                         elif incoming_command == "GPOread":
-                            io_state_str  = read_output_state()
+                            io_state_str  = read_gpio_state('output')
                             b_io_state = json.dumps(io_state_str).encode('utf-8')
                             connections.send(b_io_state)
                             continue

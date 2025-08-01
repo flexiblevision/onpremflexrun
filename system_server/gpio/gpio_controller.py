@@ -8,6 +8,7 @@ import datetime
 import string
 import json
 from bson import json_util, ObjectId
+from gpio_helper import *
 
 # Import Flask and Flask-SocketIO
 from flask import Flask, jsonify, request
@@ -191,37 +192,20 @@ class GPIO:
         for pin, state in enumerate(pins):
             self.cur_pin_state[f'GP{i_o}{pin+1}'] = state == 0
 
-
     def run(self):
         self.default_pin_state()
         print("GPIO monitoring thread started.")
         while True:
             cur_pin = None
-            all_pin_state = [
-                self._read_gpi(1),
-                self._read_gpi(2),
-                self._read_gpi(3),
-                self._read_gpi(4),
-                self._read_gpi(5),
-                self._read_gpi(6),
-                self._read_gpi(7),
-                self._read_gpi(8)
-            ]
 
-            all_output_state = [
-                self.read_gpo_func(1),
-                self.read_gpo_func(2),
-                self.read_gpo_func(3),
-                self.read_gpo_func(4),
-                self.read_gpo_func(5),
-                self.read_gpo_func(6),
-                self.read_gpo_func(7),
-                self.read_gpo_func(8)
-            ]
+            gpio_state = read_all_gpio_states_as_json()
+            all_output_state = gpio_state['outputs']
+            all_pin_state = gpio_state['inputs']
 
             if self.current_output_state != all_output_state:
                 self.current_output_state = all_output_state[:]
                 self.update_pin_state('O', all_output_state)
+                print("Output state changed:", all_output_state)
                 self._emit_pin_state_update()
 
             if 0 in all_pin_state:
