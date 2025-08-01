@@ -40,6 +40,7 @@ def toggle_pin(pin_num):
         functions.set_gpio(1, int(pin_num), 0)
     pin_state_ref.update_one(query, {'$set': cur_pin_state}, True)
 
+
 def set_pin_state(pin_num, state):
     query = {'type':'gpio_pin_state'}
     pin_key       = 'GPO'+str(pin_num)
