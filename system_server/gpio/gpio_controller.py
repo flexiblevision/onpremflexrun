@@ -9,14 +9,29 @@ import string
 import json
 from bson import json_util, ObjectId
 
+# Import Flask and Flask-SocketIO
+from flask import Flask, jsonify, request
+from flask_socketio import SocketIO, emit
+
+# --- Flask and SocketIO Setup ---
+app = Flask(__name__)
+socketio = SocketIO(app, cors_allowed_origins="*")
+
+# --- Database Connections ---
 client   = MongoClient("172.17.0.1")
 io_ref   = client["fvonprem"]["io_presets"]
 util_ref = client["fvonprem"]["utils"]
 pin_state_ref = client["fvonprem"]["pin_state"]
 pass_fail_ref = client["fvonprem"]["pass_fail"]
 
-so_file = os.environ['HOME']+"/flex-run/system_server/gpio/gpio.so"
-functions = CDLL(so_file)
+# --- GPIO Library Loading ---
+so_file = os.environ.get('HOME', '') + "/flex-run/system_server/gpio/gpio.so"
+if not os.path.exists(so_file):
+    print(f"GPIO shared library not found at: {so_file}. Please ensure it's correctly built and located.")
+    functions = None
+else:
+    functions = CDLL(so_file)
+
 
 #(<direction>,<pin_index>,<value>)
 # direction - IN  = 0
@@ -32,9 +47,47 @@ class GPIO:
     def __init__(self):
         self.state_query      = {'type': 'gpio_pin_state'}
         self.cur_pin_state    = pin_state_ref.find_one(self.state_query)
+        if not self.cur_pin_state:
+            self.cur_pin_state = {
+                'GPO1': False, 'GPO2': False, 'GPO3': False, 'GPO4': False,
+                'GPO5': False, 'GPO6': False, 'GPO7': False, 'GPO8': False,
+                'GPI1': False, 'GPI2': False, 'GPI3': False, 'GPI4': False,
+                'GPI5': False, 'GPI6': False, 'GPI7': False, 'GPI8': False,
+            }
+            pin_state_ref.insert_one(self.cur_pin_state)
+        else:
+            del self.cur_pin_state['_id']
+            del self.cur_pin_state['type']
+
         self.last_input_state = "wait"
         self.debounce_delay   = .001
-        self.last_pin_state   = None
+        self.last_pin_state   = None 
+        self.set_gpio_func = functions.set_gpio
+        self.read_gpi_func = functions.read_gpi
+        self.read_gpo_func = functions.read_gpo
+        self.current_output_state = [
+            self.read_gpo_func(1),
+            self.read_gpo_func(2),
+            self.read_gpo_func(3),
+            self.read_gpo_func(4),
+            self.read_gpo_func(5),
+            self.read_gpo_func(6),
+            self.read_gpo_func(7),
+            self.read_gpo_func(8)
+        ]
+
+
+    def _set_gpio(self, direction, pin_index, value):
+        """Wrapper for set_gpio with error handling."""
+        if self.set_gpio_func:
+            return self.set_gpio_func(direction, pin_index, value)
+        return -1 # Indicate failure if function not loaded
+
+    def _read_gpi(self, pin_index):
+        """Wrapper for read_gpi with error handling."""
+        if self.read_gpi_func:
+            return self.read_gpi_func(pin_index)
+        return -1 # Indicate failure if function not loaded
 
     def get_pass_fail_entry(self, model, version):
         query = {'modelName': model, 'modelVersion': version}
@@ -50,7 +103,7 @@ class GPIO:
 
         res     = util_ref.find_one({'type': 'id_token'}, {'_id': 0})
         token   = res['token']
-        host    = 'http://172.17.0.1'            
+        host    = 'http://172.17.0.1'
         port    = '5000'
         path    = '/api/capture/predict/snap/'+str(modelName)+'/'+str(modelVersion)+'/'+str(cameraId)+'?workstation='+str(ioVal)+'&preset_id='+str(presetId)
 
@@ -80,67 +133,32 @@ class GPIO:
             except Exception as error:
                 print(error)
                 return
-        
+
         if res.status_code == 200:
             data = res.json()
             print(data, '-----------------------')
-            #self.set_pass_fail_pins(modelName, modelVersion, data['tags'])
-            self.set_pass_fail_pins(data)
             self.pin_switch_inference_end(pin)
 
-    def set_pass_fail_pins(self, data):
-        if 'pass_fail' in data:
-            print(data['pass_fail'], ' <======================')
-            if data['pass_fail'] == 'PASS':
-                #set pass pin
-                print(functions.set_gpio(1, 5, 0), 'PASS PIN ON')
-                self.cur_pin_state['GPO5'] = True
-            if data['pass_fail'] == 'FAIL':
-                #set fail pin
-                print(functions.set_gpio(1, 6, 0), 'FAIL PIN ON')
-                self.cur_pin_state['GPO6'] = True
 
-            pin_state_ref.update_one(self.state_query, {'$set': self.cur_pin_state}, True)
-            time.sleep(.5)
-
-            print(functions.set_gpio(1, 5, 1), 'PASS PIN OFF')
-            print(functions.set_gpio(1, 6, 1), 'FAIL PIN OFF')
-            self.cur_pin_state['GPO5'] = False
-            self.cur_pin_state['GPO6'] = False
-            pin_state_ref.update_one(self.state_query, {'$set': self.cur_pin_state}, True)
-            self.cur_pin_state    = pin_state_ref.find_one(self.state_query)
-            return data['pass_fail']
-        return
 
     def pin_switch_inference_start(self, pin):
-        functions.set_gpio(1, 2, 1)        # ready OFF
-        functions.set_gpio(1, 3, 0)        # system busy
-        self.cur_pin_state['GPO2'] = False # ready pin OFF - RED
-        self.cur_pin_state['GPO3'] = True  # busy pin ON - RED
-        self.cur_pin_state['GPI'+str(pin)] = True
-        self.cur_pin_state = pin_state_ref.find_one(self.state_query)
+        self.cur_pin_state['GPI'+str(pin)] = True 
+        self.cur_pin_state = pin_state_ref.find_one(self.state_query) or self.cur_pin_state
         pin_state_ref.update_one(self.state_query, {'$set': self.cur_pin_state}, True)
+        self._emit_pin_state_update() 
 
     def pin_switch_inference_end(self, pin):
-        functions.set_gpio(1, 1, 0) # Process complete
-        self.cur_pin_state['GPO1'] = True
         pin_state_ref.update_one(self.state_query, {'$set': self.cur_pin_state}, True)
+        self._emit_pin_state_update()
 
         time.sleep(.3)
-
-        functions.set_gpio(1, 1, 1) # Process complete
-        functions.set_gpio(1, 2, 0) # System Ready
-        functions.set_gpio(1, 3, 1) # Not Busy
-        self.cur_pin_state['GPO1'] = False # GPO Process Complete Pin OFF - GREEN
-        self.cur_pin_state['GPO2'] = True  # Ready Pin ON - GREEN
-        self.cur_pin_state['GPO3'] = False # Busy Pin OFF - ORANGE
-        self.cur_pin_state['GPI'+str(pin)] = False
-        self.cur_pin_state = pin_state_ref.find_one(self.state_query)
+        self.cur_pin_state['GPI'+str(pin)] = False 
+        self.cur_pin_state = pin_state_ref.find_one(self.state_query) or self.cur_pin_state
         pin_state_ref.update_one(self.state_query, {'$set': self.cur_pin_state}, True)
+        self._emit_pin_state_update() 
 
     def allow_inference(self, cur_input_state_high, pin_num):
         run_inference = False
-
         if self.last_input_state == "wait" and not cur_input_state_high:
             self.last_input_state = "run"
             run_inference = True
@@ -148,72 +166,112 @@ class GPIO:
         return run_inference
 
     def default_pin_state(self):
-        functions.set_gpio(1, 1, 1) # Process complete
-        functions.set_gpio(1, 2, 0) # System Ready
-        functions.set_gpio(1, 3, 1) # Not Busy
-        functions.set_gpio(1, 5, 1) # Pass pin off
-        functions.set_gpio(1, 6, 1) # Fail pin off
-        self.cur_pin_state['GPO1'] = False # GPO Process Complete Pin OFF - GREEN
-        self.cur_pin_state['GPO2'] = True  # Ready Pin ON - GREEN
-        self.cur_pin_state['GPO3'] = False # Busy Pin OFF - ORANGE
-        self.cur_pin_state['GPO5'] = False
-        self.cur_pin_state['GPO6'] = False
+        for gpo in range(1,9):
+            self._set_gpio(1, gpo, 1)
+            self.cur_pin_state['GPO'+str(gpo)] = False 
         for gpi in range(1,9):
             self.cur_pin_state['GPI'+str(gpi)] = False
-        self.cur_pin_state = pin_state_ref.find_one(self.state_query)
-        pin_state_ref.update_one(self.state_query, {'$set': self.cur_pin_state}, True)
 
-    def send_pin_status(self, pin_state):
-        data = {
-            'state': pin_state,
-            'timestamp': ms_timestamp()
-        }
-        resp = requests.post('http://172.17.0.1:1880/io', json=pin_state, timeout=2)
-        return resp
+        self.cur_pin_state = pin_state_ref.find_one(self.state_query) or self.cur_pin_state
+        pin_state_ref.update_one(self.state_query, {'$set': self.cur_pin_state}, True)
+        self._emit_pin_state_update() # Emit update to frontend
+
+    def _emit_pin_state_update(self):
+        """Emits the current pin state to connected SocketIO clients."""
+        try:
+            if '_id' in self.cur_pin_state:
+                del self.cur_pin_state['_id']
+                del self.cur_pin_state['type']
+
+            socketio.emit('pin_state_update', self.cur_pin_state, namespace='/gpio')
+        except Exception as e:
+            print(f"Error emitting SocketIO event: {e}")
+
+    def update_pin_state(self, i_o, pins):
+        for pin, state in enumerate(pins):
+            self.cur_pin_state[f'GP{i_o}{pin+1}'] = state == 0
+
 
     def run(self):
         self.default_pin_state()
+        print("GPIO monitoring thread started.")
         while True:
             cur_pin = None
             all_pin_state = [
-                functions.read_gpi(1),
-                functions.read_gpi(2),
-                functions.read_gpi(3),
-                functions.read_gpi(4),
-                functions.read_gpi(5),
-                functions.read_gpi(6),
-                functions.read_gpi(7),
-                functions.read_gpi(8)
+                self._read_gpi(1),
+                self._read_gpi(2),
+                self._read_gpi(3),
+                self._read_gpi(4),
+                self._read_gpi(5),
+                self._read_gpi(6),
+                self._read_gpi(7),
+                self._read_gpi(8)
             ]
 
+            all_output_state = [
+                self.read_gpo_func(1),
+                self.read_gpo_func(2),
+                self.read_gpo_func(3),
+                self.read_gpo_func(4),
+                self.read_gpo_func(5),
+                self.read_gpo_func(6),
+                self.read_gpo_func(7),
+                self.read_gpo_func(8)
+            ]
+
+            if self.current_output_state != all_output_state:
+                self.current_output_state = all_output_state[:]
+                self.update_pin_state('O', all_output_state)
+                self._emit_pin_state_update()
+
             if 0 in all_pin_state:
-                cur_pin = all_pin_state.index(0)+1
-                if self.last_pin_state != None and self.last_pin_state != all_pin_state:
-                    thr = threading.Thread(target=self.send_pin_status, args=({'state': all_pin_state}), daemon=True)
-                    thr.start()
+                cur_pin = all_pin_state.index(0) + 1 
+                if self.last_pin_state != all_pin_state:
+                    self.last_pin_state = all_pin_state[:] 
+                    self.update_pin_state('I', all_pin_state)
+                    self._emit_pin_state_update()
 
+                if self.allow_inference(0, cur_pin):
+                    self.pin_switch_inference_start(cur_pin)
+                    query = {'ioVal': 'GPI'+str(cur_pin)}
+                    presets = io_ref.find(query)
+                    for preset in presets:
+                        inference_thread = threading.Thread(target=self.run_inference, args=(preset, cur_pin), daemon=True)
+                        inference_thread.start()
             else:
-                #clear input state
-                self.last_input_state = "wait"
+                if self.last_input_state == "run":
+                    self.last_input_state = "wait"
+                    for i in range(1, 9):
+                        self.cur_pin_state[f'GPI{i}'] = (all_pin_state[i-1] == 0) # Update based on actual read
+                    pin_state_ref.update_one(self.state_query, {'$set': self.cur_pin_state}, True)
+                    self._emit_pin_state_update()
 
-            if cur_pin and self.allow_inference(0, cur_pin):
-                self.pin_switch_inference_start(cur_pin)
-                query = {'ioVal': 'GPI'+str(cur_pin)}
-                presets = io_ref.find(query)
-                for preset in presets:
-                    self.run_inference(preset, cur_pin)
-                    #time.sleep(1.5)
+                if self.last_pin_state != all_pin_state:
+                    self.last_pin_state = all_pin_state[:]
+                    for i in range(1, 9):
+                        self.cur_pin_state[f'GPI{i}'] = (all_pin_state[i-1] == 0)
+                    pin_state_ref.update_one(self.state_query, {'$set': self.cur_pin_state}, True)
+                    self._emit_pin_state_update()
+
+            time.sleep(self.debounce_delay) 
 
 
 
-init_gpio = GPIO()
-init_gpio.run()
+init_gpio = GPIO() # Instantiate GPIO class
+@socketio.on('connect', namespace='/gpio')
+def handle_connect():
+    print('Client connected to /gpio namespace')
+    emit('pin_state_update', init_gpio.cur_pin_state)
+
+@socketio.on('disconnect', namespace='/gpio')
+def handle_disconnect():
+    print('Client disconnected from /gpio namespace')
 
 
-# print("input on pin 1 is low - TURNING ON LIGHT")
-# print(functions.set_gpio(1, 1, 0))
+# --- Main Execution ---
+if __name__ == '__main__':
+    gpio_thread = threading.Thread(target=init_gpio.run, daemon=True)
+    gpio_thread.start()
 
-# # input high - TURN OFF
-# print("input on pin 1 is high - TURNING OFF LIGHT")
-# print(functions.set_gpio(1, 1, 1))
-                                      
+    print("Starting Flask-SocketIO server on http://0.0.0.0:1817")
+    socketio.run(app, host='0.0.0.0', port=1817, allow_unsafe_werkzeug=True)

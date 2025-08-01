@@ -54,6 +54,22 @@ def read_input_state():
 
     return state
 
+def read_output_state():
+    state = {
+        "outputs": {
+            1: functions.read_gpo(1),
+            2: functions.read_gpo(2),
+            3: functions.read_gpo(3),
+            4: functions.read_gpo(4),
+            5: functions.read_gpo(5),
+            6: functions.read_gpo(6),
+            7: functions.read_gpo(7),
+            8: functions.read_gpo(8)
+        }
+    }
+
+    return state    
+
 import platform 
 if platform.processor() != 'aarch64':
     so_file = os.environ['HOME']+"/flex-run/system_server/gpio/gpio.so"
@@ -115,7 +131,8 @@ while True:
                             help_map = {
                                 "commands": {
                                     "Read Input Pins": "GPIread",
-                                    "Set Output Pin State (on/off)": ["{\"1\": True}", "{\"1\": False}"],
+                                    "Read Output Pins": "GPOread",
+                                    "Set Output Pin State (on/off)": ["{\"1\": true}", "{\"1\": false}"],
                                     "Run Prediction": {
                                         "Valid Commands (based on your presets)": list(valid_commands.keys()),
                                         "Format": "{\"cmd1\": {\"did\": \"12345\"}}"
@@ -128,6 +145,12 @@ while True:
                             continue
                         elif incoming_command == "GPIread":
                             io_state_str  = read_input_state()
+                            b_io_state = json.dumps(io_state_str).encode('utf-8')
+                            connections.send(b_io_state)
+                            continue
+
+                        elif incoming_command == "GPOread":
+                            io_state_str  = read_output_state()
                             b_io_state = json.dumps(io_state_str).encode('utf-8')
                             connections.send(b_io_state)
                             continue

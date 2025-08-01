@@ -7,7 +7,7 @@ from flask import make_response, request, current_app
 from functools import update_wrapper
 
 from flask import Flask, render_template
-from flask_restful import Resource, Api
+from flask_restx import Resource, Namespace, fields, Api
 import json
 from json import dumps
 import subprocess
