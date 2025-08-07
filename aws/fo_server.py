@@ -5,8 +5,15 @@ sys.path.append(settings_path)
 import settings
 from FireOperator import FireOperator
 from flask import Flask, jsonify, request
-
+import json
 app = Flask(__name__)
+
+
+def update_config(config):
+    PATH = os.environ['HOME']+'/fvconfig.json'
+    if os.path.exists(PATH):
+        with open(PATH, 'w') as outfile:  
+            json.dump(config, outfile, indent=4, sort_keys=True)
 
 @app.route('/inspection_status', methods=['GET'])
 def get_status():
@@ -43,7 +50,8 @@ def update_zone():
         doc_key = f"{data['warehouse']}_{data['zone']}"
         settings.config['fire_operator']['document'] = doc_key
         update_config(settings.config)
-        os.system(f"forever restart {os.environ['HOME']}/flex-run/system_server/server.py")
+        os.system(f"forever restart {os.environ['HOME']}/flex-run/aws/fo_server.py")
+        return 'Updated', 200
 
 
 if __name__ == '__main__':
