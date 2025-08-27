@@ -45,31 +45,29 @@ def get_system_metrics(save=False):
 
     return info
 
-def save_metrics_to_csv(metrics_data, filename="/home/visioncell/Documents/system_metrics.csv"):
-    """
-    Appends system metrics to a CSV file.
-    Creates the file and writes headers if it doesn't exist.
-    """
+def save_metrics_to_csv(metrics_data, filename="/home/visioncell/Documents/system_metrics.csv", limit=5000):
     fieldnames = [
-        'timestamp',
-        'cpu',
-        'memory',
-        'storage',
-        'gpu',
-        'system',
-        'node_name',
-        'release',
-        'version',
-        'machine',
-        'processor'
+        'timestamp', 'cpu', 'memory', 'storage', 'gpu',
+        'system', 'node_name', 'release', 'version', 'machine', 'processor'
     ]
 
+    metrics_data['timestamp'] = datetime.now().isoformat()
+
+    rows = []
     file_exists = os.path.exists(filename)
-    
-    with open(filename, 'a', newline='') as csvfile:
+
+    if file_exists:
+        with open(filename, 'r', newline='') as csvfile:
+            reader = csv.DictReader(csvfile)
+            if reader.fieldnames == fieldnames:
+                rows = list(reader)
+
+    rows.append(metrics_data)
+
+    if len(rows) > limit:
+        rows = rows[-limit:]
+
+    with open(filename, 'w', newline='') as csvfile:
         writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
-        
-        if not file_exists:
-            writer.writeheader()        
-        metrics_data['timestamp'] = datetime.now().isoformat()        
-        writer.writerow(metrics_data)
+        writer.writeheader()
+        writer.writerows(rows)
