@@ -40,10 +40,40 @@ def get_system_metrics(save=False):
     info['version'] = system_info.version
     info['machine'] = system_info.machine
     info['processor'] = system_info.processor
+
+    service_stats = get_service_stats()
+    info['services'] = service_stats
     if save:
         save_metrics_to_csv(info)
 
     return info
+
+def get_service_stats():
+    command = "docker stats --no-stream --format '{{json .}}'"
+    container_stats = {}
+
+    try:
+        result = subprocess.check_output(command, shell=True, stderr=subprocess.PIPE).decode('utf-8')
+        lines = result.strip().splitlines()
+        for line in lines:
+            if line: 
+                try:                   
+                    stats_dict = json.loads(line)
+                    container_stats[stats_dict['Name']] = stats_dict
+                except json.JSONDecodeError as e:
+                    print(f"Warning: Could not decode JSON from line: {line}. Error: {e}")
+
+    except subprocess.CalledProcessError as e:
+        error_message = e.stderr.decode('utf-8').strip()
+        if "Cannot connect to the Docker daemon" in error_message:
+            print("Warning: Docker daemon is not running.")
+        else:
+            print(f"Warning: Error executing 'docker stats': {error_message}")
+    except FileNotFoundError:
+        print("Warning: 'docker' command not found. Is Docker installed?")
+
+    return container_stats
+
 
 def save_metrics_to_csv(metrics_data, filename="/home/visioncell/Documents/system_metrics.csv", limit=5000):
     fieldnames = [
