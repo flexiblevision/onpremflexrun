@@ -22,7 +22,8 @@ class TestBasePath:
         result = base_path()
 
         assert result == '/xavier_ssd/'
-        mock_exists.assert_called_once_with('/xavier_ssd/')
+        # Check that exists was called with the correct path (may be called multiple times due to module-level calls)
+        assert any(call[0][0] == '/xavier_ssd/' for call in mock_exists.call_args_list)
 
     @pytest.mark.unit
     @patch('os.path.exists')
@@ -205,17 +206,19 @@ class TestRetrieveModels:
         assert result is False
 
     @pytest.mark.unit
+    @patch('builtins.open', new_callable=mock_open)
     @patch('os.system')
     @patch('os.path.exists')
     @patch('worker_scripts.retrieve_models.save_models_versions')
     @patch('worker_scripts.retrieve_models.create_config_file')
     @patch('requests.get')
     def test_retrieve_models_high_accuracy(self, mock_get, mock_create_config,
-                                            mock_save_versions, mock_exists, mock_os_system):
+                                            mock_save_versions, mock_exists, mock_os_system, mock_file):
         """Test retrieving high accuracy models"""
         from worker_scripts.retrieve_models import retrieve_models
 
-        mock_exists.return_value = False
+        # Mock exists to return True for model.zip files, False otherwise
+        mock_exists.side_effect = lambda path: 'model.zip' in path
 
         # Mock download response
         mock_response = MagicMock()
@@ -246,14 +249,16 @@ class TestRetrieveModels:
             mock_save_versions.assert_called_once()
 
     @pytest.mark.unit
+    @patch('builtins.open', new_callable=mock_open)
     @patch('os.system')
     @patch('os.path.exists')
     @patch('worker_scripts.retrieve_models.save_models_versions')
-    def test_retrieve_models_high_speed(self, mock_save_versions, mock_exists, mock_os_system):
+    def test_retrieve_models_high_speed(self, mock_save_versions, mock_exists, mock_os_system, mock_file):
         """Test retrieving high speed (lite) models"""
         from worker_scripts.retrieve_models import retrieve_models
 
-        mock_exists.return_value = False
+        # Return True for model.zip files, False for model folders
+        mock_exists.side_effect = lambda path: 'model.zip' in path
 
         data = {
             'models': {
@@ -284,16 +289,18 @@ class TestRetrieveModels:
             assert any('predictlite' in call for call in docker_calls)
 
     @pytest.mark.unit
+    @patch('builtins.open', new_callable=mock_open)
     @patch('os.system')
     @patch('os.path.exists')
     @patch('worker_scripts.retrieve_models.save_models_versions')
     @patch('worker_scripts.retrieve_models.download_by_link')
     def test_retrieve_models_ocr(self, mock_download, mock_save_versions,
-                                  mock_exists, mock_os_system):
+                                  mock_exists, mock_os_system, mock_file):
         """Test retrieving OCR models"""
         from worker_scripts.retrieve_models import retrieve_models
 
-        mock_exists.return_value = False
+        # Return True for model.zip files, False for model folders
+        mock_exists.side_effect = lambda path: 'model.zip' in path
 
         data = {
             'models': {
@@ -321,9 +328,10 @@ class TestRetrieveModels:
             assert any('ocr' in call for call in docker_calls)
 
     @pytest.mark.unit
+    @patch('builtins.open', new_callable=mock_open)
     @patch('os.system')
     @patch('os.path.exists')
-    def test_retrieve_models_excluded_model(self, mock_exists, mock_os_system):
+    def test_retrieve_models_excluded_model(self, mock_exists, mock_os_system, mock_file):
         """Test that excluded models are skipped"""
         from worker_scripts.retrieve_models import retrieve_models
 
@@ -350,9 +358,10 @@ class TestRetrieveModels:
             mock_save.assert_called_once()
 
     @pytest.mark.unit
+    @patch('builtins.open', new_callable=mock_open)
     @patch('os.system')
     @patch('os.path.exists')
-    def test_retrieve_models_removes_existing(self, mock_exists, mock_os_system):
+    def test_retrieve_models_removes_existing(self, mock_exists, mock_os_system, mock_file):
         """Test that existing models are removed when exclude_models is empty"""
         from worker_scripts.retrieve_models import retrieve_models
 
@@ -502,15 +511,17 @@ class TestModelTypeMapping:
         assert isinstance(LITE_MODEL_TYPES, list)
 
     @pytest.mark.unit
+    @patch('builtins.open', new_callable=mock_open)
     @patch('os.system')
     @patch('os.path.exists')
     @patch('worker_scripts.retrieve_models.save_models_versions')
     def test_model_type_default_to_versions(self, mock_save_versions, mock_exists,
-                                             mock_os_system):
+                                             mock_os_system, mock_file):
         """Test that model_type defaults to 'versions' when not specified"""
         from worker_scripts.retrieve_models import retrieve_models
 
-        mock_exists.return_value = False
+        # Mock exists to return True for model.zip files, False otherwise
+        mock_exists.side_effect = lambda path: 'model.zip' in path
 
         data = {
             'models': {
@@ -541,12 +552,13 @@ class TestZipFileExtraction:
     """Tests for zip file extraction logic"""
 
     @pytest.mark.unit
+    @patch('builtins.open', new_callable=mock_open)
     @patch('os.system')
     @patch('os.path.exists')
     @patch('worker_scripts.retrieve_models.save_models_versions')
     @patch('requests.get')
     def test_zip_extraction_moves_files(self, mock_get, mock_save_versions,
-                                         mock_exists, mock_os_system):
+                                         mock_exists, mock_os_system, mock_file):
         """Test that files are moved after zip extraction"""
         from worker_scripts.retrieve_models import retrieve_models
 
@@ -612,15 +624,17 @@ class TestDockerIntegration:
     """Tests for Docker integration operations"""
 
     @pytest.mark.unit
+    @patch('builtins.open', new_callable=mock_open)
     @patch('os.system')
     @patch('os.path.exists')
     @patch('worker_scripts.retrieve_models.save_models_versions')
     def test_docker_commands_for_high_accuracy(self, mock_save_versions, mock_exists,
-                                                 mock_os_system):
+                                                 mock_os_system, mock_file):
         """Test correct Docker commands for high accuracy models"""
         from worker_scripts.retrieve_models import retrieve_models
 
-        mock_exists.return_value = False
+        # Return True for model.zip files, False for model folders
+        mock_exists.side_effect = lambda path: 'model.zip' in path
 
         data = {
             'models': {

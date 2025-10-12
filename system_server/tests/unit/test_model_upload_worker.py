@@ -175,10 +175,10 @@ class TestUploadModel:
             'model_version': 'v2',
             'model_type': 'high_accuracy'
         }
-        # Model path exists but version doesn't
+        # temp path exists, model path exists, but version doesn't
         mock_exists.side_effect = lambda path: (
-            '/models/testmodel' in path and
-            '/models/testmodel/v2' not in path
+            '/tmp/testmodel' in path or
+            ('/models/testmodel' in path and 'v2' not in path)
         )
 
         result = upload_model('/tmp/testmodel', 'testmodel#v2.zip')
@@ -377,7 +377,8 @@ class TestFilePathConstruction:
         from worker_scripts.model_upload_worker import upload_model
 
         mock_read_job.return_value = {'model_version': 'v1', 'model_type': 'high_accuracy'}
-        mock_exists.side_effect = lambda path: False
+        # temp_model_path exists, but model paths don't
+        mock_exists.side_effect = lambda path: '/tmp/mymodel' in path and '/models' not in path
 
         upload_model('/tmp/mymodel', 'mymodel#v1.zip')
 
@@ -397,7 +398,11 @@ class TestFilePathConstruction:
         from worker_scripts.model_upload_worker import upload_model
 
         mock_read_job.return_value = {'model_version': 'v2.5', 'model_type': 'high_accuracy'}
-        mock_exists.side_effect = lambda path: '/models/mymodel' in path and 'v2.5' not in path
+        # temp path exists, model path exists, but version doesn't
+        mock_exists.side_effect = lambda path: (
+            '/tmp/mymodel' in path or
+            ('/models/mymodel' in path and 'v2.5' not in path)
+        )
 
         upload_model('/tmp/mymodel', 'mymodel#v2.5.zip')
 

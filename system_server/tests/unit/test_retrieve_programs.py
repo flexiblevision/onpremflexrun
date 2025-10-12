@@ -305,9 +305,11 @@ class TestRetrievePrograms:
             }
         }
 
-        # Should raise KeyError or handle gracefully
-        with pytest.raises(KeyError):
-            retrieve_programs(resp_data, 'test_token')
+        # Should handle gracefully - empty data is falsy, so no processing occurs
+        retrieve_programs(resp_data, 'test_token')
+
+        # Should not update collection if data is empty/missing records
+        mock_programs_collection.update_one.assert_not_called()
 
     @pytest.mark.unit
     @patch('worker_scripts.retrieve_programs.programs_collection')

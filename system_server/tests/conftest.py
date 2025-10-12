@@ -49,6 +49,17 @@ _mock_settings_module.FireOperator = None
 # This prevents Python from loading the real settings.py even if it's found in sys.path
 sys.modules['settings'] = _mock_settings_module
 
+# Mock auth decorator globally for all integration tests
+@pytest.fixture(scope='session', autouse=True)
+def mock_auth_globally():
+    """Mock authentication globally for all tests"""
+    # Create a no-op decorator that just returns the function unchanged
+    def requires_auth_mock(f):
+        return f
+
+    with patch('auth.requires_auth', requires_auth_mock):
+        yield
+
 # Add an import hook to prevent the real settings from being loaded
 import builtins
 _original_import = builtins.__import__

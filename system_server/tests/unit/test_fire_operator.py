@@ -1,9 +1,21 @@
 """
 Unit tests for FireOperator.py
 """
+import sys
+from unittest.mock import Mock, patch, MagicMock, call
+
+# Mock firebase_admin and google auth modules before they're imported
+sys.modules['firebase_admin'] = MagicMock()
+sys.modules['firebase_admin.credentials'] = MagicMock()
+sys.modules['firebase_admin.firestore'] = MagicMock()
+sys.modules['google.oauth2'] = MagicMock()
+sys.modules['google.oauth2.service_account'] = MagicMock()
+sys.modules['google.auth'] = MagicMock()
+sys.modules['google.auth.transport'] = MagicMock()
+sys.modules['google.auth.transport.requests'] = MagicMock()
+
 import pytest
 import datetime
-from unittest.mock import Mock, patch, MagicMock, call
 
 
 class TestMsTimestamp:

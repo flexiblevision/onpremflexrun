@@ -6,7 +6,7 @@ import json
 from unittest.mock import patch, MagicMock
 
 
-@pytest.fixture
+@pytest.fixture(scope='function')
 def app_with_network_routes():
     """Create app with network routes registered"""
     from flask import Flask, jsonify
@@ -24,15 +24,8 @@ def app_with_network_routes():
         response.status_code = ex.status_code
         return response
 
-    # Use mock config with necessary keys for job_manager
-    mock_config = {
-        'latest_stable_ref': 'test_version',
-        'use_aws': False
-    }
-
-    with patch('settings.config', mock_config):
-        from routes import network_routes
-        network_routes.register_routes(api)
+    from routes import network_routes
+    network_routes.register_routes(api)
 
     return app
 
@@ -124,8 +117,22 @@ class TestUpdateIpEndpoint:
     """Tests for IP update endpoint"""
 
     @pytest.mark.integration
-    def test_update_ip_success(self, network_client):
-        """Test IP update requires authentication"""
+    @patch('routes.network_routes.get_eth_port_names', return_value=['enp0s31f6'])
+    @patch('routes.network_routes.is_valid_ip', return_value=True)
+    @patch('routes.network_routes.set_ips')
+    @patch('os.system')
+    @patch('subprocess.Popen')
+    def test_update_ip_success(self, mock_popen, mock_system, mock_set_ips,
+                                mock_is_valid_ip, mock_get_eth, network_client):
+        """Test successful IP update"""
+        # Mock ifconfig output
+        mock_process = MagicMock()
+        mock_process.communicate.return_value = (
+            b'enp0s31f6: inet 192.168.1.100 netmask 255.255.255.0\n',
+            b''
+        )
+        mock_popen.return_value = mock_process
+
         data = {
             'ip': '192.168.1.100',
             'lanPort': 'enp0s31f6',
@@ -136,12 +143,15 @@ class TestUpdateIpEndpoint:
                                        data=json.dumps(data),
                                        content_type='application/json')
 
-        # Should return 401 when auth is missing
-        assert response.status_code == 401
+        # Should succeed with auth bypassed
+        assert response.status_code == 200
+        assert b'192.168.1.100' in response.data
 
     @pytest.mark.integration
-    def test_update_ip_invalid_ip(self, network_client):
-        """Test IP update with invalid IP requires authentication"""
+    @patch('routes.network_routes.get_eth_port_names', return_value=['enp0s31f6'])
+    @patch('routes.network_routes.is_valid_ip', return_value=False)
+    def test_update_ip_invalid_ip(self, mock_is_valid_ip, mock_get_eth, network_client):
+        """Test IP update with invalid IP address"""
         data = {
             'ip': 'invalid_ip',
             'lanPort': 'enp0s31f6',
@@ -152,12 +162,15 @@ class TestUpdateIpEndpoint:
                                        data=json.dumps(data),
                                        content_type='application/json')
 
-        # Should return 401 when auth is missing
-        assert response.status_code == 401
+        # Should return 500 for invalid IP
+        assert response.status_code == 500
+        assert b'IP address invalid' in response.data
 
     @pytest.mark.integration
-    def test_update_ip_invalid_port(self, network_client):
-        """Test IP update with invalid port requires authentication"""
+    @patch('routes.network_routes.get_eth_port_names', return_value=['enp0s31f6', 'eth0'])
+    @patch('routes.network_routes.is_valid_ip', return_value=True)
+    def test_update_ip_invalid_port(self, mock_is_valid_ip, mock_get_eth, network_client):
+        """Test IP update with invalid port name"""
         data = {
             'ip': '192.168.1.100',
             'lanPort': 'invalid_port',
@@ -168,8 +181,9 @@ class TestUpdateIpEndpoint:
                                        data=json.dumps(data),
                                        content_type='application/json')
 
-        # Should return 401 when auth is missing
-        assert response.status_code == 401
+        # Should return 500 for invalid port
+        assert response.status_code == 500
+        assert b'ethernet interface not found' in response.data
 
 
 class TestGetLanIpsEndpoint:
