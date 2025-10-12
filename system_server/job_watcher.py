@@ -1,7 +1,7 @@
 import os
 import time
 from redis import Redis
-from rq import Queue, Worker, Connection
+from rq import Queue, Worker
 from rq.job import Job
 from pymongo import MongoClient
 import subprocess

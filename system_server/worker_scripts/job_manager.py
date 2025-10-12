@@ -12,7 +12,7 @@ sys.path.append(settings_path)
 import settings
 
 from redis import Redis
-from rq import Queue, Retry, Worker, Connection
+from rq import Queue, Retry, Worker
 from rq.job import Job
 redis_con   = Redis('localhost', 6379, password=None)
 job_queue   = Queue('default', connection=redis_con)
@@ -35,7 +35,7 @@ if 'use_aws' in config and config['use_aws']:
     aws_client = settings.kinesis
 
 def insert_job(job_id, msg):
-    job_collection.insert({
+    job_collection.insert_one({
         '_id': job_id,
         'type': msg,
         'start_time': str(datetime.datetime.now()),
@@ -83,7 +83,7 @@ def get_unsynced_records():
         time.sleep(1)
         return result
     else:
-        util_collection.insert({
+        util_collection.insert_one({
             "type": "predict_sync",
             "ms_time": str(time_now_ms())
         })
@@ -93,7 +93,7 @@ def mark_as_processing(record_id):
         {"$set": {"synced": "processing", "modified": time_now_ms()}}, True)
 
 def mark_as_synced(record_id):
-    analytics_coll.remove({"id": record_id})
+    analytics_coll.delete_one({"id": record_id})
 
 def cloud_call(url, analytics, headers):
     if not analytics:
