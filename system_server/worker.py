@@ -4,7 +4,7 @@ settings_path = os.environ['HOME']+'/flex-run'
 sys.path.append(settings_path)
 
 import redis
-from rq import Worker, Queue
+from rq import Worker, Queue, Connection
 
 listen = ["default"]
 redis_url = 'redis://localhost:6379'
