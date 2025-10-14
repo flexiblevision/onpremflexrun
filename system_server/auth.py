@@ -1,7 +1,7 @@
 import json
 import os
 from functools import wraps
-from flask import Flask, request, jsonify, _request_ctx_stack
+from flask import Flask, request, jsonify, g
 
 from six.moves.urllib.request import urlopen
 from jose import jwt
@@ -108,7 +108,7 @@ def requires_auth(f):
                                     "Unable to parse authentication"
                                     " token."}, 401)
 
-            _request_ctx_stack.top.current_user = payload
+            g.current_user = payload
             return f(*args, **kwargs)
         raise AuthError({"code": "invalid_header",
                         "description": "Unable to find appropriate key"}, 401)

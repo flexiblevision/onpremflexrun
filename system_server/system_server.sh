@@ -29,6 +29,9 @@ chmod +x $HOME/flex-run/scripts/start_job_watcher.sh
 chmod +x $HOME/flex-run/scripts/system_cleanup.sh
 chmod +x $HOME/flex-run/scripts/filesystem_server.sh
 chmod +x $HOME/flex-run/scripts/mediasystem_server.sh
+chmod +x $HOME/flex-run/scripts/configure_network.sh
+
+sudo $HOME/flex-run/scripts/configure_network.sh
 
 sudo crontab -r
 (sudo crontab -l; echo '@reboot sudo sh '$HOME'/flex-run/scripts/fv_system_server_start.sh') | sudo crontab -

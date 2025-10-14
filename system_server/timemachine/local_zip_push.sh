@@ -21,7 +21,7 @@ docker run -p 1934-1945:1934-1945 --network=host --name eventor -d \
     -e DB_NAME=$DB_NAME -e MONGO_SERVER=$MONGO_SERVER -e MONGO_PORT=$MONGO_PORT \
     -e PYTHONUNBUFFERED=1 -e STORE_PATH=/Videos/TimeMachine \
     --log-opt max-size=50m --log-opt max-file=5 \
-    -m 10g --cpus="2" \
+    -m 20g --cpus="2" \
     --privileged -v /dev:/dev -v /sys:/sys \
     -t fvonprem/x86-eventor:prod
 

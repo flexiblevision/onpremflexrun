@@ -3,7 +3,7 @@ import getopt, sys
 from datetime import datetime
 import os
 from redis import Redis
-from rq import Queue, Worker, Connection
+from rq import Queue, Worker
 from rq.job import Job
 from worker_scripts.job_manager import insert_job
 import time

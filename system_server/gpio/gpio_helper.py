@@ -2,6 +2,8 @@ import os
 import threading
 import time
 import requests
+import ctypes
+import json
 from ctypes import *
 from pymongo import MongoClient
 import datetime
@@ -53,4 +55,32 @@ def set_pin_state(pin_num, state):
     return res
 
 
+class GPIO_State(ctypes.Structure):
+    _fields_ = [
+        ("inputs", ctypes.c_ubyte),
+        ("outputs", ctypes.c_ubyte)
+    ]
+
+
+def read_all_gpio_states_as_json():
+    try:
+        functions.read_all_gpio_states.restype = GPIO_State
+        c_gpio_state = functions.read_all_gpio_states()
+
+        inputs = [(c_gpio_state.inputs >> i) & 1 for i in range(8)]
+        outputs = [(c_gpio_state.outputs >> i) & 1 for i in range(8)]
+
+        gpio_data = {
+            "inputs": inputs,
+            "outputs": outputs
+        }
+
+        return gpio_data
+
+    except OSError as e:
+        error_message = {
+            "error": "Failed to load libgpio.so",
+            "details": str(e)
+        }
+        return error_message
 
