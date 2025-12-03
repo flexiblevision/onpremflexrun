@@ -48,6 +48,12 @@ class DeviceInfo(Resource):
         info['last_active'] = str(datetime.datetime.now())
         info['metrics'] = get_system_metrics()
 
+        try:
+            serial = subprocess.Popen([os.environ['HOME'] + '/flex-run/scripts/serial_number.sh'], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            info['system_serial_number'] = serial.communicate()[0].decode('utf-8').strip()
+        except:
+            info['system_serial_number'] = ''
+
         return info
 
 class GetCameraUID(Resource):
