@@ -11,7 +11,8 @@ from . import (
     device_routes,
     auth_routes,
     ftp_routes,
-    timemachine_routes
+    timemachine_routes,
+    assembly_routes
 )
 
 def register_all_routes(api, settings):
@@ -45,6 +46,9 @@ def register_all_routes(api, settings):
 
     # Timemachine and OCR routes
     timemachine_routes.register_routes(api)
+
+    # Assembly upload and media routes
+    assembly_routes.register_routes(api)
 
     # Conditional AWS routes
     if 'use_aws' in settings.config and settings.config['use_aws']:

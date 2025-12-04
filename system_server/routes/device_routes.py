@@ -98,6 +98,8 @@ class ReadPin(Resource):
         else:
             return -1
 
+
+
 def register_routes(api):
     api.add_resource(MacId, '/mac_id')
     api.add_resource(DeviceInfo, '/device_info')
