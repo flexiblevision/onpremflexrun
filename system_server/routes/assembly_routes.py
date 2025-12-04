@@ -32,12 +32,21 @@ class UploadAssembly(Resource):
 
             # Open the ZIP and extract config.json to get the ID
             with zipfile.ZipFile(zip_bytes, 'r') as zip_ref:
-                # Check if config.json exists
-                if 'config.json' not in zip_ref.namelist():
+                # Find config.json (may be nested in a subdirectory)
+                config_path = None
+                for name in zip_ref.namelist():
+                    if name.endswith('config.json'):
+                        config_path = name
+                        break
+
+                if not config_path:
                     return {'error': 'config.json not found in ZIP'}, 400
 
+                # Determine the base directory within the ZIP (if nested)
+                zip_base_dir = os.path.dirname(config_path)
+
                 # Read and parse config.json
-                config_data = zip_ref.read('config.json')
+                config_data = zip_ref.read(config_path)
                 config = json.loads(config_data.decode('utf-8'))
 
                 # Get or generate assembly ID
@@ -47,8 +56,28 @@ class UploadAssembly(Resource):
                 output_path = os.path.join(ASSEMBLY_BASE_PATH, assembly_id)
                 os.makedirs(output_path, exist_ok=True)
 
-                # Extract all files
-                zip_ref.extractall(output_path)
+                # Extract files, stripping the nested directory prefix if present
+                for member in zip_ref.namelist():
+                    # Skip directories
+                    if member.endswith('/'):
+                        continue
+
+                    # Calculate relative path from the config.json location
+                    if zip_base_dir and member.startswith(zip_base_dir + '/'):
+                        relative_path = member[len(zip_base_dir) + 1:]
+                    elif zip_base_dir:
+                        # Skip files not in the same directory tree
+                        continue
+                    else:
+                        relative_path = member
+
+                    # Create target path
+                    target_path = os.path.join(output_path, relative_path)
+                    os.makedirs(os.path.dirname(target_path), exist_ok=True)
+
+                    # Extract file
+                    with zip_ref.open(member) as src, open(target_path, 'wb') as dst:
+                        dst.write(src.read())
 
             # Update media paths in config to point to backend API
             config = update_media_paths(config, assembly_id)
