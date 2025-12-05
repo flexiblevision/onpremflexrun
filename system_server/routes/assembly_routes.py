@@ -7,7 +7,7 @@ from flask import request, send_from_directory
 from flask_restx import Resource
 
 # Base path for assembly storage
-ASSEMBLY_BASE_PATH = os.path.join(os.environ['HOME'], 'visioncell', 'Documents', 'assembly')
+ASSEMBLY_BASE_PATH = os.path.join('/home', 'visioncell', 'Documents', 'assembly')
 
 
 class UploadAssembly(Resource):
@@ -66,7 +66,6 @@ class UploadAssembly(Resource):
                     if zip_base_dir and member.startswith(zip_base_dir + '/'):
                         relative_path = member[len(zip_base_dir) + 1:]
                     elif zip_base_dir:
-                        # Skip files not in the same directory tree
                         continue
                     else:
                         relative_path = member
