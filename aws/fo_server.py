@@ -1,4 +1,6 @@
 import os
+os.environ['GRPC_DNS_RESOLVER'] = 'native'
+
 import sys
 import threading
 settings_path = os.environ['HOME']+'/flex-run'
@@ -11,7 +13,6 @@ import json
 app = Flask(__name__)
 CORS(app)
 
-
 def update_config(config):
     PATH = os.environ['HOME']+'/fvconfig.json'
     if os.path.exists(PATH):
@@ -20,7 +21,7 @@ def update_config(config):
 
 @app.route('/inspection_status', methods=['GET'])
 def get_status():
-        data = request.json
+        #data = request.json
         if settings.FireOperator:
             data = settings.FireOperator.get_status()
             return data, 200
