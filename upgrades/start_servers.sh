@@ -35,6 +35,7 @@ sudo crontab -r
 (sudo crontab -l; echo '@monthly sudo sh '$HOME'/flex-run/scripts/system_cleanup.sh') | sudo crontab -
 (sudo crontab -l; echo '0 1 * * * rm -rf ~/.cache/google-chrome') | sudo crontab -
 (sudo crontab -l; echo '0 0 * * * forever restart '$HOME'/flex-run/system_server/worker_scripts/sync_worker.py') | sudo crontab -
+(sudo crontab -l; echo '0 2 * * 0  sudo sh '$HOME'/flex-run/scripts/backup_node_flows.sh') | sudo crontab -
 
 #restart worker server
 forever stop $HOME/flex-run/system_server/worker.py

@@ -1,12 +1,15 @@
 import os
 import sys
+import threading
 settings_path = os.environ['HOME']+'/flex-run'
 sys.path.append(settings_path)
 import settings
 from FireOperator import FireOperator
 from flask import Flask, jsonify, request
+from flask_cors import CORS
 import json
 app = Flask(__name__)
+CORS(app)
 
 
 def update_config(config):
@@ -43,6 +46,9 @@ def get_zone():
         results['zone']      = wz[1]
     return results
     
+def restart_server():
+    os.system(f"forever restart {os.environ['HOME']}/flex-run/aws/fo_server.py")
+
 @app.route('/aws_warehouse_zone', methods=['PUT'])
 def update_zone():
     data = request.json
@@ -50,7 +56,7 @@ def update_zone():
         doc_key = f"{data['warehouse']}_{data['zone']}"
         settings.config['fire_operator']['document'] = doc_key
         update_config(settings.config)
-        os.system(f"forever restart {os.environ['HOME']}/flex-run/aws/fo_server.py")
+        threading.Timer(2.0, restart_server).start()
         return 'Updated', 200
 
 

@@ -21,12 +21,18 @@ class DeviceInfo(Resource):
         info = {}
         domain = request.headers.get('Host').split(':')[0]
         ifconfig = subprocess.Popen(['ifconfig'], stdout=subprocess.PIPE).communicate()[0].decode('utf-8')
-        interface = 'wl' + ifconfig.split('wl')[1].split(':')[0]
-        wlp = subprocess.Popen(['ifconfig', interface], stdout=subprocess.PIPE).communicate()[0].decode('utf-8')
 
-        if 'inet' in wlp:
-            info['last_known_ip'] = wlp.split('inet')[1].split(' ')[1]
-        else:
+        # Try to get wifi interface IP, fallback to domain if not available
+        try:
+            interface = 'wl' + ifconfig.split('wl')[1].split(':')[0]
+            wlp = subprocess.Popen(['ifconfig', interface], stdout=subprocess.PIPE).communicate()[0].decode('utf-8')
+
+            if 'inet' in wlp:
+                info['last_known_ip'] = wlp.split('inet')[1].split(' ')[1]
+            else:
+                info['last_known_ip'] = domain
+        except (IndexError, subprocess.SubprocessError):
+            # No wifi interface found, use domain as fallback
             info['last_known_ip'] = domain
 
         lan_ips = get_lan_ips()
@@ -42,6 +48,12 @@ class DeviceInfo(Resource):
         info['last_active'] = str(datetime.datetime.now())
         info['metrics'] = get_system_metrics()
 
+        try:
+            serial = subprocess.Popen([os.environ['HOME'] + '/flex-run/scripts/serial_number.sh'], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            info['system_serial_number'] = serial.communicate()[0].decode('utf-8').strip()
+        except:
+            info['system_serial_number'] = ''
+
         return info
 
 class GetCameraUID(Resource):
@@ -55,6 +67,7 @@ class GetCameraUID(Resource):
         for i, did in enumerate(msv):
             uid += did.split('=')[-1]
             if i < len(msv)-1: uid += ':'
+
         return uid
 
 class TogglePin(Resource):
@@ -84,6 +97,8 @@ class ReadPin(Resource):
             return read_pin(j['pin_num'])
         else:
             return -1
+
+
 
 def register_routes(api):
     api.add_resource(MacId, '/mac_id')
