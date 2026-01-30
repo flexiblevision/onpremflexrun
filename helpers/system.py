@@ -6,6 +6,11 @@ import time
 import csv
 from datetime import datetime
 import json
+import re
+
+
+MIN_VALID_YEAR = 2020
+REBOOT_THRESHOLD_MS = 600000  # 5 min
 
 
 def get_system_metrics(save=False):
@@ -35,6 +40,18 @@ def get_system_metrics(save=False):
     except subprocess.CalledProcessError:
         info['gpu'] = 0
 
+    try:
+        with open('/proc/uptime', 'r') as f:
+            uptime_seconds = float(f.readline().split()[0])
+            info['uptime_seconds'] = int(uptime_seconds)
+            days, remainder = divmod(uptime_seconds, 86400)
+            hours, remainder = divmod(remainder, 3600)
+            minutes, _ = divmod(remainder, 60)
+            info['uptime'] = f"{int(days)}d {int(hours)}h {int(minutes)}m"
+    except (IOError, ValueError, IndexError):
+        info['uptime_seconds'] = 0
+        info['uptime'] = '0d 0h 0m'
+
     # Add other system information
     info['system'] = system_info.system
     info['node_name'] = system_info.node
@@ -45,10 +62,112 @@ def get_system_metrics(save=False):
 
     service_stats = get_service_stats()
     info['services'] = service_stats
+    info['shutdown_events'] = get_shutdown_events()
     if save:
         save_metrics_to_csv(info)
 
     return info
+
+def get_current_boot_time():
+    try:
+        result = subprocess.check_output(
+            ["uptime", "-s"],
+            stderr=subprocess.PIPE
+        ).decode('utf-8').strip()
+        dt = datetime.strptime(result, '%Y-%m-%d %H:%M:%S')
+        return int(dt.timestamp() * 1000)
+    except (subprocess.CalledProcessError, FileNotFoundError, ValueError):
+        return None
+
+
+def get_shutdown_events(limit=20):
+    events = []
+    
+    try:
+        result = subprocess.check_output(
+            ["last", "-x", "-F", "shutdown", "reboot"],
+            stderr=subprocess.PIPE
+        ).decode('utf-8')
+
+        date_pattern = re.compile(
+            r'(Mon|Tue|Wed|Thu|Fri|Sat|Sun)\s+'
+            r'(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+'
+            r'(\d{1,2})\s+'
+            r'(\d{2}:\d{2}:\d{2})\s+'
+            r'(\d{4})'
+        )
+
+        duration_pattern = re.compile(r'\((-?\d+)\+(\d{2}):(\d{2})\)|\((\d{2}):(\d{2})\)')
+
+        raw_events = []
+        for line in result.strip().splitlines():
+            if not line or 'wtmp begins' in line:
+                continue
+
+            parts = line.split()
+            if not parts or parts[0] not in ('shutdown', 'reboot'):
+                continue
+
+            matches = date_pattern.findall(line)
+            if not matches:
+                continue
+
+            first_date_str = ' '.join(matches[0])
+            is_running = 'still running' in line
+            
+            duration_ms = None
+            duration_match = duration_pattern.search(line)
+            if duration_match:
+                if duration_match.group(1) is not None:
+                    days = abs(int(duration_match.group(1)))
+                    hours = int(duration_match.group(2))
+                    minutes = int(duration_match.group(3))
+                    duration_ms = ((days * 24 + hours) * 60 + minutes) * 60 * 1000
+                else:
+                    hours = int(duration_match.group(4))
+                    minutes = int(duration_match.group(5))
+                    duration_ms = (hours * 60 + minutes) * 60 * 1000
+            
+            try:
+                first_dt = datetime.strptime(first_date_str, '%a %b %d %H:%M:%S %Y')
+                first_ts = int(first_dt.timestamp() * 1000)
+                first_valid = first_dt.year >= MIN_VALID_YEAR
+                
+                if is_running and not first_valid:
+                    first_ts = get_current_boot_time()
+                    first_valid = first_ts is not None
+                
+                if first_valid:
+                    raw_events.append({
+                        'raw_type': parts[0],
+                        'timestamp_ms': first_ts,
+                        'duration_ms': duration_ms
+                    })
+            except ValueError:
+                continue
+
+        for event in raw_events:
+            if event['raw_type'] == 'shutdown':
+                event_type = 'shutdown'
+            else:
+                if event['duration_ms'] is None or event['duration_ms'] > REBOOT_THRESHOLD_MS:
+                    event_type = 'startup'
+                else:
+                    event_type = 'reboot'
+            
+            events.append({
+                'type': event_type,
+                'timestamp_ms': event['timestamp_ms']
+            })
+            
+            if len(events) >= limit:
+                break
+
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        pass
+
+    return events
+
 
 def get_service_stats():
     command = "docker stats --no-stream --format '{{json .}}'"

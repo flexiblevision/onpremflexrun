@@ -330,37 +330,38 @@ def push_analytics_to_cloud(domain, access_token):
 
     latest_analytics = get_unsynced_records()
     num_analytics = len(latest_analytics)
-    
+
     if num_analytics == 0:
         return True
-    
+
     for i in range(0, num_analytics, BATCH_SIZE):
         analytics = latest_analytics[i:i+BATCH_SIZE]
         if not analytics: break
-        
+
         print('#Analytics: ', len(analytics))
         if use_aws:
             j_push = job_queue.enqueue(
-                kinesis_call, 
-                analytics, 
-                job_timeout=300, 
-                result_ttl=3600, 
+                kinesis_call,
+                analytics,
+                job_timeout=300,
+                result_ttl=3600,
                 retry=Retry(max=5, interval=60)
             )
             if j_push: insert_job(j_push.id, 'Syncing_'+str(len(analytics))+'_with_cloud')
         else:
             j_push = job_queue.enqueue(
-                cloud_call, 
-                url, 
-                analytics, 
-                headers, 
-                job_timeout=300, 
-                result_ttl=3600, 
+                cloud_call,
+                url,
+                analytics,
+                headers,
+                job_timeout=300,
+                result_ttl=3600,
                 retry=Retry(max=5, interval=60)
             )
             if j_push: insert_job(j_push.id, 'Syncing_'+str(len(analytics))+'_with_cloud')
-    
+
     return True
+
 
 def enable_ocr():
     install_file = f"{os.environ['HOME']}/flex-run/helpers/install_ocr.sh"

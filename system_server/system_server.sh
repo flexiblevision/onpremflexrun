@@ -14,7 +14,7 @@ apt-get -y install isc-dhcp-server
 make install -C $HOME/flex-run/scripts/create_ap
 npm install forever@3.0.0 -g
 
-pip3 install -r $HOME/flex-run/requirements.txt
+pip3 install --break-system-packages --ignore-installed -r $HOME/flex-run/requirements.txt
 
 chmod +x $HOME/flex-run/scripts/fv_system_server_start.sh
 chmod +x $HOME/flex-run/scripts/worker_server_start.sh
