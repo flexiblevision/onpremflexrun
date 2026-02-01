@@ -6,12 +6,16 @@ import base64
 import io
 import time
 import uuid
+import platform
 from collections import defaultdict
 from io import StringIO
 from io import BytesIO
 from pymongo import MongoClient
 import datetime
 import string
+
+def is_arm_device():
+    return platform.processor() == 'aarch64'
 
 settings_path = os.environ['HOME']+'/flex-run'
 sys.path.append(settings_path)
@@ -173,6 +177,11 @@ def retrieve_models(data, token):
         elif model_type in LITE_MODEL_TYPES:
             os.system("docker exec predictlite rm -rf /data/lite_models")
             print('pushing models into predictlite server: ', BASE_PATH_TO_MODELS)
+            os.system("docker cp "+BASE_PATH_TO_MODELS+" predictlite:/data/")
+        elif is_arm_device():
+            # ARM devices use predictlite for high_accuracy models (localprediction not available)
+            os.system("docker exec predictlite rm -rf /data/models")
+            print('pushing high_accuracy models into predictlite server (ARM): ', BASE_PATH_TO_MODELS)
             os.system("docker cp "+BASE_PATH_TO_MODELS+" predictlite:/data/")
         else:
             os.system("docker exec localprediction rm -rf /models")

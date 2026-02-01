@@ -15,6 +15,10 @@ import subprocess
 import os
 import sys
 import uuid
+import platform
+
+def is_arm_device():
+    return platform.processor() == 'aarch64'
 
 
 HOST = 'http://172.17.0.1'
@@ -127,6 +131,11 @@ def upload_model(temp_model_path, filename):
         if is_lite_model:
             print('PUSHING MODELS TO PREDICT LITE SERVER')
             os.system("docker cp /lite_models predictlite:/data/")
+            os.system('rm -rf '+temp_model_path)
+        elif is_arm_device():
+            # ARM devices use predictlite for high_accuracy models (localprediction not available)
+            print('PUSHING MODELS TO PREDICT LITE SERVER (ARM)')
+            os.system("docker cp /models predictlite:/data/")
             os.system('rm -rf '+temp_model_path)
         else:
             print('PUSHING MODELS TO PREDICTION SERVER')
