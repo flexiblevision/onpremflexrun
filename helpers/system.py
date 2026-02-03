@@ -196,6 +196,19 @@ def get_service_stats():
     return container_stats
 
 
+def get_presets():
+    """
+    Fetch list of presets from the local capture service.
+    """
+    try:
+        response = requests.get('http://172.17.0.1/api/capture/io/', timeout=5)
+        response.raise_for_status()
+        return response.json()
+    except requests.RequestException as e:
+        print(f"Warning: Could not fetch presets: {e}")
+        return []
+
+
 def save_metrics_to_csv(metrics_data, filename="/home/visioncell/Documents/system_metrics.csv", limit=5000):
     fieldnames = [
         'timestamp', 'cpu', 'memory', 'storage', 'gpu',

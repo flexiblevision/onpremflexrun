@@ -6,7 +6,7 @@ from flask import request
 from flask_restx import Resource
 from utils.device_utils import get_mac_id, system_info, system_arch
 from utils.network_utils import get_lan_ips
-from helpers.system import get_system_metrics
+from helpers.system import get_system_metrics, get_presets
 import settings
 
 if platform.processor() != 'aarch64':
@@ -53,6 +53,8 @@ class DeviceInfo(Resource):
             info['system_serial_number'] = serial.communicate()[0].decode('utf-8').strip()
         except:
             info['system_serial_number'] = ''
+
+        info['presets'] = get_presets()
 
         return info
 

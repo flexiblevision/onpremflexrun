@@ -91,7 +91,8 @@ def upload_model(temp_model_path, filename):
         model_type = job_data['model_type'] if 'model_type' in job_data else 'high_accuracy'
         is_lite_model = False
 
-        if model_type in lite_model_types:
+        # Lite models and ARM high_accuracy models use lite_models path
+        if model_type in lite_model_types or is_arm_device():
             model_path    = lite_model_path
             model_exists  = lite_model_exists
             is_lite_model = True            
@@ -131,11 +132,6 @@ def upload_model(temp_model_path, filename):
         if is_lite_model:
             print('PUSHING MODELS TO PREDICT LITE SERVER')
             os.system("docker cp /lite_models predictlite:/data/")
-            os.system('rm -rf '+temp_model_path)
-        elif is_arm_device():
-            # ARM devices use predictlite for high_accuracy models (localprediction not available)
-            print('PUSHING MODELS TO PREDICT LITE SERVER (ARM)')
-            os.system("docker cp /models predictlite:/data/")
             os.system('rm -rf '+temp_model_path)
         else:
             print('PUSHING MODELS TO PREDICTION SERVER')
