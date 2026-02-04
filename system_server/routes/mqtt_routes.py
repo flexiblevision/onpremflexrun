@@ -19,8 +19,8 @@ import auth
 log = logging.getLogger(__name__)
 
 # Health monitor settings
-HEALTH_CHECK_INTERVAL = 60  # Check every 60 seconds
-METRICS_STALE_THRESHOLD = 120  # Consider bridge dead if no new messages in 2 minutes
+HEALTH_CHECK_INTERVAL = 30  # Check every 30 seconds
+METRICS_STALE_THRESHOLD = 60  # Consider bridge stale if no new messages in 1 minute
 _health_monitor_thread = None
 _health_monitor_running = False
 _last_publish_count = 0
@@ -176,9 +176,30 @@ def get_bridge_metrics() -> dict:
         return {"success": False, "error": str(e)}
 
 
+def check_tcp_connection_to_cloud() -> bool:
+    """Check if there's an established TCP connection to cloud VerneMQ (port 443)"""
+    try:
+        # Check for TCP connections from within the vernemq container
+        result = subprocess.run(
+            ["docker", "exec", VERNEMQ_CONTAINER, "netstat", "-tnp"],
+            capture_output=True,
+            text=True,
+            timeout=10
+        )
+        if result.returncode == 0:
+            # Look for ESTABLISHED connections to port 443 from beam.smp (VerneMQ)
+            for line in result.stdout.split('\n'):
+                if ':443' in line and 'ESTABLISHED' in line and 'beam' in line:
+                    return True
+        return False
+    except Exception as e:
+        log.warning(f"Failed to check TCP connection: {e}")
+        return False
+
+
 def is_bridge_healthy() -> tuple:
     """
-    Check if the bridge is healthy by monitoring message flow.
+    Check if the bridge is healthy by verifying connection state.
 
     Returns:
         (is_healthy: bool, reason: str)
@@ -186,38 +207,48 @@ def is_bridge_healthy() -> tuple:
     global _last_publish_count, _last_check_time
 
     try:
+        # First, check if bridge is configured
+        status_result = get_bridge_status()
+        if not status_result.get("success"):
+            return False, f"Failed to get bridge status: {status_result.get('error')}"
+
+        status_output = status_result.get("status", "")
+
+        # Check if bridge 'gke' is in the output (means it's configured)
+        if 'gke' not in status_output.lower():
+            return False, "Bridge 'gke' not configured"
+
+        # Check for actual TCP connection to cloud VerneMQ
+        has_tcp_conn = check_tcp_connection_to_cloud()
+        if not has_tcp_conn:
+            return False, "No TCP connection to cloud VerneMQ (port 443)"
+
+        # Secondary check: monitor message flow for additional health info
         metrics_result = get_bridge_metrics()
-        if not metrics_result.get("success"):
-            return False, f"Failed to get metrics: {metrics_result.get('error')}"
+        if metrics_result.get("success"):
+            metrics = metrics_result.get("metrics", {})
+            publish_in = metrics.get("counter.gke_vmq_bridge_publish_in_0", 0)
+            publish_out = metrics.get("counter.gke_vmq_bridge_publish_out_0", 0)
+            current_count = publish_in + publish_out
 
-        metrics = metrics_result.get("metrics", {})
+            current_time = time.time()
 
-        # Get current publish counts (in + out)
-        publish_in = metrics.get("counter.gke_vmq_bridge_publish_in_0", 0)
-        publish_out = metrics.get("counter.gke_vmq_bridge_publish_out_0", 0)
-        current_count = publish_in + publish_out
+            # First check - just record baseline
+            if _last_check_time == 0:
+                _last_publish_count = current_count
+                _last_check_time = current_time
+                return True, "Bridge connected (initial check)"
 
-        current_time = time.time()
+            count_diff = current_count - _last_publish_count
+            time_diff = current_time - _last_check_time
 
-        # First check - just record baseline
-        if _last_check_time == 0:
+            # Update for next check
             _last_publish_count = current_count
             _last_check_time = current_time
-            return True, "Initial check - baseline recorded"
 
-        # Check if message counts have changed
-        time_diff = current_time - _last_check_time
-        count_diff = current_count - _last_publish_count
+            return True, f"Bridge connected: {count_diff} msgs in {int(time_diff)}s"
 
-        # Update for next check
-        _last_publish_count = current_count
-        _last_check_time = current_time
-
-        # If no messages in the threshold period, bridge might be dead
-        if count_diff == 0 and time_diff > METRICS_STALE_THRESHOLD:
-            return False, f"No bridge activity for {int(time_diff)}s"
-
-        return True, f"Bridge active: {count_diff} messages in {int(time_diff)}s"
+        return True, "Bridge connected (metrics unavailable)"
 
     except Exception as e:
         return False, f"Health check error: {e}"
@@ -269,11 +300,13 @@ def _health_monitor_loop():
             is_healthy, reason = is_bridge_healthy()
 
             if is_healthy:
+                if consecutive_failures > 0:
+                    log.info(f"[Bridge Health] Recovered: {reason}")
                 consecutive_failures = 0
                 log.debug(f"[Bridge Health] OK: {reason}")
             else:
                 consecutive_failures += 1
-                log.warning(f"[Bridge Health] UNHEALTHY ({consecutive_failures}): {reason}")
+                log.error(f"[Bridge Health] DISCONNECTED ({consecutive_failures}/{max_failures_before_refresh}): {reason}")
 
                 if consecutive_failures >= max_failures_before_refresh:
                     log.warning("[Bridge Health] Triggering auto-refresh")

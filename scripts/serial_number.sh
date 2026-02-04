@@ -15,24 +15,29 @@ else
     PREFIX="SN"
 fi
 
+# Helper to check if serial is valid (not a placeholder)
+is_valid_serial() {
+    [ -n "$1" ] && [ "$1" != "NONE" ] && [ "$1" != "NOTSPECIFIED" ] && [ "$1" != "DEFAULTSTRING" ] && [ "$1" != "TOBEFILLEDBYOEM" ]
+}
+
 # Try motherboard serial (most reliable for x86 systems)
 SERIAL=$(cat /sys/class/dmi/id/board_serial 2>/dev/null | tr -d ' ' | tr '[:lower:]' '[:upper:]')
-if [ -n "$SERIAL" ] && [ "$SERIAL" != "NONE" ] && [ "$SERIAL" != "NOT SPECIFIED" ]; then
-    echo "${PREFIX}-${SERIAL}"
+if is_valid_serial "$SERIAL"; then
+    echo "[board_serial] ${PREFIX}-${SERIAL}"
     exit 0
 fi
 
 # Try product serial
 SERIAL=$(cat /sys/class/dmi/id/product_serial 2>/dev/null | tr -d ' ' | tr '[:lower:]' '[:upper:]')
-if [ -n "$SERIAL" ] && [ "$SERIAL" != "NONE" ] && [ "$SERIAL" != "NOT SPECIFIED" ]; then
-    echo "${PREFIX}-${SERIAL}"
+if is_valid_serial "$SERIAL"; then
+    echo "[product_serial] ${PREFIX}-${SERIAL}"
     exit 0
 fi
 
 # Try CPU serial (common on ARM/Raspberry Pi)
 SERIAL=$(grep -i 'serial' /proc/cpuinfo 2>/dev/null | awk -F': ' '{print $2}' | tr -d ' ' | tr '[:lower:]' '[:upper:]')
 if [ -n "$SERIAL" ] && [ "$SERIAL" != "0000000000000000" ]; then
-    echo "${PREFIX}-${SERIAL}"
+    echo "[cpu_serial] ${PREFIX}-${SERIAL}"
     exit 0
 fi
 
@@ -40,7 +45,7 @@ fi
 MAC=$(cat /sys/class/net/eno1/address 2>/dev/null || cat /sys/class/net/eth0/address 2>/dev/null || ip link show | awk '/ether/ {print $2; exit}')
 MAC=$(echo "$MAC" | tr -d ':' | tr '[:lower:]' '[:upper:]')
 if [ -n "$MAC" ] && [ "$MAC" != "000000000000" ]; then
-    echo "${PREFIX}-${MAC}"
+    echo "[mac_address] ${PREFIX}-${MAC}"
     exit 0
 fi
 
