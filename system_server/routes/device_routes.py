@@ -48,11 +48,26 @@ class DeviceInfo(Resource):
         info['last_active'] = str(datetime.datetime.now())
         info['metrics'] = get_system_metrics()
 
+        # If device is authorized, use stored device_id (source of truth)
+        info['system_serial_number'] = ''
         try:
-            serial = subprocess.Popen([os.environ['HOME'] + '/flex-run/scripts/serial_number.sh'], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-            info['system_serial_number'] = serial.communicate()[0].decode('utf-8').strip()
-        except:
-            info['system_serial_number'] = ''
+            auth_record = settings.onpremdb.find_utility('device_authorized')
+            if auth_record and len(auth_record) > 0 and auth_record[0].get('is_authorized'):
+                device_record = settings.onpremdb.find_utility('device_id')
+                if device_record and len(device_record) > 0:
+                    stored_id = device_record[0].get('id', '').strip()
+                    if stored_id:
+                        info['system_serial_number'] = stored_id
+        except Exception as e:
+            print(f"Failed to check authorization/device_id: {e}")
+
+        # Fallback to serial_number.sh if not authorized or no stored id
+        if not info['system_serial_number']:
+            try:
+                serial = subprocess.Popen([os.environ['HOME'] + '/flex-run/scripts/serial_number.sh'], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                info['system_serial_number'] = serial.communicate()[0].decode('utf-8').strip()
+            except:
+                pass
 
         info['presets'] = get_presets()
 

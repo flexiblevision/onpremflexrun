@@ -262,4 +262,21 @@ fi
 
 
 
+# VerneMQ MQTT broker - always pull latest for environ
+python3 $r_path -i $uuid -t 'updating vernemq broker' -c $cur_step
+
+docker pull fvonprem/$4-vernemq:$ENVIRON
+{
+    docker stop vernemq
+    docker rm vernemq
+} || {
+    echo 'vernemq does not exist to remove'
+}
+
+SCRIPT_DIR="$HOME/flex-run/setup/mqtt"
+"$SCRIPT_DIR/setup_mqtt.sh" "$4" "$ENVIRON"
+
+cur_step=$((cur_step+1))
+python3 $r_path -i $uuid -t 'updated vernemq broker' -c $cur_step
+
 sh $HOME/flex-run/upgrades/start_servers.sh

@@ -111,4 +111,4 @@ docker run -d --name=visiontools -p 0.0.0.0:5021:5021 --restart unless-stopped \
     -t fvonprem/$4-visiontools:$VISIONTOOLS_VERSION
 
 # MQTT broker
-"$(dirname "$0")/mqtt/setup_mqtt.sh"
+"$(dirname "$0")/mqtt/setup_mqtt.sh" "$SYSTEM_ARCH" "$ENVIRON"

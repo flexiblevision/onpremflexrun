@@ -1,99 +1,71 @@
 # VerneMQ MQTT Setup
 
-This directory contains the setup for VerneMQ MQTT broker with secure bridging between on-premises and GKE.
+Local VerneMQ broker with secure TLS bridge to cloud infrastructure.
 
 ## Architecture
 
 ```
-Devices (on-prem) ──TCP:1883──→ Local VerneMQ ──TLS:8883──→ GKE VerneMQ
-                                     │                           │
-                              JWT webhook auth            JWT webhook auth
-                                     │                           │
-                              capture-service             capture-service
+Devices (on-prem) ──TCP:1883──→ Local VerneMQ ──TLS:443──→ Cloud VerneMQ
+                                     │                          │
+                              JWT webhook auth           JWT webhook auth
+                                     │                          │
+                              capture-service            capture-service
 ```
 
-## Prerequisites
+## Security Notice
 
-- Docker installed locally
-- `kubectl` configured for your GKE cluster
-- Access to `clouddeploy` namespace
+> **This repository is public.** Never commit credentials or secrets.
 
-## Dev Environment Setup
+- Bridge credentials use **placeholder values** in `vernemq-local.conf`
+- Real credentials are passed via **environment variables** at container runtime
+- The `setup_mqtt.sh` script reads config and passes values to Docker
 
-### Step 1: Generate Certificates
+## Quick Start
 
-```bash
-cd gke
-./generate-certs.sh dev
+### 1. Update Configuration
+
+Edit `vernemq-local.conf` with your bridge settings:
+
+```conf
+vmq_bridge.ssl.gke = your-mqtt-broker.example.com:443
+vmq_bridge.ssl.gke.username = bridge
+vmq_bridge.ssl.gke.password = your-bridge-password
 ```
 
-This generates all certificates and automatically copies bridge certs to `ssl-dev/`.
+> **Note:** These values are read by `setup_mqtt.sh` and passed as environment variables to the container.
 
-### Step 2: Build Local VerneMQ Image
-
-```bash
-BRIDGE_ADDRESS=mqtt-dev.flexiblevision.com:8883 \
-BRIDGE_PASSWORD=your-bridge-secret \
-ENV=dev \
-sudo -E ./build.sh
-```
-
-Note: `BRIDGE_ADDRESS` and `BRIDGE_PASSWORD` are required. Use `-E` to preserve environment variables with sudo.
-
-### Step 3: Run and Test Local VerneMQ
+### 2. Run VerneMQ
 
 ```bash
 sudo ENV=dev ./setup_mqtt.sh
 ```
 
-Test local MQTT (bridge will fail but local works):
+### 3. Verify Bridge Connection
 
 ```bash
-python3 -c "
-import paho.mqtt.client as mqtt
-c = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
-c.connect('localhost', 1883)
-c.publish('test/hello', 'world')
-c.disconnect()
-print('Local MQTT OK')
-"
+# Check bridge status
+docker exec vernemq /vernemq/bin/vmq-admin bridge show
+
+# Check listeners
+docker exec vernemq /vernemq/bin/vmq-admin listener show
+
+# Check sessions (shows connected clients including bridge)
+docker exec vernemq /vernemq/bin/vmq-admin session show
 ```
 
-### Step 4: Deploy to GKE
+Expected bridge output:
+```
++------+-----------------------------+-------------+
+| name | endpoint                    | buffer size |
++------+-----------------------------+-------------+
+| gke  | your-broker.example.com:443 | 0           |
++------+-----------------------------+-------------+
+```
+
+### 4. Test Local MQTT
 
 ```bash
-cd gke
-ENV=dev ./deploy.sh
-```
-
-Note the LoadBalancer IP from the output.
-
-### Step 5: Add DNS Record
-
-```
-mqtt-dev.flexiblevision.com → <LoadBalancer-IP>
-```
-
-### Step 6: Rebuild and Restart with Bridge Config
-
-Once DNS is configured, rebuild with your bridge credentials:
-
-```bash
-BRIDGE_ADDRESS=mqtt-dev.flexiblevision.com:8883 \
-BRIDGE_PASSWORD=your-bridge-secret \
-ENV=dev \
-sudo -E ./build.sh
-
-sudo ENV=dev ./setup_mqtt.sh
-```
-
-### Step 7: Verify Bridge
-
-```bash
-# Check local broker
-docker logs vernemq
-
-# Test MQTT locally
+# Using Python
 python3 -c "
 import paho.mqtt.client as mqtt
 c = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
@@ -104,89 +76,96 @@ print('OK')
 "
 ```
 
-## Production Environment Setup
+## Configuration Files
+
+### vernemq-local.conf
+
+Local VerneMQ configuration including:
+- **Listener**: TCP port 1883 (local devices)
+- **Webhooks**: JWT authentication via capture-service
+- **Bridge**: TLS connection to cloud broker on port 443
+
+### setup_mqtt.sh
+
+Container setup script that:
+1. Reads bridge settings from `vernemq-local.conf`
+2. Passes credentials as Docker environment variables
+3. Mounts config file to `/vernemq/etc/conf.d/local.conf`
+4. Enables bridge plugin via `DOCKER_VERNEMQ_PLUGINS__VMQ_BRIDGE=on`
+
+## Environment Variables
+
+The setup script sets these Docker environment variables:
+
+| Variable | Description |
+|----------|-------------|
+| `DOCKER_VERNEMQ_VMQ_BRIDGE__SSL__GKE` | Bridge endpoint (host:port) |
+| `DOCKER_VERNEMQ_VMQ_BRIDGE__SSL__GKE__USERNAME` | Bridge username |
+| `DOCKER_VERNEMQ_VMQ_BRIDGE__SSL__GKE__PASSWORD` | Bridge password |
+| `DOCKER_VERNEMQ_VMQ_BRIDGE__SSL__GKE__CLIENT_ID` | Bridge client ID |
+| `DOCKER_VERNEMQ_VMQ_BRIDGE__SSL__GKE__INSECURE` | Skip cert verification (on/off) |
+| `DOCKER_VERNEMQ_VMQ_BRIDGE__SSL__GKE__TLS_VERSION` | TLS version (tlsv1.2) |
+| `DOCKER_VERNEMQ_PLUGINS__VMQ_BRIDGE` | Enable bridge plugin (on) |
+
+## Troubleshooting
+
+### Bridge not connecting
+
+1. **Check DNS resolution:**
+   ```bash
+   docker exec vernemq nslookup your-broker.example.com
+   ```
+
+2. **Test TLS connectivity:**
+   ```bash
+   docker exec vernemq sh -c "echo 'Q' | openssl s_client -connect your-broker.example.com:443 -tls1_2"
+   ```
+
+3. **Check container logs:**
+   ```bash
+   docker logs vernemq 2>&1 | tail -50
+   ```
+
+4. **Verify bridge plugin is enabled:**
+   ```bash
+   docker exec vernemq cat /vernemq/etc/vernemq.conf | grep vmq_bridge
+   ```
+
+### Webhook authentication failing
+
+Verify capture-service is accessible:
 
 ```bash
-# Generate prod certs (auto-copies to ssl-prod/)
-cd gke
-./generate-certs.sh prod mqtt.flexiblevision.com
+docker exec vernemq wget -q -O- http://172.17.0.1:5000/health
+```
 
-# Deploy to GKE
-ENV=prod ./deploy.sh
+### Container keeps restarting
 
-# Build and run local VerneMQ with prod bridge config
-cd ..
-BRIDGE_ADDRESS=mqtt.flexiblevision.com:8883 \
-BRIDGE_PASSWORD=your-prod-secret \
-ENV=prod \
-sudo -E ./build.sh
+```bash
+# Check logs
+docker logs vernemq
 
-sudo ENV=prod ./setup_mqtt.sh
+# Validate config
+docker exec vernemq /vernemq/bin/vernemq config generate -l debug
 ```
 
 ## File Structure
 
 ```
 setup/mqtt/
-├── ssl-dev/                 # Dev bridge certs (local)
-├── ssl-prod/                # Prod bridge certs (local)
-├── gke/
-│   ├── certs-dev/           # Dev CA + server + bridge certs
-│   ├── certs-prod/          # Prod CA + server + bridge certs
-│   ├── deployment.yaml      # Kubernetes manifests
-│   ├── deploy.sh            # GKE deployment script
-│   └── generate-certs.sh    # Certificate generation
-├── vernemq.conf             # VerneMQ configuration
-├── Dockerfile               # VerneMQ container build
-├── build.sh                 # Docker build script
-├── setup_mqtt.sh            # Local container setup
-└── README.md                # This file
+├── vernemq-local.conf    # VerneMQ configuration (placeholder credentials)
+├── setup_mqtt.sh         # Container setup script
+└── README.md             # This file
 ```
 
-## Security
+## Security Best Practices
 
-- **Device isolation**: Devices connect only to local broker, never directly to cloud
-- **TLS encryption**: Bridge uses TLS 1.2+ with client certificates
-- **Separate CAs**: Dev and prod use isolated certificate authorities
-- **JWT authentication**: Webhook validates tokens on both sides
-- **Topic authorization**: Webhooks check claims for write privileges
+1. **Never commit real credentials** - Use placeholder values in config files
+2. **Use strong passwords** - Generate random bridge passwords
+3. **Rotate credentials periodically** - Update bridge passwords regularly
+4. **Monitor connections** - Check `vmq-admin session show` for unexpected clients
+5. **Use TLS** - Bridge uses TLS 1.2 encryption
 
-## Scripts Reference
+## Support
 
-| Script | Description |
-|--------|-------------|
-| `BRIDGE_ADDRESS=... BRIDGE_PASSWORD=... ENV=dev sudo -E ./build.sh` | Build VerneMQ Docker image |
-| `sudo ENV=dev ./setup_mqtt.sh` | Run local VerneMQ for dev |
-| `sudo ENV=prod ./setup_mqtt.sh` | Run local VerneMQ for prod |
-| `./gke/generate-certs.sh dev` | Generate dev certificates |
-| `./gke/generate-certs.sh prod` | Generate prod certificates |
-| `ENV=dev ./gke/deploy.sh` | Deploy to GKE (dev) |
-| `ENV=prod ./gke/deploy.sh` | Deploy to GKE (prod) |
-
-## Troubleshooting
-
-### Container keeps restarting
-
-```bash
-docker logs vernemq
-```
-
-Check for config errors. Run config validation:
-
-```bash
-docker run --rm fvonprem/x86-vernemq:latest /vernemq/bin/vernemq config generate -l debug
-```
-
-### Bridge not connecting
-
-1. Verify certs are mounted: `docker exec vernemq ls -la /vernemq/etc/ssl/`
-2. Check GKE service is accessible: `curl -v telnet://mqtt-dev.flexiblevision.com:8883`
-3. Verify DNS resolves correctly
-
-### Webhook auth failing
-
-Check capture-service is running and accessible from the container:
-
-```bash
-docker exec vernemq wget -q -O- http://172.17.0.1:5000/health
-```
+For bridge connectivity or authentication issues, contact your infrastructure administrator.

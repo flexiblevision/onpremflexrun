@@ -2,12 +2,17 @@
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-ENV="${ENV:-dev}"
-IMAGE_NAME="fvonprem/x86-vernemq:${ENV}"
+
+# Accept parameters: ARCH and TAG (for consistency with system_setup.sh)
+SYSTEM_ARCH="${1:-x86}"
+IMAGE_TAG="${2:-prod}"
+
+IMAGE_NAME="fvonprem/${SYSTEM_ARCH}-vernemq:${IMAGE_TAG}"
 CONTAINER_NAME="vernemq"
 CONFIG_FILE="$SCRIPT_DIR/vernemq-local.conf"
 
-echo "Setting up MQTT (VerneMQ) for ${ENV} environment..."
+echo "Setting up MQTT (VerneMQ)..."
+echo "  Image: ${IMAGE_NAME}"
 
 # Check that runtime config exists
 if [ ! -f "$CONFIG_FILE" ]; then
@@ -45,5 +50,5 @@ docker run -d \
     -e "DOCKER_VERNEMQ_PLUGINS__VMQ_BRIDGE=on" \
     "$IMAGE_NAME"
 
-echo "MQTT broker started on localhost:1883 (${ENV})"
+echo "MQTT broker started on localhost:1883"
 echo "Config mounted from: $CONFIG_FILE"
