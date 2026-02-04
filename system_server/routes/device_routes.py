@@ -7,6 +7,7 @@ from flask_restx import Resource
 from utils.device_utils import get_mac_id, system_info, system_arch
 from utils.network_utils import get_lan_ips
 from helpers.system import get_system_metrics, get_presets
+from worker_scripts.job_manager import find_utility
 import settings
 
 if platform.processor() != 'aarch64':
@@ -51,9 +52,9 @@ class DeviceInfo(Resource):
         # If device is authorized, use stored device_id (source of truth)
         info['system_serial_number'] = ''
         try:
-            auth_record = settings.onpremdb.find_utility('device_authorized')
+            auth_record = find_utility('device_authorized')
             if auth_record and len(auth_record) > 0 and auth_record[0].get('is_authorized'):
-                device_record = settings.onpremdb.find_utility('device_id')
+                device_record = find_utility('device_id')
                 if device_record and len(device_record) > 0:
                     stored_id = device_record[0].get('id', '').strip()
                     if stored_id:
