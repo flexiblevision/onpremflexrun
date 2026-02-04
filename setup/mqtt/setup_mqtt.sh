@@ -5,11 +5,13 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 # Accept parameters: ARCH and TAG (for consistency with system_setup.sh)
 SYSTEM_ARCH="${1:-x86}"
-IMAGE_TAG="${2:-prod}"
+IMAGE_TAG="${2:-dev}"
 
 IMAGE_NAME="fvonprem/${SYSTEM_ARCH}-vernemq:${IMAGE_TAG}"
 CONTAINER_NAME="vernemq"
-CONFIG_FILE="$SCRIPT_DIR/vernemq-local.conf"
+
+# Use production path for config - must match what system_server expects
+CONFIG_FILE="/root/flex-run/setup/mqtt/vernemq-local.conf"
 
 echo "Setting up MQTT (VerneMQ)..."
 echo "  Image: ${IMAGE_NAME}"
