@@ -347,9 +347,6 @@ def stop_health_monitor():
 
 
 class BridgeStatus(Resource):
-    """Get VerneMQ bridge status"""
-
-    @auth.requires_auth
     def get(self):
         """Get current bridge connection status"""
         status = get_bridge_status()

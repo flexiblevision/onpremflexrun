@@ -16,8 +16,41 @@ CORS(app)
 def update_config(config):
     PATH = os.environ['HOME']+'/fvconfig.json'
     if os.path.exists(PATH):
-        with open(PATH, 'w') as outfile:  
+        with open(PATH, 'w') as outfile:
             json.dump(config, outfile, indent=4, sort_keys=True)
+
+
+def check_tutorial():
+    """If tutorial key missing from fvconfig, add it as False and set Chrome to splash page."""
+    PATH = os.environ['HOME'] + '/fvconfig.json'
+    if not os.path.exists(PATH):
+        return
+
+    with open(PATH, 'r') as f:
+        config = json.load(f)
+
+    if 'tutorial' not in config:
+        config['tutorial'] = False
+        with open(PATH, 'w') as f:
+            json.dump(config, f, indent=4, sort_keys=True)
+
+        # Update Chrome autostart to show splash/tutorial page
+        desktop_path = os.path.expanduser('~/.config/autostart/google-chrome.desktop')
+        if os.path.exists(desktop_path):
+            with open(desktop_path, 'r') as f:
+                lines = f.readlines()
+
+            splash_url = 'file:///home/visioncell/FV_APP/VISIONCELL_SETUP_ASSETS/FILES/fv_splash.html'
+            exec_line = f'Exec=google-chrome -kiosk --incognito --simulate-outdated-no-au=\'Tue, 31 Dec 2099 23:59:59 GMT\' "{splash_url}" &\n'
+
+            with open(desktop_path, 'w') as f:
+                for line in lines:
+                    if line.startswith('Exec='):
+                        f.write(exec_line)
+                    else:
+                        f.write(line)
+
+            print('Tutorial not found - set to False, updated Chrome autostart to splash page')
 
 @app.route('/inspection_status', methods=['GET'])
 def get_status():
@@ -57,6 +90,7 @@ def update_zone():
         doc_key = f"{data['warehouse']}_{data['zone']}"
         settings.config['fire_operator']['document'] = doc_key
         update_config(settings.config)
+        check_tutorial()
         threading.Timer(2.0, restart_server).start()
         return 'Updated', 200
 
