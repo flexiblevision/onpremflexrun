@@ -35,7 +35,7 @@ def check_tutorial():
             json.dump(config, f, indent=4, sort_keys=True)
 
         # Update Chrome autostart to show splash/tutorial page
-        desktop_path = os.path.expanduser('~/.config/autostart/launchpad.html.desktop')
+        desktop_path = os.path.expanduser('/home/visioncell/.config/autostart/launchpad.html.desktop')
         if os.path.exists(desktop_path):
             with open(desktop_path, 'r') as f:
                 lines = f.readlines()
