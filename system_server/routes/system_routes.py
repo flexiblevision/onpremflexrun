@@ -42,18 +42,49 @@ class Restart(Resource):
 class RestartBackend(Resource):
     @auth.requires_auth
     def get(self):
-        print('restarting capdev and vision...')
-        os.system("docker restart capdev")
+        import time
+        import requests
+
+        vision_base = 'http://172.17.0.1:5555'
+        vision_api = vision_base + '/api/vision/vision'
+
+        print('stopping capdev to release camera locks...')
+        os.system("docker stop capdev")
+
+        # Release cameras and restart vision
         try:
-            import requests
-            host = 'http://172.17.0.1'
-            port = '5555'
-            path = '/api/vision/releaseAll'
-            url = host+':'+port+path
-            resp = requests.get(url)
+            requests.get(vision_api + '/releaseAll', timeout=5)
         except Exception as e:
-            print(e)
+            print('releaseAll:', e)
+
+        print('restarting vision...')
         os.system("docker restart vision")
+
+        # Wait for vision to finish camera discovery (listCameras runs synchronously on first /cameras call)
+        max_wait = 120
+        poll_interval = 5
+        elapsed = 0
+        cameras_ready = False
+
+        while elapsed < max_wait:
+            time.sleep(poll_interval)
+            elapsed += poll_interval
+            try:
+                resp = requests.get(vision_api + '/cameras', timeout=30)
+                if resp.status_code == 200:
+                    cameras = resp.json()
+                    if len(cameras) > 0:
+                        print(f'vision: {len(cameras)} cameras discovered and connected ({elapsed}s)')
+                        cameras_ready = True
+                        break
+            except Exception as e:
+                print(f'waiting for vision... ({elapsed}s)')
+
+        if not cameras_ready:
+            print('warning: vision not ready, starting capdev anyway')
+
+        print('starting capdev...')
+        os.system("docker start capdev")
 
 class ListServices(Resource):
     def get(self):
