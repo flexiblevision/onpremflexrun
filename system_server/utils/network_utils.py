@@ -25,6 +25,25 @@ def get_interface_name_ref():
         interface_name = get_eth_port_names()[-1]
     return interface_name
 
+def remove_conflicting_netplans():
+    """Remove conflicting ethernet netplan configs, preserving wifi configs."""
+    netplan_dir = '/etc/netplan/'
+    if not os.path.exists(netplan_dir):
+        return
+    for f in os.listdir(netplan_dir):
+        if f.endswith('.yaml') and f != 'fv-net-init.yaml':
+            filepath = os.path.join(netplan_dir, f)
+            try:
+                with open(filepath, 'r') as fh:
+                    contents = fh.read()
+                if 'wifis:' in contents:
+                    continue
+                os.remove(filepath)
+                print(f'Removed conflicting netplan: {filepath}')
+            except Exception as e:
+                print(f'Failed to remove {filepath}: {e}')
+
+
 def set_static_ips(network=None):
     ips = []
     interface_name = get_interface_name_ref()
@@ -34,6 +53,8 @@ def set_static_ips(network=None):
     ip_string = '['
     for ip in ips: ip_string += (ip)
     ip_string = ip_string + ']'
+
+    remove_conflicting_netplans()
 
     with open ('/etc/netplan/fv-net-init.yaml', 'w') as f:
         f.write('network:\n')
@@ -61,6 +82,7 @@ def build_set_netplan():
     interfaces = json.loads(json_util.dumps(res))
 
     if os.path.exists('/etc/netplan/'):
+        remove_conflicting_netplans()
         with open ('/etc/netplan/fv-net-init.yaml', 'w') as f:
             f.write('network:\n')
             f.write('  version: 2\n')

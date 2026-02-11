@@ -185,6 +185,21 @@ class RestartFO(Resource):
             print("Error restarting FO server:", e)
             return "Error restarting FO server", 500
 
+class StartTeamviewer(Resource):
+    def get(self):
+        try:
+            result = subprocess.run(
+                ['sudo', 'systemctl', 'restart', 'teamviewerd'],
+                capture_output=True, text=True, timeout=30
+            )
+            if result.returncode == 0:
+                return 'TeamViewer started', 200
+            else:
+                return f'Failed to start TeamViewer: {result.stderr}', 500
+        except Exception as e:
+            return f'Error starting TeamViewer: {e}', 500
+
+
 def register_routes(api):
     api.add_resource(Shutdown, '/shutdown')
     api.add_resource(Restart, '/restart')
@@ -194,3 +209,4 @@ def register_routes(api):
     api.add_resource(UpgradeFlexRun, '/upgrade_flex_run')
     api.add_resource(SystemVersions, '/system_versions')
     api.add_resource(SystemIsUptodate, '/system_uptodate')
+    api.add_resource(StartTeamviewer, '/start_teamviewer')

@@ -63,6 +63,7 @@ def get_system_metrics(save=False):
     service_stats = get_service_stats()
     info['services'] = service_stats
     info['shutdown_events'] = get_shutdown_events()
+    info['metadata'] = get_metadata()
     if save:
         save_metrics_to_csv(info)
 
@@ -194,6 +195,23 @@ def get_service_stats():
         print("Warning: 'docker' command not found. Is Docker installed?")
 
     return container_stats
+
+
+def get_metadata():
+    """Get device metadata such as TeamViewer ID."""
+    metadata = {}
+    try:
+        tv_output = subprocess.check_output(
+            ['sudo', 'teamviewer', 'info'], stderr=subprocess.PIPE, timeout=10
+        ).decode('utf-8')
+        for line in tv_output.splitlines():
+            if 'TeamViewer ID' in line:
+                raw = line.split(':')[-1].strip()
+                metadata['teamviewer_id'] = re.sub(r'\x1b\[[0-9;]*m', '', raw).strip()
+                break
+    except Exception:
+        pass
+    return metadata
 
 
 def get_presets():
