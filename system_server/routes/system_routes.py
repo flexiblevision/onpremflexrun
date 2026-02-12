@@ -138,17 +138,21 @@ class Upgrade(Resource):
             print(e)
 
         generate_environment_config()
-        os.system("chmod +x "+os.environ['HOME']+"/flex-run/upgrades/upgrade_flex_run.sh")
-        os.system("sh "+os.environ['HOME']+"/flex-run/upgrades/upgrade_flex_run.sh")
+        home = os.environ['HOME']
+        subprocess.run(["chmod", "+x", home+"/flex-run/upgrades/upgrade_flex_run.sh"])
+        subprocess.run(["sh", home+"/flex-run/upgrades/upgrade_flex_run.sh"])
 
-        os.system("chmod +x "+os.environ['HOME']+"/flex-run/system_server/upgrade_system.sh")
-        os.system("sh "+os.environ['HOME']+"/flex-run/system_server/upgrade_system.sh "+cap_uptd+" "+capui_uptd+" "+predict_uptd+" "+predictlite_uptd+" "+vision_uptd+" "+creator_uptd+" "+visiontools_uptd)
+        subprocess.run(["chmod", "+x", home+"/flex-run/system_server/upgrade_system.sh"])
+        subprocess.run(["sh", home+"/flex-run/system_server/upgrade_system.sh",
+                        cap_uptd, capui_uptd, predict_uptd, predictlite_uptd,
+                        vision_uptd, creator_uptd, visiontools_uptd])
 
 class UpgradeFlexRun(Resource):
     @auth.requires_auth
     def get(self):
-        os.system("chmod +x "+os.environ['HOME']+"/flex-run/upgrades/upgrade_flex_run.sh")
-        os.system("sh "+os.environ['HOME']+"/flex-run/upgrades/upgrade_flex_run.sh")
+        home = os.environ['HOME']
+        subprocess.run(["chmod", "+x", home+"/flex-run/upgrades/upgrade_flex_run.sh"])
+        subprocess.run(["sh", home+"/flex-run/upgrades/upgrade_flex_run.sh"])
 
 class SystemVersions(Resource):
     def get(self):
