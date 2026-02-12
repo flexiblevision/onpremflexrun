@@ -283,13 +283,10 @@ def get_software_versions():
             headers={"Content-Type": "application/json"},
             timeout=10
         )
-        print(cloud_base, stable_ref)
-        print(resp.text)
         if resp.status_code == 200:
             stable_versions = resp.json()
-            print(stable_versions)
-    except Exception as error:
-        print(error)
+    except Exception:
+        pass
 
     # 3) Build result — match running containers to their latest stable version
     versions = {}
@@ -343,5 +340,3 @@ def save_metrics_to_csv(metrics_data, filename="/home/visioncell/Documents/syste
         writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
         writer.writeheader()
         writer.writerows(rows)
-
-print(get_software_versions())
