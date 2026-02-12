@@ -75,4 +75,13 @@ echo "maxmemory $MAX_MEMORY" >> /etc/redis/redis.conf
 echo "maxmemory-policy $MAX_MEMORY_POLICY" >> /etc/redis/redis.conf
 systemctl restart redis.service
 
-forever restart $HOME/flex-run/system_server/server.py
+forever stop $HOME/flex-run/system_server/server.py 2>/dev/null
+# Wait for port 5001 to be released before starting new instance
+for i in 1 2 3 4 5 6 7 8 9 10; do
+    if ! ss -tlnp 2>/dev/null | grep -q ':5001 '; then
+        break
+    fi
+    echo "Waiting for port 5001 to be released (attempt $i/10)..."
+    sleep 1
+done
+forever start -c python3 $HOME/flex-run/system_server/server.py
