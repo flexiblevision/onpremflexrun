@@ -7,7 +7,10 @@ import csv
 from datetime import datetime
 import json
 import re
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from pymongo import MongoClient
 
+utils_db = MongoClient("172.17.0.1")["fvonprem"]["utils"]
 
 MIN_VALID_YEAR = 2020
 REBOOT_THRESHOLD_MS = 600000  # 5 min
@@ -211,7 +214,94 @@ def get_metadata():
                 break
     except Exception:
         pass
+
+    metadata['software_version'] = get_software_versions()
+
+    # Sync state from utils db
+    try:
+        sync_state = {}
+        for doc in utils_db.find({'type': {'$in': ['sync', 'sync_interval', 'purge_analytics', 'purge_interval']}}, {'_id': 0}):
+            doc_type = doc.pop('type')
+            sync_state[doc_type] = doc
+        metadata['sync_state'] = sync_state
+    except Exception:
+        pass
+
     return metadata
+
+
+# Maps docker container name -> cloud image key for latest version lookup
+_CLOUD_IMAGE_KEY = {
+    'capdev': 'backend',
+    'captureui': 'frontend',
+    'localprediction': 'prediction',
+    'predictlite': 'predictlite',
+    'vision': 'vision',
+    'nodecreator': 'nodecreator',
+    'visiontools': 'visiontools'
+}
+
+
+def get_software_versions():
+    """Get running vs latest version for all running containers."""
+    # 1) Get all running containers + image tags in a single docker call
+    try:
+        result = subprocess.run(
+            ['docker', 'ps', '--format', '{{.Names}}\t{{.Image}}'],
+            capture_output=True, text=True, timeout=10
+        )
+        if result.returncode != 0:
+            return {}
+    except Exception:
+        return {}
+
+    running = {}
+    for line in result.stdout.strip().splitlines():
+        parts = line.split('\t', 1)
+        if len(parts) == 2:
+            name = parts[0]
+            running[name] = parts[1].split(':')[-1] if ':' in parts[1] else None
+
+    if not running:
+        return {}
+
+    # 2) Single request to get all latest stable versions from cloud
+    stable_versions = {}
+    arch = 'x86'
+    try:
+        arch_raw = subprocess.check_output(['arch'], timeout=5).decode('utf-8').strip()
+        arch = {'aarch64': 'arm', 'x86_64': 'x86'}.get(arch_raw, arch_raw)
+
+        with open(os.path.join(os.environ['HOME'], 'fvconfig.json')) as f:
+            config = json.load(f)
+        cloud_base = config.get('container_check_domain', 'https://us-central1-flexible-vision-staging.cloudfunctions.net/')
+        stable_ref = config.get('latest_stable_ref', 'latest_stable_version')
+
+        resp = requests.post(
+            cloud_base + stable_ref,
+            json={"arch": arch},
+            headers={"Content-Type": "application/json"},
+            timeout=10
+        )
+        print(cloud_base, stable_ref)
+        print(resp.text)
+        if resp.status_code == 200:
+            stable_versions = resp.json()
+            print(stable_versions)
+    except Exception as error:
+        print(error)
+
+    # 3) Build result — match running containers to their latest stable version
+    versions = {}
+    for name, running_tag in running.items():
+        cloud_key = _CLOUD_IMAGE_KEY.get(name)
+        latest = stable_versions.get(f'{arch}-{cloud_key}') if cloud_key else None
+        versions[name] = {
+            'running': running_tag,
+            'latest': latest if latest else running_tag,
+        }
+
+    return versions
 
 
 def get_presets():
@@ -253,3 +343,5 @@ def save_metrics_to_csv(metrics_data, filename="/home/visioncell/Documents/syste
         writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
         writer.writeheader()
         writer.writerows(rows)
+
+print(get_software_versions())

@@ -114,6 +114,11 @@ class ListServices(Resource):
 class Upgrade(Resource):
     @auth.requires_auth
     def get(self):
+        # Verify user is logged into Docker
+        result = subprocess.run(['docker', 'info'], capture_output=True, text=True)
+        if result.returncode != 0 or 'Username' not in result.stdout:
+            return {'error': 'Not logged into Docker. Please run docker login first.'}, 403
+
         cap_uptd = is_container_uptodate('backend')[1]
         capui_uptd = is_container_uptodate('frontend')[1]
         predict_uptd = is_container_uptodate('prediction')[1]
