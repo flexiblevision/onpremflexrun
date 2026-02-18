@@ -59,6 +59,10 @@ def restart_service():
     status = subprocess.check_output("systemctl restart isc-dhcp-server.service", shell=True)
     return status
 
+def stop_service():
+    status = subprocess.check_output("systemctl stop isc-dhcp-server.service", shell=True)
+    return status
+
 def set_dhcp():
     res = interfaces_db.find({'dhcp': True})
     interfaces = json.loads(json_util.dumps(res))
@@ -70,4 +74,7 @@ def set_dhcp():
     # /etc/dhcp/dhcpd.conf
     setup_port_subnets(interfaces)
 
-    restart_service()
+    if interfaces:
+        restart_service()
+    else:
+        stop_service()

@@ -35,6 +35,8 @@ BRIDGE_CLIENT_ID=$(grep "vmq_bridge.ssl.gke.client_id" "$CONFIG_FILE" | cut -d= 
 BRIDGE_USERNAME=$(grep "vmq_bridge.ssl.gke.username" "$CONFIG_FILE" | cut -d= -f2 | tr -d ' ')
 BRIDGE_PASSWORD=$(grep "vmq_bridge.ssl.gke.password" "$CONFIG_FILE" | cut -d= -f2 | tr -d ' ')
 
+## Bridge and topic config is in local.conf (mounted below) - do NOT duplicate via env vars
+## Env vars override conf files and cause duplicate subscriptions if both are set
 docker run -d \
     --name "$CONTAINER_NAME" \
     --restart unless-stopped \
@@ -42,15 +44,6 @@ docker run -d \
     --log-opt max-size=50m \
     --log-opt max-file=5 \
     -v "$CONFIG_FILE:/vernemq/etc/conf.d/local.conf:ro" \
-    -e "DOCKER_VERNEMQ_VMQ_BRIDGE__SSL__GKE=${BRIDGE_ADDR}" \
-    -e "DOCKER_VERNEMQ_VMQ_BRIDGE__SSL__GKE__CLIENT_ID=${BRIDGE_CLIENT_ID}" \
-    -e "DOCKER_VERNEMQ_VMQ_BRIDGE__SSL__GKE__USERNAME=${BRIDGE_USERNAME}" \
-    -e "DOCKER_VERNEMQ_VMQ_BRIDGE__SSL__GKE__PASSWORD=${BRIDGE_PASSWORD}" \
-    -e "DOCKER_VERNEMQ_VMQ_BRIDGE__SSL__GKE__INSECURE=on" \
-    -e "DOCKER_VERNEMQ_VMQ_BRIDGE__SSL__GKE__TLS_VERSION=tlsv1.2" \
-    -e "DOCKER_VERNEMQ_VMQ_BRIDGE__SSL__GKE__CLEANSESSION=on" \
-    -e "DOCKER_VERNEMQ_VMQ_BRIDGE__SSL__GKE__TOPIC__1=* both 0" \
-    -e "DOCKER_VERNEMQ_PLUGINS__VMQ_BRIDGE=on" \
     "$IMAGE_NAME"
 
 echo "MQTT broker started on localhost:1883"

@@ -89,7 +89,7 @@ def build_set_netplan():
             f.write('  ethernets:')
             for i in interfaces:
                 f.write('\n    '+i['iname']+':\n')
-                f.write('      dhcp4: '+str(i['dhcp'])+'\n')
+                f.write('      dhcp4: false\n')
                 f.write('      mtu: 9000\n')
                 f.write('      addresses: '+i['ip_string'])
 
