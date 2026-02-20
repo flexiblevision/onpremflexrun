@@ -41,7 +41,7 @@ def check_tutorial():
                 lines = f.readlines()
 
             splash_url = 'file:///home/visioncell/FV_APP/VISIONCELL_SETUP_ASSETS/FILES/fv_splash.html'
-            exec_line = f'Exec=google-chrome -kiosk --incognito --simulate-outdated-no-au=\'Tue, 31 Dec 2099 23:59:59 GMT\' "{splash_url}" &\n'
+            exec_line = f'Exec=google-chrome -kiosk --incognito --simulate-outdated-no-au=\'Tue, 31 Dec 2099 23:59:59 GMT\' "file:///home/visioncell/FV_APP/VISIONCELL_SETUP_ASSETS/FILES/fv_splash.html" &\n'
 
             with open(desktop_path, 'w') as f:
                 for line in lines:
@@ -82,6 +82,24 @@ def get_zone():
     
 def restart_server():
     os.system(f"forever restart {os.environ['HOME']}/flex-run/aws/fo_server.py")
+
+@app.route('/decommission', methods=['GET'])
+def decommission():
+    settings.config['fire_operator']['document'] = '_'
+    update_config(settings.config)
+
+    desktop_path = os.path.expanduser('/home/visioncell/.config/autostart/launchpad.html.desktop')
+    if os.path.exists(desktop_path):
+        with open(desktop_path, 'r') as f:
+            lines = f.readlines()
+        with open(desktop_path, 'w') as f:
+            for line in lines:
+                if line.startswith('Exec='):
+                    f.write('Exec=google-chrome -kiosk --incognito http://localhost:3013/setup &\n')
+                else:
+                    f.write(line)
+
+    return 'Decommissioned', 200
 
 @app.route('/aws_warehouse_zone', methods=['PUT'])
 def update_zone():
