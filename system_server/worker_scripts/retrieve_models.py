@@ -11,6 +11,7 @@ from collections import defaultdict
 from io import StringIO
 from io import BytesIO
 from pymongo import MongoClient
+from rq import get_current_job
 import datetime
 import string
 
@@ -27,6 +28,11 @@ models_collection  = client["fvonprem"]["models"]
 presets_collection = client["fvonprem"]["io_presets"]
 
 CLOUD_DOMAIN = settings.config['cloud_domain'] if 'cloud_domain' in settings.config else "https://clouddeploy.api.flexiblevision.com"
+
+def update_job_progress(progress):
+    job = get_current_job()
+    if job:
+        job_collection.update_one({'_id': job.id}, {'$set': {'progress': progress}})
 
 def base_path():
     xavier_ssd = '/xavier_ssd/'
@@ -58,13 +64,16 @@ def download_by_link(token, project_id, version, destination):
     written     = 0
     chunk_size  = 8192
     download = requests.get(signed_link, stream=True)
-    cont_length = download.headers['Content-length']
+    cont_length = int(download.headers.get('Content-length', 0))
     with download as r:
         r.raise_for_status()
         with open(destination, 'wb') as f:
             for chunk in r.iter_content(chunk_size=8192):
                 f.write(chunk)
-                written += chunk_size
+                written += len(chunk)
+                if cont_length > 0:
+                    pct = round((written / cont_length) * 100)
+                    update_job_progress(pct)
                 print(f"{written}/{cont_length}")
     
 
@@ -102,6 +111,9 @@ def retrieve_models(data, token):
 
     models         = data['models']
     exclude_models = data['exclude_models']
+    total_models = sum(len(ref['models']) for ref in models.values())
+    completed_models = 0
+    update_job_progress(0)
     for model_ref in models.values():
         project_id   = model_ref['_id']
         model_name   = format_filename(model_ref['name'])
@@ -118,6 +130,8 @@ def retrieve_models(data, token):
         for version in versions:
             if model_name in exclude_models and version in exclude_models[model_name]:
                 # model has already been downloaded
+                completed_models += 1
+                update_job_progress(round((completed_models / total_models) * 100))
                 if os.path.exists(model_folder+'/'+str(version)):
                     model_data[model_type].append(version)
                     print('model has already been downloaded')
@@ -130,7 +144,20 @@ def retrieve_models(data, token):
                     download_by_link(token, str(project_id), str(version), f"{model_folder}/model.zip")
                 else:
                     path = CLOUD_DOMAIN+'/api/capture/models/download/'+str(project_id)+'/'+str(version)
-                    res = os.system(f"curl -X GET {path} -H 'accept: application/json' -H 'Authorization: Bearer {token}' -o {model_folder}/model.zip")
+                    headers = {'accept': 'application/json', 'Authorization': 'Bearer '+token}
+                    r = requests.get(path, headers=headers, stream=True)
+                    cont_length = int(r.headers.get('Content-length', 0))
+                    written = 0
+                    with open(f"{model_folder}/model.zip", 'wb') as f:
+                        for chunk in r.iter_content(chunk_size=8192):
+                            f.write(chunk)
+                            written += len(chunk)
+                            if cont_length > 0 and total_models > 0:
+                                base_pct = (completed_models / total_models) * 100
+                                chunk_pct = ((written / cont_length) / total_models) * 100
+                                update_job_progress(round(base_pct + chunk_pct))
+                completed_models += 1
+                update_job_progress(round((completed_models / total_models) * 100))
                 
                 if os.path.exists(model_folder+'/model.zip'):
                     try:
