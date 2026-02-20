@@ -15,6 +15,10 @@ import subprocess
 import os
 import sys
 import uuid
+import platform
+
+def is_arm_device():
+    return platform.processor() == 'aarch64'
 
 
 HOST = 'http://172.17.0.1'
@@ -87,7 +91,8 @@ def upload_model(temp_model_path, filename):
         model_type = job_data['model_type'] if 'model_type' in job_data else 'high_accuracy'
         is_lite_model = False
 
-        if model_type in lite_model_types:
+        # Lite models and ARM high_accuracy models use lite_models path
+        if model_type in lite_model_types or is_arm_device():
             model_path    = lite_model_path
             model_exists  = lite_model_exists
             is_lite_model = True            

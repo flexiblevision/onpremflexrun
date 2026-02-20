@@ -1,1 +1,12 @@
 ./system_server/creds.txt
+
+# MQTT certificates - contain private keys
+setup/mqtt/ssl/
+setup/mqtt/ssl-dev/
+setup/mqtt/ssl-prod/
+setup/mqtt/gke/ssl-dev/
+setup/mqtt/gke/ssl-prod/
+setup/mqtt/gke/certs-dev/
+setup/mqtt/gke/certs-prod/
+setup/mqtt/vernemq.conf.orig
+setup/mqtt/vernemq-local.conf

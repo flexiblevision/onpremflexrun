@@ -141,7 +141,5 @@ while True:
         get_auth_token()
         aws_client.validate_expiry()
 
-    if can_sync():
-        #wait to see if browser window handled syncing
-        time.sleep(10)
-        sync_device()
+    time.sleep(10)
+    sync_device()

@@ -10,4 +10,4 @@ apt-mark hold "nvidia*"
 export PYTHONPATH="${PYTHONPATH}:${HOME}/flex-run"
 
 python3 $HOME/flex-run/setup/management.py
-pip3 install -r $HOME/flex-run/requirements.txt
+pip3 install --break-system-packages --ignore-installed -r $HOME/flex-run/requirements.txt

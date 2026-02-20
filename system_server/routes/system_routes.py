@@ -42,18 +42,49 @@ class Restart(Resource):
 class RestartBackend(Resource):
     @auth.requires_auth
     def get(self):
-        print('restarting capdev and vision...')
-        os.system("docker restart capdev")
+        import time
+        import requests
+
+        vision_base = 'http://172.17.0.1:5555'
+        vision_api = vision_base + '/api/vision/vision'
+
+        print('stopping capdev to release camera locks...')
+        os.system("docker stop capdev")
+
+        # Release cameras and restart vision
         try:
-            import requests
-            host = 'http://172.17.0.1'
-            port = '5555'
-            path = '/api/vision/releaseAll'
-            url = host+':'+port+path
-            resp = requests.get(url)
+            requests.get(vision_api + '/releaseAll', timeout=5)
         except Exception as e:
-            print(e)
+            print('releaseAll:', e)
+
+        print('restarting vision...')
         os.system("docker restart vision")
+
+        # Wait for vision to finish camera discovery (listCameras runs synchronously on first /cameras call)
+        max_wait = 120
+        poll_interval = 5
+        elapsed = 0
+        cameras_ready = False
+
+        while elapsed < max_wait:
+            time.sleep(poll_interval)
+            elapsed += poll_interval
+            try:
+                resp = requests.get(vision_api + '/cameras', timeout=30)
+                if resp.status_code == 200:
+                    cameras = resp.json()
+                    if len(cameras) > 0:
+                        print(f'vision: {len(cameras)} cameras discovered and connected ({elapsed}s)')
+                        cameras_ready = True
+                        break
+            except Exception as e:
+                print(f'waiting for vision... ({elapsed}s)')
+
+        if not cameras_ready:
+            print('warning: vision not ready, starting capdev anyway')
+
+        print('starting capdev...')
+        os.system("docker start capdev")
 
 class ListServices(Resource):
     def get(self):
@@ -83,6 +114,11 @@ class ListServices(Resource):
 class Upgrade(Resource):
     @auth.requires_auth
     def get(self):
+        # Verify user is logged into Docker
+        result = subprocess.run(['docker', 'info'], capture_output=True, text=True)
+        if result.returncode != 0 or 'Username' not in result.stdout:
+            return {'error': 'Not logged into Docker. Please run docker login first.'}, 403
+
         cap_uptd = is_container_uptodate('backend')[1]
         capui_uptd = is_container_uptodate('frontend')[1]
         predict_uptd = is_container_uptodate('prediction')[1]
@@ -102,17 +138,21 @@ class Upgrade(Resource):
             print(e)
 
         generate_environment_config()
-        os.system("chmod +x "+os.environ['HOME']+"/flex-run/upgrades/upgrade_flex_run.sh")
-        os.system("sh "+os.environ['HOME']+"/flex-run/upgrades/upgrade_flex_run.sh")
+        home = os.environ['HOME']
+        subprocess.run(["chmod", "+x", home+"/flex-run/upgrades/upgrade_flex_run.sh"])
+        subprocess.run(["sh", home+"/flex-run/upgrades/upgrade_flex_run.sh"])
 
-        os.system("chmod +x "+os.environ['HOME']+"/flex-run/system_server/upgrade_system.sh")
-        os.system("sh "+os.environ['HOME']+"/flex-run/system_server/upgrade_system.sh "+cap_uptd+" "+capui_uptd+" "+predict_uptd+" "+predictlite_uptd+" "+vision_uptd+" "+creator_uptd+" "+visiontools_uptd)
+        subprocess.run(["chmod", "+x", home+"/flex-run/system_server/upgrade_system.sh"])
+        subprocess.run(["sh", home+"/flex-run/system_server/upgrade_system.sh",
+                        cap_uptd, capui_uptd, predict_uptd, predictlite_uptd,
+                        vision_uptd, creator_uptd, visiontools_uptd])
 
 class UpgradeFlexRun(Resource):
     @auth.requires_auth
     def get(self):
-        os.system("chmod +x "+os.environ['HOME']+"/flex-run/upgrades/upgrade_flex_run.sh")
-        os.system("sh "+os.environ['HOME']+"/flex-run/upgrades/upgrade_flex_run.sh")
+        home = os.environ['HOME']
+        subprocess.run(["chmod", "+x", home+"/flex-run/upgrades/upgrade_flex_run.sh"])
+        subprocess.run(["sh", home+"/flex-run/upgrades/upgrade_flex_run.sh"])
 
 class SystemVersions(Resource):
     def get(self):
@@ -154,6 +194,21 @@ class RestartFO(Resource):
             print("Error restarting FO server:", e)
             return "Error restarting FO server", 500
 
+class StartTeamviewer(Resource):
+    def get(self):
+        try:
+            result = subprocess.run(
+                ['sudo', 'systemctl', 'restart', 'teamviewerd'],
+                capture_output=True, text=True, timeout=30
+            )
+            if result.returncode == 0:
+                return 'TeamViewer started', 200
+            else:
+                return f'Failed to start TeamViewer: {result.stderr}', 500
+        except Exception as e:
+            return f'Error starting TeamViewer: {e}', 500
+
+
 def register_routes(api):
     api.add_resource(Shutdown, '/shutdown')
     api.add_resource(Restart, '/restart')
@@ -163,3 +218,4 @@ def register_routes(api):
     api.add_resource(UpgradeFlexRun, '/upgrade_flex_run')
     api.add_resource(SystemVersions, '/system_versions')
     api.add_resource(SystemIsUptodate, '/system_uptodate')
+    api.add_resource(StartTeamviewer, '/start_teamviewer')

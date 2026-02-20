@@ -12,7 +12,8 @@ from . import (
     auth_routes,
     ftp_routes,
     timemachine_routes,
-    assembly_routes
+    assembly_routes,
+    mqtt_routes
 )
 
 def register_all_routes(api, settings):
@@ -49,6 +50,9 @@ def register_all_routes(api, settings):
 
     # Assembly upload and media routes
     assembly_routes.register_routes(api)
+
+    # MQTT bridge management routes
+    mqtt_routes.register_routes(api)
 
     # Conditional AWS routes
     if 'use_aws' in settings.config and settings.config['use_aws']:

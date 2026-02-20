@@ -6,12 +6,16 @@ import base64
 import io
 import time
 import uuid
+import platform
 from collections import defaultdict
 from io import StringIO
 from io import BytesIO
 from pymongo import MongoClient
 import datetime
 import string
+
+def is_arm_device():
+    return platform.processor() == 'aarch64'
 
 settings_path = os.environ['HOME']+'/flex-run'
 sys.path.append(settings_path)
@@ -72,16 +76,16 @@ def retrieve_models(data, token):
 
 
     model_type = 'versions' if 'model_type' not in data or data['model_type'] != 'high_speed' else data['model_type']
-    if 'model_type' in data and data['model_type'] == 'ocr': model_type = 'ocr' 
-    
+    if 'model_type' in data and data['model_type'] == 'ocr': model_type = 'ocr'
+
     if model_type == 'ocr':
         BASE_PATH_TO_MODELS = '/tmp/'
-    elif model_type not in LITE_MODEL_TYPES:
+    elif model_type not in LITE_MODEL_TYPES and not is_arm_device():
         #if model.config exists - remove it
         if os.path.exists(BASE_PATH_TO_MODELS+'model.config'):
             os.system("rm -rf "+BASE_PATH_TO_MODELS+'model.config')
     else:
-        # update base models path
+        # update base models path (lite models and ARM high_accuracy use lite_models path)
         BASE_PATH_TO_MODELS = BASE_PATH_TO_LITE_MODELS
 
     #check if exclude_models is empty
@@ -170,7 +174,8 @@ def retrieve_models(data, token):
             os.system(f"docker cp {BASE_PATH_TO_MODELS}ocrmodel ocr:/documentocr")
             os.system(f"rm -rf {BASE_PATH_TO_MODELS}ocrmodel")
             os.system("docker restart ocr")
-        elif model_type in LITE_MODEL_TYPES:
+        elif model_type in LITE_MODEL_TYPES or is_arm_device():
+            # Lite models and ARM high_accuracy models use predictlite
             os.system("docker exec predictlite rm -rf /data/lite_models")
             print('pushing models into predictlite server: ', BASE_PATH_TO_MODELS)
             os.system("docker cp "+BASE_PATH_TO_MODELS+" predictlite:/data/")

@@ -9,6 +9,7 @@ import settings
 from redis import Redis
 from rq import Queue, Retry
 from worker_scripts.job_manager import insert_job, push_analytics_to_cloud
+from worker_scripts.assembly_sync import push_assembly_progress
 from timemachine.zip_push import push_event_records, get_unprocessed_events
 from helpers.config_helper import write_settings_to_config
 
@@ -55,6 +56,7 @@ class SyncAnalytics(Resource):
 
         if access_token:
             push_analytics_to_cloud(CLOUD_DOMAIN, access_token)
+            push_assembly_progress(access_token)
             events = get_unprocessed_events()
             if events['count'] > 0:
                 er_push = job_queue.enqueue(push_event_records, CLOUD_DOMAIN, access_token,
