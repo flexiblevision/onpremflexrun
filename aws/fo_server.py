@@ -20,37 +20,23 @@ def update_config(config):
             json.dump(config, outfile, indent=4, sort_keys=True)
 
 
-def check_tutorial():
-    """If tutorial key missing from fvconfig, add it as False and set Chrome to splash page."""
-    PATH = os.environ['HOME'] + '/fvconfig.json'
-    if not os.path.exists(PATH):
-        return
+def set_launchpad():
+    """Update Chrome autostart to splash page."""
+    desktop_path = os.path.expanduser('/home/visioncell/.config/autostart/launchpad.html.desktop')
+    if os.path.exists(desktop_path):
+        with open(desktop_path, 'r') as f:
+            lines = f.readlines()
 
-    with open(PATH, 'r') as f:
-        config = json.load(f)
+        exec_line = f'Exec=google-chrome -kiosk --incognito --disable-web-security --user-data-dir=/tmp/chrome-kiosk "file:///home/visioncell/FV_APP/VISIONCELL_SETUP_ASSETS/FILES/fv_splash.html" &\n'
 
-    if 'tutorial' not in config:
-        config['tutorial'] = False
-        with open(PATH, 'w') as f:
-            json.dump(config, f, indent=4, sort_keys=True)
+        with open(desktop_path, 'w') as f:
+            for line in lines:
+                if line.startswith('Exec='):
+                    f.write(exec_line)
+                else:
+                    f.write(line)
 
-        # Update Chrome autostart to show splash/tutorial page
-        desktop_path = os.path.expanduser('/home/visioncell/.config/autostart/launchpad.html.desktop')
-        if os.path.exists(desktop_path):
-            with open(desktop_path, 'r') as f:
-                lines = f.readlines()
-
-            splash_url = 'file:///home/visioncell/FV_APP/VISIONCELL_SETUP_ASSETS/FILES/fv_splash.html'
-            exec_line = f'Exec=google-chrome -kiosk --incognito --simulate-outdated-no-au=\'Tue, 31 Dec 2099 23:59:59 GMT\' "file:///home/visioncell/FV_APP/VISIONCELL_SETUP_ASSETS/FILES/fv_splash.html" &\n'
-
-            with open(desktop_path, 'w') as f:
-                for line in lines:
-                    if line.startswith('Exec='):
-                        f.write(exec_line)
-                    else:
-                        f.write(line)
-
-            print('Tutorial not found - set to False, updated Chrome autostart to splash page')
+        print('Updated Chrome autostart to splash page')
 
 @app.route('/inspection_status', methods=['GET'])
 def get_status():
@@ -83,11 +69,8 @@ def get_zone():
 def restart_server():
     os.system(f"forever restart {os.environ['HOME']}/flex-run/aws/fo_server.py")
 
-@app.route('/decommission', methods=['GET'])
-def decommission():
-    settings.config['fire_operator']['document'] = '_'
-    update_config(settings.config)
-
+def enable_setup():
+    """Update Chrome autostart to setup page."""
     desktop_path = os.path.expanduser('/home/visioncell/.config/autostart/launchpad.html.desktop')
     if os.path.exists(desktop_path):
         with open(desktop_path, 'r') as f:
@@ -99,6 +82,11 @@ def decommission():
                 else:
                     f.write(line)
 
+@app.route('/decommission', methods=['GET'])
+def decommission():
+    settings.config['fire_operator']['document'] = '_'
+    update_config(settings.config)
+    enable_setup()
     return 'Decommissioned', 200
 
 @app.route('/aws_warehouse_zone', methods=['PUT'])
@@ -108,7 +96,7 @@ def update_zone():
         doc_key = f"{data['warehouse']}_{data['zone']}"
         settings.config['fire_operator']['document'] = doc_key
         update_config(settings.config)
-        check_tutorial()
+        set_launchpad()
         threading.Timer(2.0, restart_server).start()
         return 'Updated', 200
 
