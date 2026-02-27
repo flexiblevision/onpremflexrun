@@ -68,49 +68,47 @@ def _get_tracker_collection():
     return client["fvonprem"][TRACKER_COLLECTION_NAME]
 
 def update_sync_tracker(did, success=True, error_msg=None, record_id=None):
-    """Update sync tracker for a detection - always uses database"""
+    """Update sync tracker for a detection - uses atomic MongoDB operations"""
     current_time_ms = time_now_ms()
     current_time_iso = datetime.datetime.now().isoformat()
 
     try:
         tracker_coll = _get_tracker_collection()
 
-        # Always load from database
-        existing = tracker_coll.find_one({'_id': did})
-
-        if existing:
-            # Remove MongoDB _id field for manipulation
-            if '_id' in existing:
-                del existing['_id']
-            tracker = existing
-        else:
-            # Create new tracker record
-            tracker = {
-                'count': 0,
-                'errors': [],
-                'completed': False,
-                'first_sync': current_time_iso,
-                'first_sync_ms': current_time_ms,
-                'last_sync': None,
-                'last_sync_ms': None,
-                'completion_time': None,
-                'completion_time_ms': None,
-                'total_time_seconds': None
-            }
-
-        # Update tracker based on success/failure
         if success:
-            tracker['count'] += 1
-            tracker['last_sync'] = current_time_iso
-            tracker['last_sync_ms'] = current_time_ms
+            result = tracker_coll.find_one_and_update(
+                {'_id': did, 'completed': {'$ne': True}},
+                {
+                    '$inc': {'count': 1},
+                    '$set': {
+                        'last_sync': current_time_iso,
+                        'last_sync_ms': current_time_ms
+                    },
+                    '$setOnInsert': {
+                        'errors': [],
+                        'completed': False,
+                        'first_sync': current_time_iso,
+                        'first_sync_ms': current_time_ms,
+                        'completion_time': None,
+                        'completion_time_ms': None,
+                        'total_time_seconds': None
+                    }
+                },
+                upsert=True,
+                return_document=True
+            )
 
-            elapsed_seconds = (current_time_ms - tracker['first_sync_ms']) / 1000.0
-
-            if tracker['count'] >= SYNC_COMPLETION_THRESHOLD and not tracker['completed']:
-                tracker['completed'] = True
-                tracker['completion_time'] = current_time_iso
-                tracker['completion_time_ms'] = current_time_ms
-                tracker['total_time_seconds'] = elapsed_seconds
+            if result and result['count'] >= SYNC_COMPLETION_THRESHOLD and not result.get('completed'):
+                elapsed_seconds = (current_time_ms - result['first_sync_ms']) / 1000.0
+                tracker_coll.update_one(
+                    {'_id': did, 'completed': {'$ne': True}},
+                    {'$set': {
+                        'completed': True,
+                        'completion_time': current_time_iso,
+                        'completion_time_ms': current_time_ms,
+                        'total_time_seconds': elapsed_seconds
+                    }}
+                )
         else:
             error_entry = {
                 'timestamp': current_time_iso,
@@ -118,16 +116,26 @@ def update_sync_tracker(did, success=True, error_msg=None, record_id=None):
                 'record_id': record_id,
                 'error': error_msg
             }
-            tracker['errors'].append(error_entry)
-            tracker['last_sync'] = current_time_iso
-            tracker['last_sync_ms'] = current_time_ms
-
-        # Save back to database immediately
-        tracker_coll.update_one(
-            {'_id': did},
-            {'$set': tracker},
-            upsert=True
-        )
+            tracker_coll.update_one(
+                {'_id': did},
+                {
+                    '$push': {'errors': error_entry},
+                    '$set': {
+                        'last_sync': current_time_iso,
+                        'last_sync_ms': current_time_ms
+                    },
+                    '$setOnInsert': {
+                        'count': 0,
+                        'completed': False,
+                        'first_sync': current_time_iso,
+                        'first_sync_ms': current_time_ms,
+                        'completion_time': None,
+                        'completion_time_ms': None,
+                        'total_time_seconds': None
+                    }
+                },
+                upsert=True
+            )
 
     except Exception as e:
         print(f"Error updating sync_tracker for {did}: {str(e)}")
