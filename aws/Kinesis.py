@@ -33,7 +33,7 @@ class Kinesis(object):
         access_token = self.get_auth_token()
         auth_token   = 'Bearer {}'.format(access_token)
         headers      = {'Authorization': auth_token}
-        url          = '{}pull_foreign_auth'.format(CLOUD_FUNCTIONS_BASE)
+        url          = FOREIGN_PULL_PATH#'{}pull_foreign_auth'.format(CLOUD_FUNCTIONS_BASE)
         data         = {'resource_name': 'aws_kinesis'}
         resp         = requests.post(url, json=data, headers=headers, timeout=30)
 
@@ -56,22 +56,34 @@ class Kinesis(object):
 
     def _connect_client(self):
         """ Connect to Kinesis Streams """
-        did_authorize = False
-        if not self.expiration or ms_timestamp() > self.expiration:
-            did_authorize = self.authorize()
-        else:
-            did_authorize = True
+        REFRESH_BUFFER_MS = 5 * 60 * 1000  # refresh 5 minutes before expiry
 
-        if did_authorize:
+        needs_refresh = (
+            not self.expiration or
+            ms_timestamp() > (self.expiration - REFRESH_BUFFER_MS)
+        )
+
+        if needs_refresh:
+            did_authorize = self.authorize()
+            if did_authorize:
+                self.CLIENT = boto3.client('kinesis',
+                                    region_name=self.REGION_NAME,
+                                    aws_access_key_id=self.ACCESS_KEY,
+                                    aws_secret_access_key=self.SECRET_KEY)
+            else:
+                return False
+
+        if not self.CLIENT and self.ACCESS_KEY:
             self.CLIENT = boto3.client('kinesis',
                                 region_name=self.REGION_NAME,
                                 aws_access_key_id=self.ACCESS_KEY,
                                 aws_secret_access_key=self.SECRET_KEY)
+
+        if self.CLIENT:
             self.authorized = True
             return self.CLIENT
-        
-        else:
-            return False
+
+        return False
 
     def send_stream(self, data, partition_key=None):
         if not self.authorized:
