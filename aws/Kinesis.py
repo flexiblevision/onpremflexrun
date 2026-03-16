@@ -1,4 +1,5 @@
 import json, uuid, boto3
+import botocore.exceptions
 import os
 import datetime
 import requests
@@ -9,6 +10,7 @@ CLOUD_FUNCTIONS_BASE = settings.config['gcp_functions_domain'] if 'gcp_functions
 FOREIGN_PULL_PATH    = "https://pull-foreign-auth-prod-399393967839.us-central1.run.app"
 client   = MongoClient("172.17.0.1")
 util_ref = client["fvonprem"]["utils"]
+kinesis_log = client["fvonprem"]["kinesis_auth_log"]
 
 def ms_timestamp():
     return int(datetime.datetime.now().timestamp()*1000)
@@ -22,6 +24,9 @@ class Kinesis(object):
         self.SECRET_KEY  = None
         self.CLIENT      = None
         self.authorized  = False
+        self.debug       = settings.config.get('kinesis_debug', False)
+        self._last_auth_failure = None
+        self.AUTH_RETRY_MS = 60 * 1000  # wait 60s before retrying after auth failure
 
         try:
             self.authorize()
@@ -44,9 +49,15 @@ class Kinesis(object):
             self.stream     = data['keys']['arn']
             self.expiration = data['expiration']
             self.authorized = True
+            self._last_auth_failure = None
+            if self.debug:
+                self._log('authorize_success', {'expiration': self.expiration})
             return True
         else:
             self.authorized = False
+            self._last_auth_failure = ms_timestamp()
+            if self.debug:
+                self._log('authorize_failed', {'status': resp.status_code, 'body': resp.text[:500]})
             return False
 
     def validate_expiry(self):
@@ -62,6 +73,11 @@ class Kinesis(object):
             not self.expiration or
             ms_timestamp() > (self.expiration - REFRESH_BUFFER_MS)
         )
+
+        if needs_refresh and self._last_auth_failure and ms_timestamp() - self._last_auth_failure < self.AUTH_RETRY_MS:
+            if self.debug:
+                self._log('auth_retry_skipped', {'ms_since_failure': ms_timestamp() - self._last_auth_failure})
+            return False
 
         if needs_refresh:
             did_authorize = self.authorize()
@@ -87,6 +103,8 @@ class Kinesis(object):
 
     def send_stream(self, data, partition_key=None):
         if not self.authorized:
+            if self.debug:
+                self._log('send_rejected', {'reason': 'not authorized'})
             return 'Service not authorized', 403
 
         # If no partition key is given, assume random sharding for even shard write load
@@ -95,14 +113,33 @@ class Kinesis(object):
 
         client = self._connect_client()
         if client:
-            client.put_record(
-                StreamARN=self.stream,
-                Data=json.dumps(data)+'\n',
-                PartitionKey=str(partition_key)
-            )
-            return True
+            try:
+                client.put_record(
+                    StreamARN=self.stream,
+                    Data=json.dumps(data)+'\n',
+                    PartitionKey=str(partition_key)
+                )
+                return True
+            except botocore.exceptions.ClientError as e:
+                error_code = e.response['Error']['Code']
+                if error_code in ('UnrecognizedClientException', 'ExpiredTokenException', 'InvalidSignatureException'):
+                    self._log('put_record_auth_error', {'error_code': error_code, 'message': str(e)})
+                    self.CLIENT = None
+                    self.expiration = None
+                raise
         else:
             return False
+
+    def _log(self, event, details=None):
+        try:
+            kinesis_log.insert_one({
+                'event': event,
+                'timestamp': datetime.datetime.utcnow(),
+                'ts_ms': ms_timestamp(),
+                'details': details or {}
+            })
+        except Exception:
+            pass
 
     def get_auth_token(self):
         access_token_obj = util_ref.find_one({'type': 'access_token'}, {'_id': 0})

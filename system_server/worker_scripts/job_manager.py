@@ -295,7 +295,7 @@ def kinesis_call(analytics):
             try:
                 did_send = aws_client.send_stream(a)
 
-                if did_send:
+                if did_send is True:
                     mark_as_synced(record_id)
                     if sync_tracker:
                         update_sync_tracker(did, success=True, record_id=record_id)
