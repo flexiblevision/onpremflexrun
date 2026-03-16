@@ -77,7 +77,7 @@ class DeviceInfo(Resource):
 class GetCameraUID(Resource):
     def get(self, idx):
         out = subprocess.Popen(['udevadm', 'info', '--query=all', '/dev/video'+idx], stdout=subprocess.PIPE)
-        cmd = subprocess.Popen(['grep', 'VENDOR_ID\|MODEL_ID\|SERIAL_SHORT'], stdin=out.stdout, stdout=subprocess.PIPE)
+        cmd = subprocess.Popen(['grep', r'VENDOR_ID\|MODEL_ID\|SERIAL_SHORT'], stdin=out.stdout, stdout=subprocess.PIPE)
         cmd_out, cmd_err = cmd.communicate()
         uid = cmd_out.strip().decode("utf-8")
         msv = uid.splitlines()

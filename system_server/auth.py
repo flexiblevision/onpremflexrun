@@ -91,17 +91,33 @@ def requires_auth(f):
                         options={'verify_exp': False}
                     )
                 else:
+                    valid_issuers = {
+                        "https://"+AUTH0_DOMAIN+"/",
+                        "https://flexiblevision.auth0.com/"
+                    }
+                    valid_audiences = {CLIENT_ID, AUDIENCE, '4tzjZNjFytDq9KqiEh60ZpyVxPqyvDhH'}
                     payload = jwt.decode(
                         token,
                         rsa_key,
                         algorithms=ALGORITHMS,
-                        audience=CLIENT_ID,
-                        issuer="https://"+AUTH0_DOMAIN+"/",
-                        options={'verify_exp': False}
+                        options={'verify_exp': False, 'verify_iss': False, 'verify_aud': False}
                     )
+                    token_aud = payload.get('aud', [])
+                    if isinstance(token_aud, str):
+                        token_aud = [token_aud]
+                    if not valid_audiences.intersection(token_aud):
+                        APP.logger.error(f"Token audience '{payload.get('aud')}' not in allowed audiences")
+                        raise AuthError({"code": "invalid_audience",
+                                        "description": "invalid token audience"}, 401)
+                    if payload.get('iss') not in valid_issuers:
+                        print(f"Token issuer '{payload.get('iss')}' not in allowed issuers")
+                        raise AuthError({"code": "invalid_issuer",
+                                        "description": "invalid token issuer"}, 401)
             except jwt.ExpiredSignatureError:
                 raise AuthError({"code": "token_expired",
                                 "description": "token is expired"}, 401)
+            except AuthError:
+                raise
             except Exception:
                 raise AuthError({"code": "invalid_header",
                                 "description":

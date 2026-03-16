@@ -81,4 +81,8 @@ systemctl restart redis.service
 forever start -c redis-server --daemonize yes
 sudo sh -c 'echo 1000 > /sys/module/usbcore/parameters/usbfs_memory_mb'
 sudo rm /etc/xdg/autostart/update-notifier.desktop
-apt-mark hold "nvidia*"
+# Hold installed nvidia packages and kernel to prevent mismatched updates breaking GPU drivers
+dpkg -l | grep -E '^ii.*nvidia' | awk '{print $2}' | xargs -r apt-mark hold
+dpkg -l | grep -E "^ii.*(linux-image|linux-headers)-$(uname -r)" | awk '{print $2}' | xargs -r apt-mark hold
+# Hold kernel metapackages to prevent new kernel versions from being pulled in
+dpkg -l | grep -E '^ii.*(linux-generic|linux-headers-generic|linux-image-generic)' | awk '{print $2}' | xargs -r apt-mark hold

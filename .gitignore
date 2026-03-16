@@ -10,3 +10,6 @@ setup/mqtt/gke/certs-dev/
 setup/mqtt/gke/certs-prod/
 setup/mqtt/vernemq.conf.orig
 setup/mqtt/vernemq-local.conf
+
+# Release notes
+release_notes/
