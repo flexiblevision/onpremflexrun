@@ -2,6 +2,7 @@ import json, uuid, boto3
 import botocore.exceptions
 import os
 import datetime
+import threading
 import requests
 from pymongo import MongoClient, ASCENDING
 import settings
@@ -26,6 +27,7 @@ class Kinesis(object):
         self.authorized  = False
         self.debug       = settings.config.get('kinesis_debug', False)
         self._last_auth_failure = None
+        self._auth_lock = threading.Lock()
         self.AUTH_RETRY_MS = 60 * 1000  # wait 60s before retrying after auth failure
 
         try:
@@ -34,7 +36,22 @@ class Kinesis(object):
             print(error)
 
     def authorize(self):
-        #pull aws keys from cloud
+        REFRESH_BUFFER_MS = 5 * 60 * 1000
+
+        # check mongo for cached credentials from another process
+        cached = kinesis_log.database['kinesis_credentials'].find_one({'_id': 'aws_kinesis'})
+        if cached and cached.get('expiration') and ms_timestamp() < (cached['expiration'] - REFRESH_BUFFER_MS):
+            self.ACCESS_KEY = cached['access_key']
+            self.SECRET_KEY = cached['secret_key']
+            self.stream     = cached['arn']
+            self.expiration = cached['expiration']
+            self.authorized = True
+            self._last_auth_failure = None
+            if self.debug:
+                self._log('authorize_cached', {'expiration': self.expiration})
+            return True
+
+        # no valid cache — fetch from cloud
         access_token = self.get_auth_token()
         auth_token   = 'Bearer {}'.format(access_token)
         headers      = {'Authorization': auth_token}
@@ -50,6 +67,20 @@ class Kinesis(object):
             self.expiration = data['expiration']
             self.authorized = True
             self._last_auth_failure = None
+
+            # cache credentials in mongo for other processes
+            kinesis_log.database['kinesis_credentials'].update_one(
+                {'_id': 'aws_kinesis'},
+                {'$set': {
+                    'access_key': self.ACCESS_KEY,
+                    'secret_key': self.SECRET_KEY,
+                    'arn': self.stream,
+                    'expiration': self.expiration,
+                    'updated_at': ms_timestamp()
+                }},
+                upsert=True
+            )
+
             if self.debug:
                 self._log('authorize_success', {'expiration': self.expiration})
             return True
@@ -74,20 +105,28 @@ class Kinesis(object):
             ms_timestamp() > (self.expiration - REFRESH_BUFFER_MS)
         )
 
-        if needs_refresh and self._last_auth_failure and ms_timestamp() - self._last_auth_failure < self.AUTH_RETRY_MS:
-            if self.debug:
-                self._log('auth_retry_skipped', {'ms_since_failure': ms_timestamp() - self._last_auth_failure})
-            return False
-
         if needs_refresh:
-            did_authorize = self.authorize()
-            if did_authorize:
-                self.CLIENT = boto3.client('kinesis',
-                                    region_name=self.REGION_NAME,
-                                    aws_access_key_id=self.ACCESS_KEY,
-                                    aws_secret_access_key=self.SECRET_KEY)
-            else:
-                return False
+            with self._auth_lock:
+                # re-check after acquiring lock — another thread may have already refreshed
+                needs_refresh = (
+                    not self.expiration or
+                    ms_timestamp() > (self.expiration - REFRESH_BUFFER_MS)
+                )
+                if not needs_refresh:
+                    pass  # another thread already refreshed
+                elif self._last_auth_failure and ms_timestamp() - self._last_auth_failure < self.AUTH_RETRY_MS:
+                    if self.debug:
+                        self._log('auth_retry_skipped', {'ms_since_failure': ms_timestamp() - self._last_auth_failure})
+                    return False
+                else:
+                    did_authorize = self.authorize()
+                    if did_authorize:
+                        self.CLIENT = boto3.client('kinesis',
+                                            region_name=self.REGION_NAME,
+                                            aws_access_key_id=self.ACCESS_KEY,
+                                            aws_secret_access_key=self.SECRET_KEY)
+                    else:
+                        return False
 
         if not self.CLIENT and self.ACCESS_KEY:
             self.CLIENT = boto3.client('kinesis',
