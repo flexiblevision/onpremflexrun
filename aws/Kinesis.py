@@ -36,7 +36,22 @@ class Kinesis(object):
             print(error)
 
     def authorize(self):
-        #pull aws keys from cloud
+        REFRESH_BUFFER_MS = 5 * 60 * 1000
+
+        # check mongo for cached credentials from another process
+        cached = kinesis_log.database['kinesis_credentials'].find_one({'_id': 'aws_kinesis'})
+        if cached and cached.get('expiration') and ms_timestamp() < (cached['expiration'] - REFRESH_BUFFER_MS):
+            self.ACCESS_KEY = cached['access_key']
+            self.SECRET_KEY = cached['secret_key']
+            self.stream     = cached['arn']
+            self.expiration = cached['expiration']
+            self.authorized = True
+            self._last_auth_failure = None
+            if self.debug:
+                self._log('authorize_cached', {'expiration': self.expiration})
+            return True
+
+        # no valid cache — fetch from cloud
         access_token = self.get_auth_token()
         auth_token   = 'Bearer {}'.format(access_token)
         headers      = {'Authorization': auth_token}
@@ -52,6 +67,20 @@ class Kinesis(object):
             self.expiration = data['expiration']
             self.authorized = True
             self._last_auth_failure = None
+
+            # cache credentials in mongo for other processes
+            kinesis_log.database['kinesis_credentials'].update_one(
+                {'_id': 'aws_kinesis'},
+                {'$set': {
+                    'access_key': self.ACCESS_KEY,
+                    'secret_key': self.SECRET_KEY,
+                    'arn': self.stream,
+                    'expiration': self.expiration,
+                    'updated_at': ms_timestamp()
+                }},
+                upsert=True
+            )
+
             if self.debug:
                 self._log('authorize_success', {'expiration': self.expiration})
             return True
