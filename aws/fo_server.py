@@ -27,7 +27,7 @@ def set_launchpad():
         with open(desktop_path, 'r') as f:
             lines = f.readlines()
 
-        exec_line = f'Exec=google-chrome -kiosk --incognito --disable-web-security --user-data-dir=/tmp/chrome-kiosk "file:///home/visioncell/FV_APP/VISIONCELL_SETUP_ASSETS/FILES/fv_splash.html" &\n'
+        exec_line = f'Exec=google-chrome -kiosk --no-first-run --incognito --disable-web-security --user-data-dir=/tmp/chrome-kiosk "file:///home/visioncell/FV_APP/VISIONCELL_SETUP_ASSETS/FILES/fv_splash.html" &\n'
 
         with open(desktop_path, 'w') as f:
             for line in lines:
