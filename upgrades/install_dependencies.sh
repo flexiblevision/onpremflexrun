@@ -2,6 +2,7 @@ apt install -y vsftpd
 apt-get -y install isc-dhcp-server
 apt-get -y install jq
 apt-get -y --only-upgrade install google-chrome-stable
+apt install -y linux-crashdump kdump-tools 2>/dev/null || echo "Warning: kdump not installed (no apt access) — kernel will still panic+reboot on lockups but won't capture crash dumps"
 usermod -aG dialout visioncell
 
 sudo rm /etc/xdg/autostart/update-notifier.desktop
