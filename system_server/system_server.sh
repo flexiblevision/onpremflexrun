@@ -11,6 +11,7 @@ apt-get -y install hostapd
 apt install -y redis-server
 apt install -y openssh-server
 apt-get -y install isc-dhcp-server
+apt install -y linux-crashdump kdump-tools 2>/dev/null || echo "Warning: kdump not installed (no apt access) — kernel will still panic+reboot on lockups but won't capture crash dumps"
 make install -C $HOME/flex-run/scripts/create_ap
 npm install forever@3.0.0 -g
 
@@ -33,6 +34,21 @@ chmod +x $HOME/flex-run/scripts/configure_network.sh
 
 sudo $HOME/flex-run/scripts/configure_network.sh
 
+# Enable kernel panic on lockups so kdump captures a crash dump instead of silent hang
+cat > /etc/sysctl.d/90-lockup-panic.conf <<'EOF'
+kernel.softlockup_panic = 1
+kernel.hung_task_panic = 1
+kernel.hung_task_timeout_secs = 120
+kernel.panic = 10
+EOF
+sysctl --system
+
+# Enable kdump to write crash dumps on panic (if installed)
+if [ -f /etc/default/kdump-tools ]; then
+    sed -i 's/^USE_KDUMP=.*/USE_KDUMP=1/' /etc/default/kdump-tools
+    systemctl enable kdump-tools 2>/dev/null || true
+fi
+
 sudo crontab -r
 (sudo crontab -l; echo '@reboot sudo sh '$HOME'/flex-run/scripts/fv_system_server_start.sh') | sudo crontab -
 (sudo crontab -l; echo '@reboot sudo sh '$HOME'/flex-run/scripts/redis_server_start.sh') | sudo crontab -
@@ -53,7 +69,7 @@ sudo crontab -r
 (sudo crontab -l; echo '@reboot sudo sh '$HOME'/flex-run/scripts/mediasystem_server.sh') | sudo crontab -
 (sudo crontab -l; echo '0 */8 * * * docker exec vision rm -rf /tmp') | sudo crontab -
 (sudo crontab -l; echo '0 0 * * * forever restart '$HOME'/flex-run/system_server/worker_scripts/sync_worker.py') | sudo crontab -
-(sudo crontab -l; echo '0 1 * * * rm -rf ~/.cache/google-chrome') | sudo crontab -
+(sudo crontab -l; echo '@reboot rm -rf ~/.cache/google-chrome') | sudo crontab -
 (sudo crontab -l; echo '0 2 * * 0 sudo sh '$HOME'/flex-run/scripts/backup_node_flows.sh') | sudo crontab -
 
 

@@ -8,6 +8,7 @@ from ctypes import *
 from pymongo import MongoClient
 import datetime
 import string
+from gpio_error_logger import log_gpio_error
 
 client   = MongoClient("172.17.0.1")
 io_ref   = client["fvonprem"]["io_presets"]
@@ -46,10 +47,18 @@ def set_pin_state(pin_num, state):
     pin_key       = 'GPO'+str(pin_num)
     res = -1
     if state == True:
-        functions.set_gpio(1, int(pin_num), 0)
+        try:
+            rc = functions.set_gpio(1, int(pin_num), 0)
+            log_gpio_error('set_gpio', pin_num, 1, 0, rc)
+        except Exception as e:
+            log_gpio_error('set_gpio', pin_num, 1, 0, -1, e)
         res = 'on'
     else:
-        functions.set_gpio(1, int(pin_num), 1)
+        try:
+            rc = functions.set_gpio(1, int(pin_num), 1)
+            log_gpio_error('set_gpio', pin_num, 1, 1, rc)
+        except Exception as e:
+            log_gpio_error('set_gpio', pin_num, 1, 1, -1, e)
         res = 'off'
 
     pin_state_ref.update_one(query, {'$set': {pin_key: state}}, True)

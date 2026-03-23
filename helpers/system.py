@@ -4,22 +4,67 @@ import subprocess
 import requests
 import time
 import csv
+import threading
 from datetime import datetime
 import json
 import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pymongo import MongoClient
 
+import ctypes
+import ctypes.util
+
+_nvml = None
+try:
+    _nvml_path = ctypes.util.find_library('nvidia-ml')
+    if _nvml_path:
+        _nvml = ctypes.CDLL(_nvml_path)
+        _nvml.nvmlInit_v2()
+except Exception:
+    _nvml = None
+
 utils_db = MongoClient("172.17.0.1")["fvonprem"]["utils"]
 
 MIN_VALID_YEAR = 2020
 REBOOT_THRESHOLD_MS = 600000  # 5 min
 
+_metrics_cache = None
+_metrics_cache_time = 0
+_metrics_cache_lock = threading.Lock()
+METRICS_CACHE_TTL = 30  # seconds
+
 
 def get_system_metrics(save=False):
     """
     Get system metrics such as CPU and memory usage.
+    Results are cached for METRICS_CACHE_TTL seconds to avoid
+    excessive subprocess spawning under concurrent requests.
     """
+    global _metrics_cache, _metrics_cache_time
+
+    now = time.monotonic()
+    if not save and _metrics_cache is not None and (now - _metrics_cache_time) < METRICS_CACHE_TTL:
+        return _metrics_cache
+
+    if not _metrics_cache_lock.acquire(blocking=False):
+        # Another thread is already collecting — return stale cache or empty
+        if _metrics_cache is not None:
+            return _metrics_cache
+        _metrics_cache_lock.acquire()
+        _metrics_cache_lock.release()
+        return _metrics_cache if _metrics_cache is not None else {}
+
+    try:
+        info = _collect_system_metrics(save)
+        _metrics_cache = info
+        _metrics_cache_time = time.monotonic()
+        return info
+    finally:
+        _metrics_cache_lock.release()
+
+
+def _collect_system_metrics(save=False):
+    """Actually collect system metrics (subprocess-heavy)."""
     info = {}
     system_info = platform.uname()
 
@@ -39,8 +84,17 @@ def get_system_metrics(save=False):
         info['storage'] = 0
 
     try:
-        info['gpu'] = int(float(subprocess.check_output(["nvidia-smi --query-gpu=utilization.gpu --format=csv,noheader"], shell=True).decode('utf-8').strip().split('%')[0]))
-    except subprocess.CalledProcessError:
+        if _nvml is not None:
+            class _NvmlUtilization(ctypes.Structure):
+                _fields_ = [("gpu", ctypes.c_uint), ("memory", ctypes.c_uint)]
+            handle = ctypes.c_void_p()
+            _nvml.nvmlDeviceGetHandleByIndex_v2(0, ctypes.byref(handle))
+            util = _NvmlUtilization()
+            _nvml.nvmlDeviceGetUtilizationRates(handle, ctypes.byref(util))
+            info['gpu'] = util.gpu
+        else:
+            info['gpu'] = int(float(subprocess.check_output(["nvidia-smi --query-gpu=utilization.gpu --format=csv,noheader"], shell=True).decode('utf-8').strip().split('%')[0]))
+    except Exception:
         info['gpu'] = 0
 
     try:

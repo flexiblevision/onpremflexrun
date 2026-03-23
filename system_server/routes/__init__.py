@@ -52,7 +52,8 @@ def register_all_routes(api, settings):
     assembly_routes.register_routes(api)
 
     # MQTT bridge management routes
-    mqtt_routes.register_routes(api)
+    if 'use_mqtt' in settings.config and settings.config['use_mqtt']:
+        mqtt_routes.register_routes(api)
 
     # Conditional AWS routes
     if 'use_aws' in settings.config and settings.config['use_aws']:

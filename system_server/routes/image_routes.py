@@ -51,6 +51,8 @@ class ExportImage(Resource):
             os.system('mkdir '+path)
 
         usbs = list_usb_paths()
+        if not usbs:
+            return {'error': 'No USB drive connected'}, 400
         last_connected_usb_path = usbs[-1]
         cmd_output = subprocess.Popen(['sudo', 'lsblk', '-o', 'MOUNTPOINT', '-nr', '/dev/'+last_connected_usb_path], stdout=subprocess.PIPE)
         usb_mountpoint = cmd_output.communicate()[0].decode('utf-8')
