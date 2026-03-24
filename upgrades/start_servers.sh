@@ -19,11 +19,16 @@ sudo $HOME/flex-run/scripts/configure_network.sh
 # Ensure kernel panic on lockups (idempotent — overwrites if already present)
 cat > /etc/sysctl.d/90-lockup-panic.conf <<'EOF'
 kernel.softlockup_panic = 1
+kernel.softlockup_all_cpu_backtrace = 1
 kernel.hung_task_panic = 1
 kernel.hung_task_timeout_secs = 120
 kernel.panic = 10
 EOF
 sysctl --system
+
+# Disable WiFi power save to prevent ath10k_pci (QCA6174) kernel lockups
+echo -e "[connection]\nwifi.powersave = 2" | sudo tee /etc/NetworkManager/conf.d/no-powersave.conf
+sudo systemctl restart NetworkManager
 
 sudo crontab -r
 (sudo crontab -l; echo '@reboot sudo sh '$HOME'/flex-run/scripts/fv_system_server_start.sh') | sudo crontab -
