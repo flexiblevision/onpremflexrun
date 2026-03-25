@@ -12,7 +12,10 @@ class SaveImage(Resource):
     def post(self):
         data = request.json
         path = os.environ['HOME']+'/'+'stored_images'
-        usb = list_usb_paths()[-1]
+        usbs = list_usb_paths()
+        if not usbs:
+            return {'error': 'No USB drive connected'}, 400
+        usb = usbs[-1]
 
         cmd_output = subprocess.Popen(['sudo', 'lsblk', '-o', 'MOUNTPOINT', '-nr', '/dev/'+usb], stdout=subprocess.PIPE)
         usb_mountpoint = cmd_output.communicate()[0].decode('utf-8')
