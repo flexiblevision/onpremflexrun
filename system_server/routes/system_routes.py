@@ -49,7 +49,7 @@ class RestartBackend(Resource):
         vision_api = vision_base + '/api/vision/vision'
 
         print('stopping capdev to release camera locks...')
-        os.system("docker stop capdev")
+        os.system("docker restart capdev")
 
         # Release cameras and restart vision
         try:

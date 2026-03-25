@@ -27,7 +27,7 @@ def set_launchpad():
         with open(desktop_path, 'r') as f:
             lines = f.readlines()
 
-        exec_line = f'Exec=google-chrome -kiosk --no-first-run --incognito --disable-web-security --user-data-dir=/tmp/chrome-kiosk "file:///home/visioncell/FV_APP/VISIONCELL_SETUP_ASSETS/FILES/fv_splash.html" &\n'
+        exec_line = f'Exec=google-chrome -kiosk --disable-notifications --disable-infobars --no-first-run --incognito --disable-web-security --disk-cache-size=104857600 --user-data-dir=/tmp/chrome-kiosk "file:///home/visioncell/FV_APP/VISIONCELL_SETUP_ASSETS/FILES/fv_splash.html" &\n'
 
         with open(desktop_path, 'w') as f:
             for line in lines:
@@ -78,7 +78,7 @@ def enable_setup():
         with open(desktop_path, 'w') as f:
             for line in lines:
                 if line.startswith('Exec='):
-                    f.write('Exec=google-chrome -kiosk --incognito http://localhost:3013/setup &\n')
+                    f.write('Exec=google-chrome -kiosk --incognito --disk-cache-size=104857600 http://localhost:3013/setup &\n')
                 else:
                     f.write(line)
 

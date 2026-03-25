@@ -53,10 +53,18 @@ use_aws           = False
 aws_client        = None
 config            = settings.config
 BATCH_SIZE        = 10
+LB_DOMAIN         = "https://functions-proxy.flexiblevision.com"
 BQ_INGEST_PATH    = "https://data-ingest-queue-172198548516.us-central1.run.app"
 if config['latest_stable_ref'] == 'latest_stable_version':
     #use prod endpoint
-    BQ_INGEST_PATH = "https://data-enqueue-prod-172198548516.us-central1.run.app"
+    BQ_INGEST_DIRECT = "https://data-enqueue-prod-172198548516.us-central1.run.app"
+    try:
+        r = requests.get(LB_DOMAIN, timeout=5)
+        BQ_INGEST_PATH = LB_DOMAIN + "/data-enqueue-prod"
+        print(f"LB reachable, using proxy: {BQ_INGEST_PATH}")
+    except Exception:
+        BQ_INGEST_PATH = BQ_INGEST_DIRECT
+        print(f"LB unreachable, using direct: {BQ_INGEST_PATH}")
 
 if 'use_aws' in config and config['use_aws']:
     use_aws    = True

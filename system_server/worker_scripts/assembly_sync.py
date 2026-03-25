@@ -1,9 +1,11 @@
 """
 Assembly Progress Sync Module
 
-Handles syncing assembly progress data to the cloud using the state-based
-sync pattern. Assemblies are synced when modified_at > last_synced_at.
+Handles syncing assembly progress data to the cloud using a dirty-flag
+pattern. Assemblies are synced when needs_sync is True. The flag is
+atomically cleared on pickup and re-set on failure to prevent duplicates.
 
+The capture service sets needs_sync=True when assembly data changes.
 This module is called from job_manager.py as part of the sync cycle.
 """
 
@@ -51,25 +53,31 @@ def time_now_ms():
 
 
 def get_unsynced_assemblies(limit=BATCH_SIZE):
-    """Get assemblies where modified_at > last_synced_at."""
+    """
+    Get assemblies where needs_sync is True.
+
+    Uses find_one_and_update to atomically claim each record by setting
+    needs_sync=False before returning it. This prevents duplicate pickups
+    across concurrent sync cycles. On sync failure, needs_sync is set
+    back to True.
+    """
     if not assembly_collection:
         return []
 
     try:
-        query = {
-            '$or': [
-                {'last_synced_at': {'$exists': False}},
-                {'last_synced_at': None},
-                {'$expr': {'$gt': ['$modified_at', '$last_synced_at']}}
-            ]
-        }
-
-        cursor = assembly_collection.find(
-            query,
-            {'_id': 0}
-        ).sort('modified_at', 1).limit(limit)
-
-        return json.loads(json_util.dumps(cursor))
+        result = []
+        for _ in range(limit):
+            doc = assembly_collection.find_one_and_update(
+                {'needs_sync': True},
+                {'$set': {'needs_sync': False}},
+                projection={'_id': 0},
+                sort=[('modified_at', 1)],
+                return_document=True
+            )
+            if not doc:
+                break
+            result.append(json.loads(json_util.dumps(doc)))
+        return result
 
     except Exception as e:
         print(f"Error getting unsynced assemblies: {e}")
@@ -77,7 +85,11 @@ def get_unsynced_assemblies(limit=BATCH_SIZE):
 
 
 def mark_assemblies_synced(assembly_ids):
-    """Mark assemblies as successfully synced."""
+    """Update last_synced_at timestamp for successfully synced assemblies.
+
+    needs_sync was already cleared atomically during pickup, so this just
+    records when the sync happened for diagnostics.
+    """
     if not assembly_collection or not assembly_ids:
         return
 
@@ -89,6 +101,20 @@ def mark_assemblies_synced(assembly_ids):
         )
     except Exception as e:
         print(f"Error marking assemblies synced: {e}")
+
+
+def mark_assemblies_need_sync(assembly_ids):
+    """Re-flag assemblies as needing sync after a failed attempt."""
+    if not assembly_collection or not assembly_ids:
+        return
+
+    try:
+        assembly_collection.update_many(
+            {'id': {'$in': assembly_ids}},
+            {'$set': {'needs_sync': True}}
+        )
+    except Exception as e:
+        print(f"Error re-flagging assemblies for sync: {e}")
 
 
 def sync_to_cloud(assemblies, access_token):
@@ -130,11 +156,8 @@ def assembly_sync_job(assemblies, access_token):
     Job-compatible function for syncing a batch of assemblies.
 
     Called via job_queue.enqueue() with retry logic.
-    Similar pattern to cloud_call() for analytics.
-
-    Args:
-        assemblies: List of assembly records to sync
-        access_token: Bearer token for cloud API
+    needs_sync was already cleared during pickup. On failure, re-flag
+    so the next cycle picks them up again.
 
     Returns:
         True on success, False on failure (triggers retry)
@@ -149,11 +172,15 @@ def assembly_sync_job(assemblies, access_token):
             mark_assemblies_synced(synced_ids)
             print(f"Assembly sync job: {len(synced_ids)} synced")
 
-        # Return True only if all succeeded (no retries needed)
-        # Return False to trigger retry if any failed
+        if failed_ids:
+            mark_assemblies_need_sync(failed_ids)
+
         return len(failed_ids) == 0
 
     except Exception as e:
+        # Re-flag all assemblies so they're retried
+        all_ids = [a['id'] for a in assemblies if 'id' in a]
+        mark_assemblies_need_sync(all_ids)
         print(f"Assembly sync job error: {e}")
         return False
 
@@ -190,6 +217,9 @@ def push_assembly_progress_to_cloud(access_token):
         if synced_ids:
             mark_assemblies_synced(synced_ids)
 
+        if failed_ids:
+            mark_assemblies_need_sync(failed_ids)
+
         result['synced_count'] = len(synced_ids)
         result['failed_count'] = len(failed_ids)
 
@@ -198,6 +228,9 @@ def push_assembly_progress_to_cloud(access_token):
             result['error'] = f"Failed to sync {len(failed_ids)} assemblies"
 
     except Exception as e:
+        # Re-flag all so they're retried next cycle
+        all_ids = [a['id'] for a in assemblies if 'id' in a]
+        mark_assemblies_need_sync(all_ids)
         result['success'] = False
         result['error'] = str(e)
         print(f"Error in push_assembly_progress_to_cloud: {e}")
@@ -209,8 +242,8 @@ def push_assembly_progress(access_token):
     """
     Sync assembly progress to cloud via job queue.
 
-    Uses state-based sync pattern: only syncs assemblies where
-    modified_at > last_synced_at. Enqueues jobs with retry logic.
+    Uses dirty-flag pattern: only syncs assemblies where needs_sync
+    is True. Flag is atomically cleared on pickup, re-set on failure.
     """
     from worker_scripts.job_manager import insert_job
 

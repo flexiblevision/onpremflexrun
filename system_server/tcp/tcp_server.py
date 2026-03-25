@@ -7,6 +7,7 @@ import requests
 from ctypes import *
 from pymongo import MongoClient
 from gpio_helper import *
+from gpio_csv_logger import log_signal
 import datetime
 import string
 import json
@@ -128,6 +129,7 @@ while True:
                         actions          = incoming_command[command]
                         if len(command) == 1:
                             #treat as an output pin command
+                            log_signal(data)
                             state = set_pin_state(command, actions)
                             bstate = str.encode(state + '\n')
                             connections.send(bstate)
