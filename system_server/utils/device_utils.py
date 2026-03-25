@@ -27,7 +27,14 @@ def system_arch():
     cmd_out, cmd_err = cmd.communicate()
     return cmd_out.strip().decode("utf-8")
 
+_usb_cache = {'paths': [], 'time': 0}
+
 def list_usb_paths():
+    import time
+    now = time.time()
+    if now - _usb_cache['time'] < 5:
+        return _usb_cache['paths']
+
     valid_formats = ['vfat', 'exfat']
     mount_paths = []
     for format_type in valid_formats:
@@ -37,6 +44,8 @@ def list_usb_paths():
             usb = usb[-1].split('/')[-1]
             mount_paths.append(usb)
 
+    _usb_cache['paths'] = mount_paths
+    _usb_cache['time'] = now
     return mount_paths
 
 def base_path():
