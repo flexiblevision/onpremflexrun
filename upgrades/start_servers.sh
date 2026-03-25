@@ -32,10 +32,6 @@ mkdir -p /var/log/journal
 systemd-tmpfiles --create --prefix /var/log/journal
 systemctl restart systemd-journald
 
-# Disable WiFi power save to prevent ath10k_pci (QCA6174) kernel lockups
-echo -e "[connection]\nwifi.powersave = 2" | sudo tee /etc/NetworkManager/conf.d/no-powersave.conf
-sudo systemctl restart NetworkManager
-
 sudo crontab -r
 (sudo crontab -l; echo '@reboot sudo sh '$HOME'/flex-run/scripts/fv_system_server_start.sh') | sudo crontab -
 (sudo crontab -l; echo '@reboot sudo sh '$HOME'/flex-run/scripts/redis_server_start.sh') | sudo crontab -
