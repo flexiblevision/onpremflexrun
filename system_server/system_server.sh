@@ -50,6 +50,9 @@ mkdir -p /var/log/journal
 systemd-tmpfiles --create --prefix /var/log/journal
 systemctl restart systemd-journald
 
+# Disable WiFi power save to prevent ath10k_pci (QCA6174) kernel lockups
+printf '[connection]\nwifi.powersave = 2\n' > /etc/NetworkManager/conf.d/no-powersave.conf
+
 # Enable kdump to write crash dumps on panic (if installed)
 if [ -f /etc/default/kdump-tools ]; then
     sed -i 's/^USE_KDUMP=.*/USE_KDUMP=1/' /etc/default/kdump-tools

@@ -32,6 +32,9 @@ mkdir -p /var/log/journal
 systemd-tmpfiles --create --prefix /var/log/journal
 systemctl restart systemd-journald
 
+# Disable WiFi power save to prevent ath10k_pci (QCA6174) kernel lockups
+printf '[connection]\nwifi.powersave = 2\n' > /etc/NetworkManager/conf.d/no-powersave.conf
+
 sudo crontab -r
 (sudo crontab -l; echo '@reboot sudo sh '$HOME'/flex-run/scripts/fv_system_server_start.sh') | sudo crontab -
 (sudo crontab -l; echo '@reboot sudo sh '$HOME'/flex-run/scripts/redis_server_start.sh') | sudo crontab -
@@ -91,4 +94,6 @@ echo "maxmemory $MAX_MEMORY" >> /etc/redis/redis.conf
 echo "maxmemory-policy $MAX_MEMORY_POLICY" >> /etc/redis/redis.conf
 systemctl restart redis.service
 
-forever restart $HOME/flex-run/system_server/server.py
+forever stop $HOME/flex-run/system_server/server.py
+fuser -k 5001/tcp 2>/dev/null || true
+forever start -c python3 $HOME/flex-run/system_server/server.py
