@@ -95,5 +95,5 @@ echo "maxmemory-policy $MAX_MEMORY_POLICY" >> /etc/redis/redis.conf
 systemctl restart redis.service
 
 forever stop $HOME/flex-run/system_server/server.py
-fuser -k 5001/tcp 2>/dev/null || true
+sleep 3
 forever start -c python3 $HOME/flex-run/system_server/server.py
