@@ -93,7 +93,8 @@ MAX_MEMORY_POLICY=allkeys-lru
 echo "maxmemory $MAX_MEMORY" >> /etc/redis/redis.conf
 echo "maxmemory-policy $MAX_MEMORY_POLICY" >> /etc/redis/redis.conf
 systemctl restart redis.service
+sleep 3
 
 forever stop $HOME/flex-run/system_server/server.py
-sleep 3
+sleep 2
 forever start -c python3 $HOME/flex-run/system_server/server.py
