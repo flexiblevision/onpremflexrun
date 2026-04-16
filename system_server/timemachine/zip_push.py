@@ -15,7 +15,7 @@ utils_db          = client["fvonprem"]["utils"]
 dev_ref           = utils_db.find_one({'type':'device_id'})
 DEV_ID            =  None if not dev_ref else dev_ref['id']
 
-CLOUD_FUNCTIONS_BASE = settings.config['gcp_functions_domain'] if 'gcp_functions_domain' in settings.config else 'https://us-central1-flexible-vision-staging.cloudfunctions.net/'
+CLOUD_FUNCTIONS_BASE = settings.config['gcp_functions_domain'] if 'gcp_functions_domain' in settings.config else 'https://functions-proxy.flexiblevision.com/'
 
 def mark_as_processed(batch):
     for pf in batch:
@@ -64,7 +64,7 @@ def push_event_records(cloud_domain, id_token, event_records):
     batches = batch_and_process(event_records['events'])
     for batch in batches:
         try:
-            push_path = '{}/TMEventIngest'.format(CLOUD_FUNCTIONS_BASE)
+            push_path = '{}TMEventIngest'.format(CLOUD_FUNCTIONS_BASE)
             headers   = {'Authorization': 'Bearer '+id_token}
             r = requests.post(push_path, headers=headers, files=batch, timeout=30)
             if r.status_code <= 299:

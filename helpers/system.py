@@ -328,7 +328,7 @@ def get_software_versions():
 
         with open(os.path.join(os.environ['HOME'], 'fvconfig.json')) as f:
             config = json.load(f)
-        cloud_base = config.get('container_check_domain', 'https://us-central1-flexible-vision-staging.cloudfunctions.net/')
+        cloud_base = config.get('container_check_domain', 'https://functions-proxy.flexiblevision.com/')
         stable_ref = config.get('latest_stable_ref', 'latest_stable_version')
 
         resp = requests.post(

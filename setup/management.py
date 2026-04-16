@@ -9,14 +9,15 @@ CLOUD = {
     "auth0_domain": "auth.flexiblevision.com",
     "cloud_domain": "https://v1.cloud.flexiblevision.com",
     "branch": "master",
-    "gcp_functions_domain": "https://us-central1-flexible-vision-staging.cloudfunctions.net/",
-    "container_check_domain": "https://us-central1-flexible-vision-staging.cloudfunctions.net/",
+    "gcp_functions_domain": "https://functions-proxy.flexiblevision.com/",
+    "container_check_domain": "https://functions-proxy.flexiblevision.com/",
     "interface_name": "enp0s31f6",
     "latest_stable_ref": "latest_stable_version",
     "static_ip": "192.168.10.35",
     "system_user": "visioncell",
     "jwt_secret_key": "123",
     "auth_alg": "RS256",
+    "use_mqtt": False,
     "fire_operator": {"db_name": "pod-inspection", "document": "", "trigger_dest": "http://172.17.0.1:1880/trigger"}
 }
 
@@ -28,13 +29,14 @@ LOCAL = {
     "cloud_domain": "http://localhost",
     "branch": "master",
     "gcp_functions_domain": "http://localhost/api/capture/functions/",
-    "container_check_domain": "https://us-central1-flexible-vision-staging.cloudfunctions.net/",
+    "container_check_domain": "https://functions-proxy.flexiblevision.com/",
     "interface_name": "enp0s31f6",
     "latest_stable_ref": "latest_stable_version",
     "static_ip": "192.168.10.35",
     "system_user": "visioncell",
     "auth_alg": "HS256",
-    "jwt_secret_key": "123"
+    "jwt_secret_key": "123",
+    "use_mqtt": False
 }
 
 def generate_environment_config(environment='cloud', override=False):
