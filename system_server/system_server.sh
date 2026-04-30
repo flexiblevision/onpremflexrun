@@ -41,6 +41,10 @@ kernel.softlockup_all_cpu_backtrace = 1
 kernel.hardlockup_panic = 1
 kernel.hung_task_panic = 1
 kernel.hung_task_timeout_secs = 120
+# Panic on kernel Oops (e.g. AppArmor LSM NULL-deref) instead of leaving
+# tainted zombies that systemd cannot reap. Combined with kernel.panic = 10,
+# the box reboots within ~10s of an Oops instead of degrading silently.
+kernel.panic_on_oops = 1
 kernel.panic = 10
 EOF
 sysctl --system

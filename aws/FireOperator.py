@@ -34,18 +34,29 @@ def ms_timestamp():
     return int(datetime.datetime.now().timestamp()*1000)
 
 class FireOperator:
+    HEARTBEAT_INTERVAL_S = 60
+    HEARTBEAT_TIMEOUT_S  = 150  # 2.5x interval — resubscribe if no snapshot in this window
+    WATCHDOG_INTERVAL_S  = 30
+
     def __init__(self):
-        self.db           = db
-        self.collection   = collection
-        self.document     = document
-        self.capture_doc  = db.collection("inspections").document(self.document)
-        self.status_doc   = db.collection("status").document(self.document)
-        self.thread       = threading.Event()
-        self.trigger_dest = trigger_dest
+        self.db            = db
+        self.collection    = collection
+        self.document      = document
+        self.capture_doc   = db.collection("inspections").document(self.document)
+        self.status_doc    = db.collection("status").document(self.document)
+        self.heartbeat_doc = db.collection("heartbeat").document(self.document)
+        self.thread        = threading.Event()
+        self.trigger_dest  = trigger_dest
         self.last_read_time = None
-        self.intialized   = False
+        self.intialized    = False
+
+        self._capture_watch   = None
+        self._heartbeat_watch = None
+        self.last_heartbeat_seen = time.time()  # seed so watchdog doesn't fire before first heartbeat
 
         self.start_listener()
+        threading.Thread(target=self._heartbeat_writer, daemon=True).start()
+        threading.Thread(target=self._watchdog, daemon=True).start()
 
     def syncing_alive(self):
         last_sync_ref = util_ref.find_one({'type': 'predict_sync'}, {'_id': 0})
@@ -69,15 +80,48 @@ class FireOperator:
             print(f"Received document snapshot: {doc.id}")
             trigger_record = doc.to_dict()
             self.last_read_time = read_time
-            if self.intialized: 
+            if self.intialized:
                 requests.post(self.trigger_dest, json=trigger_record, timeout=10)
             else:
                 self.intialized = True
 
         self.thread.set()
 
+    def _heartbeat_listener(self, doc_snapshot, changes, read_time):
+        # Any snapshot here proves the gRPC stream is alive end-to-end.
+        self.last_heartbeat_seen = time.time()
+
     def start_listener(self):
-        self.capture_doc.on_snapshot(self.listener)
+        for w in (self._capture_watch, self._heartbeat_watch):
+            if w is not None:
+                try:
+                    w.unsubscribe()
+                except Exception as e:
+                    print(f"FireOperator: unsubscribe error: {e}")
+        self.intialized = False  # suppress trigger on the snapshot replay
+        self.last_heartbeat_seen = time.time()
+        self._capture_watch   = self.capture_doc.on_snapshot(self.listener)
+        self._heartbeat_watch = self.heartbeat_doc.on_snapshot(self._heartbeat_listener)
+        print(f"FireOperator: listeners (re)subscribed at {datetime.datetime.now()}")
+
+    def _heartbeat_writer(self):
+        while True:
+            time.sleep(self.HEARTBEAT_INTERVAL_S)
+            try:
+                self.heartbeat_doc.set({'ts': ms_timestamp()})
+            except Exception as e:
+                print(f"FireOperator: heartbeat write failed: {e}")
+
+    def _watchdog(self):
+        while True:
+            time.sleep(self.WATCHDOG_INTERVAL_S)
+            try:
+                age = time.time() - self.last_heartbeat_seen
+                if age > self.HEARTBEAT_TIMEOUT_S:
+                    print(f"FireOperator: heartbeat stale ({age:.0f}s), resubscribing")
+                    self.start_listener()
+            except Exception as e:
+                print(f"FireOperator: watchdog error: {e}")
 
     def update_status(self, status):
         self.status_doc.set(status)

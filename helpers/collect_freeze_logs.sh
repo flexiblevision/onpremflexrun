@@ -67,6 +67,15 @@ echo "=== PREVIOUS BOOT: GPU / NVIDIA ==="
 journalctl -b -1 --no-pager | grep -i -E 'nvidia|gpu|nvrm|xid' | tail -20
 
 echo ""
+echo "=== PREVIOUS BOOT: RDP / REMOTE DESKTOP ==="
+journalctl -b -1 --no-pager | grep -i -E 'gnome-remote-desktop|grdctl|grd-|freerdp|rdp|mutter.*fail|page flip|compositor.*fail|pipewire.*error|framebuffer.*fail|gbm_bo' | tail -30
+
+echo ""
+echo "=== RDP SERVICES (current) ==="
+systemctl list-units --all 2>/dev/null | grep -iE 'remote-desktop|grd'
+ps aux 2>/dev/null | grep -iE 'grd|remote-desktop|freerdp|xrdp' | grep -v grep
+
+echo ""
 echo "=== CURRENT BOOT: DMESG ERRORS ==="
 dmesg | grep -i -E 'error|fail|panic|lockup|hung|oom|mce|ath10k' | tail -40
 

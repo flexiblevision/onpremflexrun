@@ -235,9 +235,11 @@ def cloud_call(url, analytics, headers):
         return True
     try:
         for a in analytics: a['synced'] = True
-        res = requests.post(url, json=analytics, headers=headers, timeout=20)
-        bq_res = requests.post(BQ_INGEST_PATH, json=analytics, headers=headers, timeout=20)
-        print(res, bq_res)
+        if config.get('environ') == 'local':
+            res = requests.post(url, json=analytics, headers=headers, timeout=20)
+        else:
+            res = requests.post(BQ_INGEST_PATH, json=analytics, headers=headers, timeout=20)
+        print(res)
         print('--------------------------------------')
         success = res.status_code == 200
         if success:

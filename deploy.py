@@ -36,6 +36,7 @@ def set_static_ip():
     with open ('/etc/netplan/fv-net-init.yaml', 'w') as f:
         f.write('network:\n')
         f.write('  version: 2\n')
+        f.write('  renderer: NetworkManager\n')
         f.write('  ethernets:\n')
         f.write('    '+interface_name+':\n')
         f.write('      dhcp4: false\n')
