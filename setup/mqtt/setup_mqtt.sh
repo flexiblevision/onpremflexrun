@@ -10,17 +10,26 @@ IMAGE_TAG="${2:-dev}"
 IMAGE_NAME="fvonprem/${SYSTEM_ARCH}-vernemq:${IMAGE_TAG}"
 CONTAINER_NAME="vernemq"
 
-# Use production path for config - must match what system_server expects
-CONFIG_FILE="/root/flex-run/setup/mqtt/vernemq-local.conf"
+# Config lives next to this script. Override with CONFIG_FILE=... if needed.
+# Note: system_server (mqtt_routes.py) edits the copy at /root/flex-run/setup/mqtt/
+# at runtime, so in production this resolves to that same path.
+CONFIG_FILE="${CONFIG_FILE:-$SCRIPT_DIR/vernemq-local.conf}"
 
 echo "Setting up MQTT (VerneMQ)..."
 echo "  Image: ${IMAGE_NAME}"
 
-# Check that runtime config exists
+# Generate the runtime config if it's missing (fresh box). build.sh honors any
+# BRIDGE_* env vars that are set, and falls back to a placeholder password that
+# system_server (mqtt_routes.py) replaces with the real token at runtime.
 if [ ! -f "$CONFIG_FILE" ]; then
-    echo "ERROR: Runtime config not found at $CONFIG_FILE"
-    echo "Run build.sh first to generate the config"
-    exit 1
+    if [ -x "$SCRIPT_DIR/build.sh" ] || [ -f "$SCRIPT_DIR/build.sh" ]; then
+        echo "Config not found — generating it with build.sh..."
+        CONFIG_FILE="$CONFIG_FILE" sh "$SCRIPT_DIR/build.sh" --allow-placeholder
+    else
+        echo "ERROR: Runtime config not found at $CONFIG_FILE"
+        echo "Run build.sh first to generate the config"
+        exit 1
+    fi
 fi
 
 # Stop and remove existing container if present

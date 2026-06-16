@@ -15,7 +15,13 @@ apt install -y linux-crashdump kdump-tools 2>/dev/null || echo "Warning: kdump n
 make install -C $HOME/flex-run/scripts/create_ap
 npm install forever@3.0.0 -g
 
-pip3 install --break-system-packages --ignore-installed -r $HOME/flex-run/requirements.txt
+# --break-system-packages only exists on pip >= 23.0 (PEP 668). Older pip both
+# rejects the flag and doesn't need it, so only pass it when supported.
+PIP_BSP=""
+if pip3 install --help 2>/dev/null | grep -q -- --break-system-packages; then
+    PIP_BSP="--break-system-packages"
+fi
+pip3 install $PIP_BSP --ignore-installed -r $HOME/flex-run/requirements.txt
 
 chmod +x $HOME/flex-run/scripts/fv_system_server_start.sh
 chmod +x $HOME/flex-run/scripts/worker_server_start.sh

@@ -14,4 +14,11 @@ dpkg -l | grep -E '^ii.*(linux-generic|linux-headers-generic|linux-image-generic
 export PYTHONPATH="${PYTHONPATH}:${HOME}/flex-run"
 
 python3 $HOME/flex-run/setup/management.py
-pip3 install --break-system-packages --ignore-installed -r $HOME/flex-run/requirements.txt
+
+# --break-system-packages only exists on pip >= 23.0 (PEP 668). Older pip both
+# rejects the flag and doesn't need it, so only pass it when supported.
+PIP_BSP=""
+if pip3 install --help 2>/dev/null | grep -q -- --break-system-packages; then
+    PIP_BSP="--break-system-packages"
+fi
+pip3 install $PIP_BSP --ignore-installed -r $HOME/flex-run/requirements.txt

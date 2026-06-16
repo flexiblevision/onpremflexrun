@@ -13,5 +13,5 @@ Werkzeug==3.0.3
 Jinja2==3.1.2
 Markupsafe==2.1.1
 boto3==1.26.96
-#urllib3==1.26.18
+urllib3==1.26.18
 firebase-admin==6.7.0
