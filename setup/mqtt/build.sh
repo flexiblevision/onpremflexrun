@@ -119,7 +119,10 @@ vmq_bridge.ssl.gke.topic.21 = devices/+/preset/+ in 0
 vmq_bridge.ssl.gke.topic.22 = devices/+/timemachine/+ in 0
 EOF
 
-chmod 600 "$CONFIG_FILE"
+# 644, not 600: the file is bind-mounted into the VerneMQ container, which runs
+# as a non-root user and must be able to read it. 600 (root-only) makes cuttlefish
+# fail to open it at startup.
+chmod 644 "$CONFIG_FILE"
 
 echo "Done. Wrote $(wc -l < "$CONFIG_FILE") lines to $CONFIG_FILE"
 echo "Next: run ./setup_mqtt.sh to (re)start the broker with this config."
