@@ -13,6 +13,7 @@ from . import (
     ftp_routes,
     timemachine_routes,
     assembly_routes,
+    audio_routes,
     mqtt_routes
 )
 
@@ -48,8 +49,11 @@ def register_all_routes(api, settings):
     # Timemachine and OCR routes
     timemachine_routes.register_routes(api)
 
-    # Assembly upload and media routes
+    # Assembly upload, media, and assembly-guidance enable/status routes
     assembly_routes.register_routes(api)
+
+    # Audio devices feature enable/status routes
+    audio_routes.register_routes(api)
 
     # MQTT bridge management routes
     if 'use_mqtt' in settings.config and settings.config['use_mqtt']:

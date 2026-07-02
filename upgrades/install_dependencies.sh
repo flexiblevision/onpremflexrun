@@ -1,8 +1,16 @@
+# Unattended script — never block on an interactive debconf prompt.
+export DEBIAN_FRONTEND=noninteractive
+
 apt install -y vsftpd
 apt-get -y install isc-dhcp-server
 apt-get -y install jq
 apt-get -y --only-upgrade install google-chrome-stable
-apt install -y linux-crashdump kdump-tools 2>/dev/null || echo "Warning: kdump not installed (no apt access) — kernel will still panic+reboot on lockups but won't capture crash dumps"
+# linux-crashdump pulls in kexec-tools, which fires an interactive debconf prompt
+# ("Should kexec-tools handle reboots?") that hangs the script even with -y.
+# Preseed it to "no" (bootloader handles normal reboots; kdump uses kexec only on
+# panic) and force the noninteractive frontend so apt never blocks on input.
+echo "kexec-tools kexec-tools/load_kexec boolean false" | debconf-set-selections
+DEBIAN_FRONTEND=noninteractive apt install -y linux-crashdump kdump-tools 2>/dev/null || echo "Warning: kdump not installed (no apt access) — kernel will still panic+reboot on lockups but won't capture crash dumps"
 usermod -aG dialout visioncell
 
 sudo rm /etc/xdg/autostart/update-notifier.desktop

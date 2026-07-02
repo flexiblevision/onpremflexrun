@@ -384,3 +384,13 @@ def push_analytics_to_cloud(domain, access_token):
 def enable_ocr():
     install_file = f"{os.environ['HOME']}/flex-run/helpers/install_ocr.sh"
     os.system(f"sudo sh {install_file}")
+
+
+def enable_assembly_guidance():
+    install_file = f"{os.environ['HOME']}/flex-run/helpers/install_assembly.sh"
+    os.system(f"sudo sh {install_file}")
+
+
+def enable_audio():
+    install_file = f"{os.environ['HOME']}/flex-run/helpers/install_audio.sh"
+    os.system(f"sudo sh {install_file}")

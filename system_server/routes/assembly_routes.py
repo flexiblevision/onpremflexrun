@@ -3,11 +3,22 @@ import io
 import json
 import zipfile
 import uuid
+import requests
 from flask import request, send_from_directory
 from flask_restx import Resource
+import auth
+from redis import Redis
+from rq import Queue, Retry
+from worker_scripts.job_manager import insert_job, enable_assembly_guidance
 
 # Base path for assembly storage
 ASSEMBLY_BASE_PATH = os.path.join('/home', 'visioncell', 'Documents', 'assembly')
+
+# Port the assembly-client container serves on (see helpers/install_assembly.sh)
+ASSEMBLY_GUIDANCE_PORT = 3021
+
+redis_con = Redis('localhost', 6379, password=None)
+job_queue = Queue('default', connection=redis_con)
 
 
 class UploadAssembly(Resource):
@@ -143,6 +154,40 @@ def update_media_paths(config, assembly_id):
     return config
 
 
+class ManageAssemblyGuidance(Resource):
+    @auth.requires_auth
+    def put(self):
+        j = request.json
+        if 'state' in j:
+            if j['state']:
+                install_job = job_queue.enqueue(
+                    enable_assembly_guidance,
+                    job_timeout=600,
+                    result_ttl=3600,
+                    retry=Retry(max=5, interval=60),
+                )
+                job = insert_job(install_job.id, 'installing and deploying assembly guidance service')
+                return 'enabling...', 200
+            else:
+                os.system("docker stop assembly-client")
+                os.system("docker rm assembly-client")
+                return 'disabled', 200
+
+        return 'state key not found', 404
+
+
+class AssemblyGuidanceStatus(Resource):
+    def get(self):
+        try:
+            res = requests.get(f'http://172.17.0.1:{ASSEMBLY_GUIDANCE_PORT}/')
+            return res.status_code == 200
+        except Exception as error:
+            print(error)
+            return False, 500
+
+
 def register_routes(api):
     api.add_resource(UploadAssembly, '/assembly/upload')
     api.add_resource(ServeMedia, '/assembly/media/<string:assembly_id>/<path:filename>')
+    api.add_resource(ManageAssemblyGuidance, '/manage_assembly_guidance')
+    api.add_resource(AssemblyGuidanceStatus, '/assembly_guidance_status')
