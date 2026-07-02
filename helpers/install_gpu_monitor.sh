@@ -73,15 +73,20 @@ systemctl enable --now gpu-health-monitor.service
 # ---- Step 3: Kernel panic/lockup settings (idempotent — overwrites each run) ----
 echo "[3/5] Applying kernel panic settings..."
 cat > /etc/sysctl.d/90-lockup-panic.conf <<'SYSEOF'
-kernel.softlockup_panic = 1
+# Soft lockups are often transient under heavy GPU/vision/I-O load, so we do NOT
+# panic on them (avoids false-positive reboots) — but still capture all-CPU
+# backtraces for diagnostics.
+kernel.softlockup_panic = 0
 kernel.softlockup_all_cpu_backtrace = 1
+# Hard lockups are genuine (CPU stuck with IRQs off) — panic.
 kernel.hardlockup_panic = 1
+# Hung tasks: timeout raised to 300s so slow disk/USB/fsync don't trip a false hang.
 kernel.hung_task_panic = 1
-kernel.hung_task_timeout_secs = 120
-# Panic on kernel Oops (e.g. AppArmor LSM NULL-deref) instead of leaving
-# tainted zombies that systemd cannot reap. Combined with kernel.panic = 10,
-# the box reboots within ~10s of an Oops instead of degrading silently.
-kernel.panic_on_oops = 1
+kernel.hung_task_timeout_secs = 300
+# Do NOT panic on kernel Oops — a flaky driver (e.g. nvidia) oopsing would
+# otherwise force a full reboot. The kernel kills the offending task and keeps
+# running (accepted risk: occasional tainted zombies systemd cannot reap).
+kernel.panic_on_oops = 0
 kernel.panic = 10
 SYSEOF
 sysctl --system
