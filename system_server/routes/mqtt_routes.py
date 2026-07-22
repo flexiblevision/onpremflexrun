@@ -7,6 +7,7 @@ Includes health monitoring to auto-reconnect if bridge disconnects.
 """
 
 import os
+import re
 import subprocess
 import logging
 import threading
@@ -76,19 +77,18 @@ def update_bridge_config(token: str, device_id: str = None) -> dict:
         with open(config_path, 'r') as f:
             config = f.read()
 
-        # Update the password line
-        import re
+        # Update the password line (transport is ssl for cloud, tcp for local-cloud)
         new_config = re.sub(
-            r'vmq_bridge\.ssl\.gke\.password\s*=\s*.*',
-            f'vmq_bridge.ssl.gke.password = {token}',
+            r'(vmq_bridge\.(?:ssl|tcp)\.gke\.password)\s*=\s*.*',
+            lambda m: f'{m.group(1)} = {token}',
             config
         )
 
         # Optionally update client_id to include device_id
         if device_id:
             new_config = re.sub(
-                r'vmq_bridge\.ssl\.gke\.client_id\s*=\s*.*',
-                f'vmq_bridge.ssl.gke.client_id = bridge-{device_id}',
+                r'(vmq_bridge\.(?:ssl|tcp)\.gke\.client_id)\s*=\s*.*',
+                lambda m: f'{m.group(1)} = bridge-{device_id}',
                 new_config
             )
 
@@ -176,10 +176,24 @@ def get_bridge_metrics() -> dict:
         return {"success": False, "error": str(e)}
 
 
-def check_tcp_connection_to_cloud() -> bool:
-    """Check if there's an established TCP connection to cloud VerneMQ (port 443)"""
+def get_bridge_port() -> str:
+    """Port of the configured bridge endpoint (443 cloud / 31883 local-cloud)."""
     try:
-        # Check for TCP connections from within the vernemq container
+        config_path = "/root/flex-run/setup/mqtt/vernemq-local.conf"
+        with open(config_path) as f:
+            for line in f:
+                m = re.match(r'\s*vmq_bridge\.(?:ssl|tcp)\.gke\s*=\s*\S+:(\d+)', line)
+                if m:
+                    return m.group(1)
+    except Exception as e:
+        log.warning(f"Failed to read bridge port: {e}")
+    return "443"
+
+
+def check_tcp_connection_to_cloud() -> bool:
+    """Check for an established TCP connection to the configured bridge endpoint."""
+    port = get_bridge_port()
+    try:
         result = subprocess.run(
             ["docker", "exec", VERNEMQ_CONTAINER, "netstat", "-tnp"],
             capture_output=True,
@@ -187,9 +201,8 @@ def check_tcp_connection_to_cloud() -> bool:
             timeout=10
         )
         if result.returncode == 0:
-            # Look for ESTABLISHED connections to port 443 from beam.smp (VerneMQ)
             for line in result.stdout.split('\n'):
-                if ':443' in line and 'ESTABLISHED' in line and 'beam' in line:
+                if f':{port}' in line and 'ESTABLISHED' in line and 'beam' in line:
                     return True
         return False
     except Exception as e:
@@ -218,10 +231,10 @@ def is_bridge_healthy() -> tuple:
         if 'gke' not in status_output.lower():
             return False, "Bridge 'gke' not configured"
 
-        # Check for actual TCP connection to cloud VerneMQ
+        # Check for actual TCP connection to the bridge endpoint
         has_tcp_conn = check_tcp_connection_to_cloud()
         if not has_tcp_conn:
-            return False, "No TCP connection to cloud VerneMQ (port 443)"
+            return False, f"No TCP connection to bridge endpoint (port {get_bridge_port()})"
 
         # Secondary check: monitor message flow for additional health info
         metrics_result = get_bridge_metrics()
