@@ -8,6 +8,7 @@ from rq.job import Job
 from worker_scripts.job_manager import insert_job
 import time
 import settings
+from cloud_env import get_cloud_domain
 
 redis_con   = Redis('localhost', 6379, password=None)
 job_queue   = Queue('default', connection=redis_con)
@@ -61,7 +62,7 @@ def validate_account(service, access_token):
     headers = {'Authorization': 'Bearer '+access_token}
     data    = {'service': service}
     try:
-        res = requests.post(CLOUD_DOMAIN+'/api/capture/auth/validate_service', headers=headers, json=data)
+        res = requests.post(get_cloud_domain(CLOUD_DOMAIN)+'/api/capture/auth/validate_service', headers=headers, json=data)
         if res.status_code == 200:
             return res.json
     except Exception as erro:

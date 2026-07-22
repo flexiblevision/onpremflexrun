@@ -8,6 +8,7 @@ import time
 import pymongo
 from datetime import datetime
 import settings
+from cloud_env import get_cloud_functions_base
 
 client            = MongoClient("172.17.0.1")
 tm_records_db     = client["fvonprem"]["event_records"]
@@ -64,7 +65,7 @@ def push_event_records(cloud_domain, id_token, event_records):
     batches = batch_and_process(event_records['events'])
     for batch in batches:
         try:
-            push_path = '{}TMEventIngest'.format(CLOUD_FUNCTIONS_BASE)
+            push_path = '{}TMEventIngest'.format(get_cloud_functions_base(CLOUD_FUNCTIONS_BASE))
             headers   = {'Authorization': 'Bearer '+id_token}
             r = requests.post(push_path, headers=headers, files=batch, timeout=30)
             if r.status_code <= 299:

@@ -21,6 +21,7 @@ def is_arm_device():
 settings_path = os.environ['HOME']+'/flex-run'
 sys.path.append(settings_path)
 import settings
+from cloud_env import get_cloud_domain
 
 client             = MongoClient("172.17.0.1")
 job_collection     = client["fvonprem"]["jobs"]
@@ -56,7 +57,7 @@ def create_config_file(data):
 
 def download_by_link(token, project_id, version, destination):
     # get link 
-    path = CLOUD_DOMAIN+'/api/capture/models/download_link/'+str(project_id)+'/'+str(version)
+    path = get_cloud_domain(CLOUD_DOMAIN)+'/api/capture/models/download_link/'+str(project_id)+'/'+str(version)
     headers = {'Authorization': 'Bearer '+token}
     res  = requests.get(path, headers=headers)
     
@@ -143,7 +144,7 @@ def retrieve_models(data, token):
                     OCR_MODEL = model_folder
                     download_by_link(token, str(project_id), str(version), f"{model_folder}/model.zip")
                 else:
-                    path = CLOUD_DOMAIN+'/api/capture/models/download/'+str(project_id)+'/'+str(version)
+                    path = get_cloud_domain(CLOUD_DOMAIN)+'/api/capture/models/download/'+str(project_id)+'/'+str(version)
                     headers = {'accept': 'application/json', 'Authorization': 'Bearer '+token}
                     r = requests.get(path, headers=headers, stream=True)
                     cont_length = int(r.headers.get('Content-length', 0))

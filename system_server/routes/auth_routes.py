@@ -6,6 +6,7 @@ from flask_restx import Resource
 from pymongo import MongoClient
 import auth
 import settings
+from cloud_env import get_cloud_domain
 from redis import Redis
 from rq import Queue, Retry
 from worker_scripts.job_manager import insert_job, push_analytics_to_cloud
@@ -55,11 +56,12 @@ class SyncAnalytics(Resource):
             return f"MAX JOBS EXCEEDED: {num_jobs}/{MAX_JOBS} - IGNORING SYNC"
 
         if access_token:
-            push_analytics_to_cloud(CLOUD_DOMAIN, access_token)
+            cloud_domain = get_cloud_domain(CLOUD_DOMAIN)
+            push_analytics_to_cloud(cloud_domain, access_token)
             push_assembly_progress(access_token)
             events = get_unprocessed_events()
             if events['count'] > 0:
-                er_push = job_queue.enqueue(push_event_records, CLOUD_DOMAIN, access_token,
+                er_push = job_queue.enqueue(push_event_records, cloud_domain, access_token,
                             events,
                             job_timeout=1800,
                             result_ttl=3600,
@@ -79,7 +81,7 @@ class SyncFlow(Resource):
 
         if not device_id: return 'device id not found', 404
 
-        url = '{}/api/capture/devices/{}/flow'.format(CLOUD_DOMAIN, device_id)
+        url = '{}/api/capture/devices/{}/flow'.format(get_cloud_domain(CLOUD_DOMAIN), device_id)
         headers = {'Authorization' : 'Bearer {}'.format(access_token), 'Accept' : 'application/json', 'Content-Type' : 'application/json'}
         r = requests.post(url, data=open(flow_path, 'rb'), headers=headers)
         return r.text, r.status_code
