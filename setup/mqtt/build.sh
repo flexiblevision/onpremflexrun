@@ -39,19 +39,25 @@ done
 #   otherwise     (cloud)       -> public broker, TLS on :443
 ENVIRON_CFG="$(jq -r '.environ' "$HOME/fvconfig.json" 2>/dev/null)"
 CLOUD_DOMAIN_CFG="$(jq -r '.cloud_domain' "$HOME/fvconfig.json" 2>/dev/null)"
+DEVICE_ID_CFG="$(jq -r '.device_id // empty' "$HOME/fvconfig.json" 2>/dev/null)"
 CLUSTER_MQTT_NODEPORT="${CLUSTER_MQTT_NODEPORT:-31883}"
 if [ "$ENVIRON_CFG" = "local" ]; then
     CLUSTER_HOST="$(printf '%s' "$CLOUD_DOMAIN_CFG" | sed -e 's#^[a-zA-Z]*://##' -e 's#/.*##' -e 's#:.*##')"
     if [ -z "$CLUSTER_HOST" ] || [ "$CLUSTER_HOST" = "null" ]; then CLUSTER_HOST="127.0.0.1"; fi
     DEFAULT_BRIDGE_ADDRESS="${CLUSTER_HOST}:${CLUSTER_MQTT_NODEPORT}"
+    # The in-cluster broker trusts backend-* client ids without a token, so no
+    # BRIDGE_PASSWORD is needed in local-cloud mode.
+    DEFAULT_CLIENT_ID="backend-bridge-${DEVICE_ID_CFG:-local}"
+    ALLOW_PLACEHOLDER=1
 else
     DEFAULT_BRIDGE_ADDRESS="mqtt-dev.flexiblevision.com:443"
+    DEFAULT_CLIENT_ID="local-bridge"
 fi
 
 # Bridge identity — overridable via environment, with sane defaults.
 BRIDGE_ADDRESS="${BRIDGE_ADDRESS:-$DEFAULT_BRIDGE_ADDRESS}"
 BRIDGE_USERNAME="${BRIDGE_USERNAME:-bridge}"
-BRIDGE_CLIENT_ID="${BRIDGE_CLIENT_ID:-local-bridge}"
+BRIDGE_CLIENT_ID="${BRIDGE_CLIENT_ID:-$DEFAULT_CLIENT_ID}"
 
 # Transport: TLS for a :443 cloud endpoint, plain TCP for an intranet/local-cloud
 # broker. Override with BRIDGE_TRANSPORT=ssl|tcp.
@@ -72,9 +78,13 @@ fi
 if [ -z "${BRIDGE_PASSWORD:-}" ]; then
     if [ "$ALLOW_PLACEHOLDER" -eq 1 ]; then
         BRIDGE_PASSWORD="your-bridge-secret"
-        echo "WARNING: BRIDGE_PASSWORD not set — writing placeholder."
-        echo "         The bridge will not authenticate until a real token is written"
-        echo "         (set BRIDGE_PASSWORD and re-run, or let system_server inject it)."
+        if [ "$ENVIRON_CFG" = "local" ]; then
+            echo "Local-cloud mode: no token needed (broker trusts client_id '${BRIDGE_CLIENT_ID}')."
+        else
+            echo "WARNING: BRIDGE_PASSWORD not set — writing placeholder."
+            echo "         The bridge will not authenticate until a real token is written"
+            echo "         (set BRIDGE_PASSWORD and re-run, or let system_server inject it)."
+        fi
     else
         echo "ERROR: BRIDGE_PASSWORD is not set."
         echo "Set it before running:  BRIDGE_PASSWORD=<token> $0"

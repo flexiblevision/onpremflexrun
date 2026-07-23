@@ -7,6 +7,12 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 SYSTEM_ARCH="${1:-x86}"
 IMAGE_TAG="${2:-dev}"
 
+# 'local'/'cloud' are deployment environs, not published image channels — map them
+# to a real channel (override with VERNEMQ_TAG) so we don't pull a nonexistent tag.
+case "$IMAGE_TAG" in
+    local|cloud|"") IMAGE_TAG="${VERNEMQ_TAG:-dev}" ;;
+esac
+
 IMAGE_NAME="fvonprem/${SYSTEM_ARCH}-vernemq:${IMAGE_TAG}"
 CONTAINER_NAME="vernemq"
 

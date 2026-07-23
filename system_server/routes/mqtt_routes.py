@@ -77,6 +77,11 @@ def update_bridge_config(token: str, device_id: str = None) -> dict:
         with open(config_path, 'r') as f:
             config = f.read()
 
+        # Local-cloud (tcp bridge) trusts the backend- client_id with no token,
+        # so there's nothing to inject and we must not rewrite the client_id.
+        if 'vmq_bridge.tcp.' in config:
+            return {"success": True, "skipped": "local-cloud tcp bridge (no token needed)"}
+
         # Update the password line (transport is ssl for cloud, tcp for local-cloud)
         new_config = re.sub(
             r'(vmq_bridge\.(?:ssl|tcp)\.gke\.password)\s*=\s*.*',
