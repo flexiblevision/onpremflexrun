@@ -39,15 +39,26 @@ done
 #   otherwise     (cloud)       -> public broker, TLS on :443
 ENVIRON_CFG="$(jq -r '.environ' "$HOME/fvconfig.json" 2>/dev/null)"
 CLOUD_DOMAIN_CFG="$(jq -r '.cloud_domain' "$HOME/fvconfig.json" 2>/dev/null)"
-DEVICE_ID_CFG="$(jq -r '.device_id // empty' "$HOME/fvconfig.json" 2>/dev/null)"
 CLUSTER_MQTT_NODEPORT="${CLUSTER_MQTT_NODEPORT:-31883}"
+
+# Resolve a unique device id for the bridge client_id (fleet-safe, no manual input):
+# fvconfig -> edge Mongo (same source system_server uses) -> NIC MAC -> hostname.
+DEVICE_ID_CFG="$(jq -r '.device_id // empty' "$HOME/fvconfig.json" 2>/dev/null)"
+if [ -z "$DEVICE_ID_CFG" ]; then
+    DEVICE_ID_CFG="$(docker exec mongo mongo fvonprem --quiet --eval 'var x=db.utils.findOne({type:"device_id"}); if (x && x.id) print(x.id)' 2>/dev/null | tr -d '\r\n ')"
+fi
+if [ -z "$DEVICE_ID_CFG" ]; then
+    _iface="$(jq -r '.interface_name // empty' "$HOME/fvconfig.json" 2>/dev/null)"
+    [ -n "$_iface" ] && DEVICE_ID_CFG="$(cat "/sys/class/net/$_iface/address" 2>/dev/null | tr -d ':')"
+fi
+[ -z "$DEVICE_ID_CFG" ] && DEVICE_ID_CFG="$(hostname)"
 if [ "$ENVIRON_CFG" = "local" ]; then
     CLUSTER_HOST="$(printf '%s' "$CLOUD_DOMAIN_CFG" | sed -e 's#^[a-zA-Z]*://##' -e 's#/.*##' -e 's#:.*##')"
     if [ -z "$CLUSTER_HOST" ] || [ "$CLUSTER_HOST" = "null" ]; then CLUSTER_HOST="127.0.0.1"; fi
     DEFAULT_BRIDGE_ADDRESS="${CLUSTER_HOST}:${CLUSTER_MQTT_NODEPORT}"
     # The in-cluster broker trusts backend-* client ids without a token, so no
     # BRIDGE_PASSWORD is needed in local-cloud mode.
-    DEFAULT_CLIENT_ID="backend-bridge-${DEVICE_ID_CFG:-local}"
+    DEFAULT_CLIENT_ID="backend-bridge-${DEVICE_ID_CFG}"
     ALLOW_PLACEHOLDER=1
 else
     DEFAULT_BRIDGE_ADDRESS="mqtt-dev.flexiblevision.com:443"
