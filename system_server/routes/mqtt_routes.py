@@ -195,6 +195,15 @@ def get_bridge_port() -> str:
     return "443"
 
 
+def _is_local_bridge() -> bool:
+    """True for a local-cloud tcp bridge (no token to refresh, must not restart)."""
+    try:
+        with open("/root/flex-run/setup/mqtt/vernemq-local.conf") as f:
+            return 'vmq_bridge.tcp.' in f.read()
+    except Exception:
+        return False
+
+
 def check_tcp_connection_to_cloud() -> bool:
     """Check for an established TCP connection to the configured bridge endpoint."""
     port = get_bridge_port()
@@ -235,6 +244,12 @@ def is_bridge_healthy() -> tuple:
         # Check if bridge 'gke' is in the output (means it's configured)
         if 'gke' not in status_output.lower():
             return False, "Bridge 'gke' not configured"
+
+        # Local-cloud tcp bridge: the netstat probe is unreliable in this image
+        # (no netstat binary) and restarting a healthy bridge causes churn, so
+        # treat 'configured' as healthy and skip the probe/auto-refresh.
+        if _is_local_bridge():
+            return True, "Bridge configured (local-cloud tcp)"
 
         # Check for actual TCP connection to the bridge endpoint
         has_tcp_conn = check_tcp_connection_to_cloud()

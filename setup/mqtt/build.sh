@@ -53,8 +53,15 @@ if [ -z "$DEVICE_ID_CFG" ]; then
 fi
 [ -z "$DEVICE_ID_CFG" ] && DEVICE_ID_CFG="$(hostname)"
 if [ "$ENVIRON_CFG" = "local" ]; then
+    # Bridge target = the cloud master set at registration (server_ip -> cloud_domain).
     CLUSTER_HOST="$(printf '%s' "$CLOUD_DOMAIN_CFG" | sed -e 's#^[a-zA-Z]*://##' -e 's#/.*##' -e 's#:.*##')"
     if [ -z "$CLUSTER_HOST" ] || [ "$CLUSTER_HOST" = "null" ]; then CLUSTER_HOST="127.0.0.1"; fi
+    case "$CLUSTER_HOST" in
+        localhost|127.0.0.1)
+            echo "WARNING: cloud_domain='$CLOUD_DOMAIN_CFG' -> bridge would target localhost, which"
+            echo "         usually can't reach the cloud cluster. Register the device with its server_ip"
+            echo "         (sets cloud_domain), or pass BRIDGE_ADDRESS=<server_ip>:${CLUSTER_MQTT_NODEPORT}." ;;
+    esac
     DEFAULT_BRIDGE_ADDRESS="${CLUSTER_HOST}:${CLUSTER_MQTT_NODEPORT}"
     # The in-cluster broker trusts backend-* client ids without a token, so no
     # BRIDGE_PASSWORD is needed in local-cloud mode.
