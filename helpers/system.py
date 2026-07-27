@@ -360,7 +360,7 @@ def get_presets():
     Fetch list of presets from the local capture service.
     """
     try:
-        response = requests.get('http://172.17.0.1/api/capture/io/', timeout=5)
+        response = requests.get('http://172.17.0.1:5000/api/capture/io/', timeout=5)
         response.raise_for_status()
         return response.json()
     except requests.RequestException as e:
