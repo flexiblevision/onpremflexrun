@@ -23,7 +23,9 @@ try:
 except Exception:
     _nvml = None
 
-utils_db = MongoClient("172.17.0.1")["fvonprem"]["utils"]
+_mongo = MongoClient("172.17.0.1")
+utils_db = _mongo["fvonprem"]["utils"]
+io_presets_db = _mongo["fvonprem"]["io_presets"]
 
 MIN_VALID_YEAR = 2020
 REBOOT_THRESHOLD_MS = 600000  # 5 min
@@ -356,15 +358,10 @@ def get_software_versions():
 
 
 def get_presets():
-    """
-    Fetch list of presets from the local capture service.
-    """
     try:
-        response = requests.get('http://172.17.0.1:5000/api/capture/io/', timeout=5)
-        response.raise_for_status()
-        return response.json()
-    except requests.RequestException as e:
-        print(f"Warning: Could not fetch presets: {e}")
+        return list(io_presets_db.find({}, {"_id": 0}))
+    except Exception as e:
+        print(f"Warning: Could not read presets from mongo: {e}")
         return []
 
 

@@ -35,8 +35,13 @@ class AuthToken(Resource):
     def post(self):
         j = request.json
         if j:
-            if 'obj' in j and 'server_ip' in j['obj']:
-                settings.config['cloud_domain'] = 'http://{}'.format(j['obj']['server_ip'])
+            # Only a local master rewrites cloud_domain; in cloud environ this
+            # would downgrade the TLS-only cloud host to http and break syncs.
+            if settings.config.get('environ') == 'local' and 'obj' in j and 'server_ip' in j['obj']:
+                server_ip = str(j['obj']['server_ip'])
+                if not server_ip.startswith(('http://', 'https://')):
+                    server_ip = 'http://' + server_ip
+                settings.config['cloud_domain'] = server_ip
                 write_settings_to_config()
             os.system('echo '+j['refresh_token']+' > '+os.environ['HOME']+'/flex-run/system_server/creds.txt')
             return True
