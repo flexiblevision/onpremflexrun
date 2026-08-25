@@ -1,5 +1,7 @@
 import os
+import re
 import subprocess
+import time
 from flask import render_template, make_response
 from flask_restx import Resource
 import auth
@@ -194,19 +196,157 @@ class RestartFO(Resource):
             print("Error restarting FO server:", e)
             return "Error restarting FO server", 500
 
+TEAMVIEWER_SERVICE = 'teamviewerd'
+TEAMVIEWER_START_TIMEOUT = 15
+TEAMVIEWER_CMD_TIMEOUT = 15
+TEAMVIEWER_GUI_TIMEOUT = 25
+TEAMVIEWER_DBUS_NAME = 'com.teamviewer.TeamViewer'
+
+
+def _run_cmd(cmd, timeout=30):
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+        return result.returncode, (result.stdout or '').strip(), (result.stderr or '').strip()
+    except Exception as e:
+        return -1, '', str(e)
+
+
+def _priv(cmd):
+    return cmd if os.geteuid() == 0 else ['sudo', '-n'] + cmd
+
+
+def _teamviewer_running():
+    _, out, _ = _run_cmd(['systemctl', 'is-active', TEAMVIEWER_SERVICE], timeout=10)
+    if out == 'active':
+        return True
+    code, out, _ = _run_cmd(_priv(['teamviewer', '--daemon', 'status']), timeout=10)
+    return code == 0 and 'not running' not in out.lower()
+
+
+def _wait_for_teamviewer(timeout=TEAMVIEWER_START_TIMEOUT):
+    deadline = time.time() + timeout
+    while True:
+        if _teamviewer_running():
+            return True
+        if time.time() >= deadline:
+            return False
+        time.sleep(1)
+
+
+def _graphical_session():
+    code, out, _ = _run_cmd(['loginctl', 'list-sessions', '--no-legend'], timeout=10)
+    if code != 0:
+        return None
+
+    for line in out.splitlines():
+        parts = line.split()
+        if not parts:
+            continue
+        _, props, _ = _run_cmd(
+            ['loginctl', 'show-session', parts[0],
+             '-p', 'Name', '-p', 'User', '-p', 'Type', '-p', 'Active'],
+            timeout=10)
+        p = dict(l.split('=', 1) for l in props.splitlines() if '=' in l)
+        if p.get('Active') == 'yes' and p.get('Type') in ('x11', 'wayland'):
+            return {'user': p.get('Name'), 'uid': p.get('User'), 'type': p.get('Type')}
+    return None
+
+
+def _teamviewer_gui_running():
+    code, _, _ = _run_cmd(['pgrep', '-x', 'TeamViewer'], timeout=10)
+    return code == 0
+
+
+def _wait_for_teamviewer_gui(timeout=TEAMVIEWER_GUI_TIMEOUT):
+    deadline = time.time() + timeout
+    while True:
+        if _teamviewer_gui_running():
+            return True
+        if time.time() >= deadline:
+            return False
+        time.sleep(1)
+
+
+def _launch_teamviewer_gui():
+    if _teamviewer_gui_running():
+        return True, 'already running'
+
+    session = _graphical_session()
+    if not session:
+        return False, 'no active graphical session'
+
+    uid = session['uid']
+    env = ['DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/{}/bus'.format(uid),
+           'XDG_RUNTIME_DIR=/run/user/{}'.format(uid)]
+    activate = ['dbus-send', '--session', '--dest=org.freedesktop.DBus',
+                '--type=method_call', '--print-reply', '/org/freedesktop/DBus',
+                'org.freedesktop.DBus.StartServiceByName',
+                'string:' + TEAMVIEWER_DBUS_NAME, 'uint32:0']
+
+    cmd = ['runuser', '-u', session['user'], '--', 'env'] + env + activate
+    if os.geteuid() != 0:
+        cmd = ['env'] + env + activate
+
+    code, out, err = _run_cmd(cmd, timeout=TEAMVIEWER_CMD_TIMEOUT)
+    if code != 0:
+        return False, 'dbus activation failed: {}'.format(err or out or 'exit {}'.format(code))
+
+    if not _wait_for_teamviewer_gui():
+        return False, 'dbus activation returned but the GUI did not start'
+
+    return True, 'activated in {} session for user {}'.format(session['type'], session['user'])
+
+
+def _teamviewer_id():
+    code, out, _ = _run_cmd(_priv(['teamviewer', 'info']), timeout=10)
+    if code != 0:
+        return None
+    for line in out.splitlines():
+        if 'TeamViewer ID' in line:
+            raw = line.split(':')[-1].strip()
+            return re.sub(r'\x1b\[[0-9;]*m', '', raw).strip()
+    return None
+
+
+def _start_teamviewer_daemon():
+    if _teamviewer_running():
+        return True, 'already_running', ''
+
+    _run_cmd(_priv(['systemctl', 'unmask', TEAMVIEWER_SERVICE]), timeout=10)
+
+    errors = []
+    for cmd in (_priv(['systemctl', 'enable', '--now', TEAMVIEWER_SERVICE]),
+                _priv(['teamviewer', '--daemon', 'start'])):
+        code, out, err = _run_cmd(cmd, timeout=TEAMVIEWER_CMD_TIMEOUT)
+        if code == 0 and _wait_for_teamviewer():
+            return True, 'started', ''
+        errors.append('{}: {}'.format(' '.join(cmd), err or out or 'exit {}'.format(code)))
+
+    return False, 'failed', ' | '.join(errors)
+
+
 class StartTeamviewer(Resource):
     def get(self):
         try:
-            result = subprocess.run(
-                ['sudo', 'systemctl', 'restart', 'teamviewerd'],
-                capture_output=True, text=True, timeout=30
-            )
-            if result.returncode == 0:
-                return 'TeamViewer started', 200
-            else:
-                return f'Failed to start TeamViewer: {result.stderr}', 500
+            ok, status, detail = _start_teamviewer_daemon()
+            if not ok:
+                print('Failed to start TeamViewer daemon: ' + detail)
+                return {'success': False, 'status': status, 'error': detail}, 500
+
+            gui_ok, gui_detail = _launch_teamviewer_gui()
+            body = {'success': gui_ok, 'status': status, 'daemon': 'running',
+                    'gui': gui_detail, 'teamviewer_id': _teamviewer_id()}
+
+            if not gui_ok:
+                body['error'] = ('daemon is running but the GUI could not be started, '
+                                 'so the device will stay offline: ' + gui_detail)
+                print('TeamViewer GUI not started: ' + gui_detail)
+                return body, 503
+
+            return body, 200
         except Exception as e:
-            return f'Error starting TeamViewer: {e}', 500
+            print('Error starting TeamViewer:', e)
+            return {'success': False, 'status': 'error', 'error': str(e)}, 500
 
 
 def register_routes(api):
