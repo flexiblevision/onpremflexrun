@@ -44,10 +44,16 @@ jobs:
           python-version: '3.9'
           cache: pip
 
-      # dash is what /bin/sh is on the devices, and the deploy scripts are
-      # invoked as `sh <script>`. The POSIX parse checks need it present.
-      - name: Install dash
-        run: sudo apt-get update && sudo apt-get install -y dash
+      # Declared rather than assumed preinstalled:
+      #   dash      - what /bin/sh is on the devices; the deploy scripts are
+      #               invoked as `sh <script>` and the parse checks need it
+      #   jq        - upgrade_flex_run.sh reads fvconfig.json with it
+      #   net-tools - network tests shell out to ifconfig
+      - name: Install shell test dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y dash jq net-tools
+          mkdir -p /etc/netplan 2>/dev/null || sudo mkdir -p /etc/netplan
 
       - name: Install dependencies
         run: |

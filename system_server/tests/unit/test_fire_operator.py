@@ -30,10 +30,6 @@ class TestMsTimestamp:
         mock_now.timestamp.return_value = 1234567890.123456
         mock_datetime.now.return_value = mock_now
 
-        # Import after mocking
-        import sys
-        sys.path.insert(0, '/home/alec/Development/ACTIVE/onpremflexrun')
-
         # Replicate ms_timestamp logic
         def ms_timestamp():
             return int(datetime.datetime.now().timestamp()*1000)

@@ -3,6 +3,7 @@ Unit tests for upgrade_recorder module
 Tests the upgrade recording functionality that tracks system upgrade progress in MongoDB
 """
 
+import os
 import pytest
 import sys
 from unittest.mock import Mock, MagicMock, patch, call
@@ -12,8 +13,11 @@ from datetime import datetime
 # Mock the pymongo module before importing upgrade_recorder
 sys.modules['pymongo'] = MagicMock()
 
-# Add the upgrades directory to the path so we can import upgrade_recorder
-sys.path.insert(0, '/home/alec/Development/ACTIVE/onpremflexrun/upgrades')
+# Add the upgrades directory to the path so we can import upgrade_recorder.
+# Derived from this file's location: a hardcoded absolute path here passed on
+# the machine it was written on and broke collection everywhere else.
+sys.path.insert(0, os.path.abspath(os.path.join(
+    os.path.dirname(__file__), '..', '..', '..', 'upgrades')))
 
 import upgrade_recorder
 
