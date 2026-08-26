@@ -5,3 +5,8 @@ pytest-mock==3.12.0
 pytest-flask==1.3.0
 pytest-timeout==2.4.0
 shellcheck-py==0.11.0.1
+
+# test_redis_operations.py imports this directly. It was only ever installed
+# ad hoc on dev machines, so the suite passed locally and failed in CI with 17
+# collection errors.
+fakeredis==2.21.3
