@@ -2,7 +2,7 @@
 Unit tests for network utility functions
 """
 import pytest
-from unittest.mock import Mock, patch, MagicMock, mock_open
+from unittest.mock import Mock, patch, MagicMock, mock_open, call as mock_call
 from utils.network_utils import (
     is_valid_ip,
     get_eth_port_names,
@@ -159,8 +159,10 @@ class TestNetplanOperations:
 
         set_static_ips('192.168.1.100')
 
-        # Verify file was opened for writing
-        mock_file.assert_called_once_with('/etc/netplan/fv-net-init.yaml', 'w')
+        # Verify the config file was opened for writing. Assert on this call
+        # rather than the total count: set_static_ips also calls
+        # remove_conflicting_netplans(), which opens a netplan file to read.
+        assert mock_call('/etc/netplan/fv-net-init.yaml', 'w') in mock_file.call_args_list
 
         # Verify netplan apply was called
         mock_system.assert_called_once_with('sudo netplan apply')
@@ -184,8 +186,8 @@ class TestNetplanOperations:
 
         set_static_ips('invalid_ip')
 
-        # Should still write config but without the invalid IP
-        mock_file.assert_called_once()
+        # Should still write config but without the invalid IP.
+        assert mock_call('/etc/netplan/fv-net-init.yaml', 'w') in mock_file.call_args_list
         handle = mock_file()
         write_calls = [call[0][0] for call in handle.write.call_args_list]
         assert not any('invalid_ip' in call for call in write_calls)

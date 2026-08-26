@@ -1,4 +1,19 @@
-./system_server/creds.txt
+system_server/creds.txt
+
+# Python bytecode - was tracked until now; stale .pyc can shadow a source file
+__pycache__/
+*.py[cod]
+
+# macOS resource forks. Pre-existing ._* files stay tracked; this stops new ones.
+._*
+
+# Test and build output. These were tracked, so every test run - local or CI -
+# produced a binary diff in the working tree.
+.coverage
+coverage.xml
+htmlcov/
+.pytest_cache/
+npm-debug.log
 
 # MQTT certificates - contain private keys
 setup/mqtt/ssl/

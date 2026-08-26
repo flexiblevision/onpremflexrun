@@ -1,3 +1,19 @@
+# Shared deploy helpers. Resolved relative to this script, which the setup path
+# invokes as ./system_server/system_server.sh from the repo root; $HOME is the
+# fallback for an installed tree.
+for _lib in "$(dirname "$0")/../upgrades/lib/deploy_common.sh" \
+            "$HOME/flex-run/upgrades/lib/deploy_common.sh"; do
+    if [ -r "$_lib" ]; then
+        . "$_lib"
+        _lib_loaded=1
+        break
+    fi
+done
+if [ -z "${_lib_loaded:-}" ]; then
+    echo "ERROR: cannot find upgrades/lib/deploy_common.sh - deploy tree is incomplete" >&2
+    exit 1
+fi
+
 apt update
 apt install -y python3-pip
 apt install -y vim
@@ -74,29 +90,10 @@ if [ -f /etc/default/kdump-tools ]; then
     systemctl enable kdump-tools 2>/dev/null || true
 fi
 
-sudo crontab -r
-(sudo crontab -l; echo '@reboot sudo sh '$HOME'/flex-run/scripts/fv_system_server_start.sh') | sudo crontab -
-(sudo crontab -l; echo '@reboot sudo sh '$HOME'/flex-run/scripts/redis_server_start.sh') | sudo crontab -
-(sudo crontab -l; echo '@reboot sudo sh '$HOME'/flex-run/scripts/tcp_server_start.sh') | sudo crontab -
-(sudo crontab -l; echo '@reboot sudo sh '$HOME'/flex-run/scripts/gpio_server_start.sh') | sudo crontab -
-(sudo crontab -l; echo '@reboot sudo sh '$HOME'/flex-run/scripts/sync_worker_start.sh') | sudo crontab -
-
-#---workers-----
-(sudo crontab -l; echo '@reboot sleep 30 && sudo sh '$HOME'/flex-run/scripts/worker_server_start.sh') | sudo crontab -
-#----------------
-
-(sudo crontab -l; echo '@reboot sleep 30 && sudo  sh '$HOME'/flex-run/scripts/hotspot.sh') | sudo crontab -
-(sudo crontab -l; echo '@reboot sudo sh '$HOME'/flex-run/scripts/allocate_usbfs_memory.sh') | sudo crontab -
-(sudo crontab -l; echo '@reboot sleep 50 && sudo sh '$HOME'/flex-run/scripts/restart_localprediction.sh') | sudo crontab -
-(sudo crontab -l; echo '@reboot sudo sh '$HOME'/flex-run/scripts/start_job_watcher.sh') | sudo crontab -
-(sudo crontab -l; echo '@monthly sudo sh '$HOME'/flex-run/scripts/system_cleanup.sh') | sudo crontab -
-(sudo crontab -l; echo '@reboot sudo sh '$HOME'/flex-run/scripts/filesystem_server.sh') | sudo crontab -
-(sudo crontab -l; echo '@reboot sudo sh '$HOME'/flex-run/scripts/mediasystem_server.sh') | sudo crontab -
-(sudo crontab -l; echo '0 */8 * * * docker exec vision rm -rf /tmp') | sudo crontab -
-(sudo crontab -l; echo '0 0 * * * forever restart '$HOME'/flex-run/system_server/worker_scripts/sync_worker.py') | sudo crontab -
-(sudo crontab -l; echo '@reboot rm -rf ~/.cache/google-chrome') | sudo crontab -
-(sudo crontab -l; echo '0 2 * * 0 sudo sh '$HOME'/flex-run/scripts/backup_node_flows.sh') | sudo crontab -
-
+# Root crontab, installed atomically from the shared block in
+# upgrades/lib/deploy_common.sh (same block the upgrade path uses). This
+# replaces 19 sequential read-modify-write calls preceded by `crontab -r`.
+install_crontab
 
 forever start -c python3 $HOME/flex-run/system_server/server.py
 forever start -c python3 $HOME/flex-run/system_server/worker.py
@@ -109,15 +106,7 @@ if [ "$ARCH" = "x86_64" ]; then
     forever start -c python3 $HOME/flex-run/system_server/gpio/gpio_controller.py
 fi
 
-if nvidia-smi --query-gpu=name --format=csv | grep -q 'A4000'; then
-    (sudo crontab -l; echo '@reboot sleep 50 && nvidia-smi --lock-gpu-clocks=1500,1500') | sudo crontab -
-fi
-
-MAX_MEMORY=10000000000
-MAX_MEMORY_POLICY=allkeys-lru
-echo "maxmemory $MAX_MEMORY" >> /etc/redis/redis.conf
-echo "maxmemory-policy $MAX_MEMORY_POLICY" >> /etc/redis/redis.conf
-systemctl restart redis.service
+configure_redis
 
 forever start -c redis-server --daemonize yes
 sudo sh -c 'echo 1000 > /sys/module/usbcore/parameters/usbfs_memory_mb'

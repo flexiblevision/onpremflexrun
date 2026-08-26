@@ -29,13 +29,21 @@ ENVIRON="$(jq -r '.environ' ~/fvconfig.json)"
 docker run -p $MONGO_PORT:$MONGO_PORT --restart unless-stopped  --name mongo -d mongo:$MONGO_VERSION
 
 if [ "$SYSTEM_ARCH" = "arm" ]; then
-    wget https://nodejs.org/dist/v10.16.1/node-v10.16.1-linux-arm64.tar.xz
-    tar -xJf node-v10.16.1-linux-armv6l.tar.xz
-    cd node-v10.16.1-linux-armv6l/
-    sudo cp -R * /usr/local/
+    # The download and the extract used to name different archives (arm64 vs
+    # armv6l), so tar failed, the following `cd` failed, and `cp -R * /usr/local/`
+    # copied the flex-run repo into /usr/local from the unchanged directory.
+    # One variable now names both, and nothing is copied unless it succeeded.
+    NODE_DIST=node-v10.16.1-linux-arm64
+    if wget -q "https://nodejs.org/dist/v10.16.1/${NODE_DIST}.tar.xz" \
+       && tar -xJf "${NODE_DIST}.tar.xz"; then
+        sudo cp -R "${NODE_DIST}/." /usr/local/
+        rm -rf "${NODE_DIST}" "${NODE_DIST}.tar.xz"
+    else
+        echo "ERROR: node ${NODE_DIST} download or extract failed - not copying anything"
+    fi
 
-    sudo apt-get install nvidia-container
-fi 
+    sudo apt-get install -y nvidia-container
+fi
 
 if [ "$SYSTEM_ARCH" = "x86" ]; then
     # Add NVIDIA container toolkit GPG key

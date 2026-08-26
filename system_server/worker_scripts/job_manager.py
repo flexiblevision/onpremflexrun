@@ -23,8 +23,12 @@ SYNC_COMPLETION_THRESHOLD = 74
 TRACKER_COLLECTION_NAME = "sync_tracker"  # Separate collection for tracking data
 
 
-MONGODB_HOST = "172.17.0.1"  # Should move to config/environment variable
-MONGODB_PORT = 27017
+# Defaults are the docker bridge address used on devices; overridable so this
+# module can be imported where that address does not exist (CI, a dev box).
+# It pings at import and exits on failure, so an unreachable host takes the
+# whole process down rather than failing a single call.
+MONGODB_HOST = os.environ.get('MONGO_SERVER', "172.17.0.1")
+MONGODB_PORT = int(os.environ.get('MONGO_PORT', 27017))
 MONGODB_TIMEOUT_MS = 5000  # 5 second timeout
 MONGODB_MAX_POOL_SIZE = 50
 MONGODB_SERVER_SELECTION_TIMEOUT_MS = 5000

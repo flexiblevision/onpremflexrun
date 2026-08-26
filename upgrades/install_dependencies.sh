@@ -21,12 +21,15 @@ dpkg -l | grep -E '^ii.*(linux-generic|linux-headers-generic|linux-image-generic
 
 export PYTHONPATH="${PYTHONPATH}:${HOME}/flex-run"
 
-python3 $HOME/flex-run/setup/management.py
+python3 "$HOME/flex-run/setup/management.py"
 
 # --break-system-packages only exists on pip >= 23.0 (PEP 668). Older pip both
 # rejects the flag and doesn't need it, so only pass it when supported.
-PIP_BSP=""
+# Branch rather than interpolate: quoting an empty PIP_BSP would pass "" to pip
+# as a requirement and fail, and leaving it unquoted relies on word splitting.
+REQUIREMENTS="$HOME/flex-run/requirements.txt"
 if pip3 install --help 2>/dev/null | grep -q -- --break-system-packages; then
-    PIP_BSP="--break-system-packages"
+    pip3 install --break-system-packages --ignore-installed -r "$REQUIREMENTS"
+else
+    pip3 install --ignore-installed -r "$REQUIREMENTS"
 fi
-pip3 install $PIP_BSP --ignore-installed -r $HOME/flex-run/requirements.txt

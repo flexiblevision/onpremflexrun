@@ -1,0 +1,121 @@
+name: CI
+
+# The deploy path in this repo installs and upgrades software on factory-floor
+# machines, so the gate covers the shell scripts as well as the Python.
+on:
+  push:
+    branches: ['**']
+  pull_request:
+    branches: ['**']
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Tests and shell checks
+    runs-on: ubuntu-22.04
+    timeout-minutes: 20
+
+    # system_server/worker_scripts/job_manager.py pings MongoDB at import and
+    # calls sys.exit(1) on failure, so the interpreter needs a reachable
+    # instance for the suite to import at all. MONGO_SERVER below points it here.
+    services:
+      mongo:
+        image: mongo:4.2
+        ports: ['27017:27017']
+        options: >-
+          --health-cmd "mongo --quiet --eval 'db.runCommand({ping:1}).ok'"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      MONGO_SERVER: 127.0.0.1
+      MONGO_PORT: 27017
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # 3.9 matches the interpreter on the devices.
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.9'
+          cache: pip
+
+      # dash is what /bin/sh is on the devices, and the deploy scripts are
+      # invoked as `sh <script>`. The POSIX parse checks need it present.
+      - name: Install dash
+        run: sudo apt-get update && sudo apt-get install -y dash
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install -r requirements-dev.txt
+
+      # Kept on one line: a multi-line `python -c` inside a YAML block scalar
+      # carries the YAML indentation into the Python source and fails with
+      # IndentationError before it ever reaches MongoDB.
+      - name: Wait for MongoDB
+        run: |
+          PING="from pymongo import MongoClient; MongoClient('127.0.0.1', 27017, serverSelectionTimeoutMS=1000).admin.command('ping')"
+          for _ in $(seq 30); do
+            if python -c "$PING" 2>/dev/null; then echo "mongo ready"; exit 0; fi
+            sleep 2
+          done
+          echo "mongo never became ready" >&2
+          exit 1
+
+      - name: Run tests
+        run: python -m pytest system_server/tests
+
+      - name: Upload coverage
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage
+          path: |
+            system_server/htmlcov/
+            system_server/coverage.xml
+          if-no-files-found: ignore
+
+  secrets:
+    name: Secret scan
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # The Auth0 client id and a default jwt_secret_key are already committed,
+      # so this starts as a report rather than a blocker. Flip
+      # continue-on-error to false once those are rotated and removed.
+      - name: gitleaks
+        continue-on-error: true
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  dependencies:
+    name: Dependency audit
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.9'
+          cache: pip
+
+      # Reports known advisories against the pinned versions. Advisory
+      # feeds change without the code changing, so this must not be able to
+      # turn an unrelated PR red.
+      - name: pip-audit
+        continue-on-error: true
+        run: |
+          pip install pip-audit
+          pip-audit --requirement requirements.txt --desc
