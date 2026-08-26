@@ -22,7 +22,15 @@ BASE_PATH_TO_MODELS = base_path()+'models/'
 BASE_PATH_TO_LITE_MODELS = base_path()+'lite_models/'
 
 for p in [BASE_PATH_TO_MODELS, BASE_PATH_TO_LITE_MODELS]:
-    if not os.path.exists(p): os.makedirs(p)
+    # Best effort at import time. On a device this runs as root and succeeds;
+    # anywhere unprivileged (CI, a dev checkout) a raised PermissionError here
+    # makes the entire routes package unimportable, which is a worse failure
+    # than a missing directory the handlers can report on. exist_ok also drops
+    # the exists-then-makedirs race.
+    try:
+        os.makedirs(p, exist_ok=True)
+    except OSError as e:
+        print('WARNING: could not create {}: {}'.format(p, e))
 
 class CategoryIndex(Resource):
     def get(self, model, version):
