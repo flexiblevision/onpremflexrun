@@ -216,8 +216,86 @@ class SystemVersions(Resource):
                 'predictlite_version': predictlite_version,
                 'vision_version': vision_version,
                 'creator_version': creator_version,
-                'visiontools_version': vision_version
+                'visiontools_version': visiontools_version
                 }
+
+
+def _release_collection():
+    """The utils collection release state lives in."""
+    from pymongo import MongoClient
+    client = MongoClient(os.environ.get('MONGO_SERVER', '172.17.0.1'),
+                         int(os.environ.get('MONGO_PORT', 27017)),
+                         serverSelectionTimeoutMS=5000)
+    return client['fvonprem']['utils']
+
+
+class Releases(Resource):
+    """What release is running, what is offered, and what it can go back to.
+
+    One call, because the settings screen needs all of it at once and three
+    round trips over a factory network is three chances to render half a state.
+    """
+    def get(self):
+        try:
+            from release import state as release_state
+            summary = release_state.summary(_release_collection(), available=None)
+        except Exception as e:
+            # A device that predates release tracking has no state; say so
+            # rather than 500ing the whole settings screen.
+            summary = {'installed': None, 'high_water': 0, 'history': [],
+                       'rollback_targets': [], 'available': None,
+                       'update_available': False, 'rolled_back_from': None,
+                       'unavailable': str(e)}
+
+        # Which keys this device trusts. Reported so a rotation can be tracked
+        # across the fleet: you cannot safely retire a key until every device
+        # shows the replacement.
+        try:
+            from release import trust as release_trust
+            summary['trust'] = release_trust.summary(
+                os.environ.get('FLEXRUN_TRUST_DIR', release_trust.DEFAULT_TRUST_DIR))
+        except Exception as e:
+            summary['trust'] = {'count': 0, 'keys': [], 'unavailable': str(e)}
+
+        return summary
+
+
+class Rollback(Resource):
+    """Return this device to a release it has previously run.
+
+    POST, and deliberately not exposed as GET: it swaps containers.
+    """
+    @auth.requires_auth
+    def post(self):
+        from flask import request
+        from release import state as release_state
+
+        body = request.get_json(silent=True) or {}
+        target = body.get('counter')
+        if not isinstance(target, int) or isinstance(target, bool):
+            return {'error': 'a numeric release counter is required'}, 400
+
+        holder = upgrade_runner.lock_holder()
+        if holder is not None:
+            return {'error': 'an upgrade is already running on this device',
+                    'pid': holder}, 409
+
+        try:
+            known = release_state.known_counters(_release_collection())
+        except Exception as e:
+            return {'error': 'could not read release history',
+                    'detail': str(e)}, 500
+
+        if target not in known:
+            return {'error': 'release {} has never run on this device'.format(target),
+                    'available': sorted(known)}, 400
+
+        # The apply path itself is Phase 3 work; refusing loudly is better than
+        # reporting a rollback that did not happen.
+        return {'error': 'rollback is not wired to the apply path yet',
+                'target': target,
+                'detail': 'the device does not yet apply signed manifests'}, 501
+
 
 class SystemIsUptodate(Resource):
     def get(self):
@@ -402,5 +480,7 @@ def register_routes(api):
     api.add_resource(UpgradeStatus, '/upgrade_status')
     api.add_resource(UpgradeFlexRun, '/upgrade_flex_run')
     api.add_resource(SystemVersions, '/system_versions')
+    api.add_resource(Releases, '/releases')
+    api.add_resource(Rollback, '/rollback')
     api.add_resource(SystemIsUptodate, '/system_uptodate')
     api.add_resource(StartTeamviewer, '/start_teamviewer')

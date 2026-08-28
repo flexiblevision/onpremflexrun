@@ -1,442 +1,446 @@
-"""
-Unit tests for FireOperator.py
-"""
-import sys
-from unittest.mock import Mock, patch, MagicMock, call
+"""Firestore trigger listener for the AWS deployment.
 
-# Mock firebase_admin and google auth modules before they're imported
-sys.modules['firebase_admin'] = MagicMock()
-sys.modules['firebase_admin.credentials'] = MagicMock()
-sys.modules['firebase_admin.firestore'] = MagicMock()
-sys.modules['google.oauth2'] = MagicMock()
-sys.modules['google.oauth2.service_account'] = MagicMock()
-sys.modules['google.auth'] = MagicMock()
-sys.modules['google.auth.transport'] = MagicMock()
-sys.modules['google.auth.transport.requests'] = MagicMock()
+The previous version of this file defined copies of the logic inside each test
+body; FireOperator.py itself was never imported and sat at 25%.
+
+The interesting behaviour is the watchdog. A Firestore gRPC stream can go quiet
+without erroring, and a listener that has silently stopped delivering snapshots
+is indistinguishable from an idle line - the device simply stops inspecting.
+The heartbeat document exists so that silence is detectable.
+"""
+import threading
+import time
 
 import pytest
-import datetime
+from unittest.mock import patch, MagicMock, call
+
+from aws import FireOperator as module
+from aws.FireOperator import FireOperator, run_operator
 
 
-class TestMsTimestamp:
-    """Tests for ms_timestamp function"""
+
+@pytest.fixture
+def firestore():
+    """The firestore client, and the three documents the operator uses."""
+    with patch.object(module, 'db') as db:
+        documents = {}
+
+        def collection(name):
+            handle = MagicMock()
+            handle.document.return_value = documents.setdefault(name, MagicMock())
+            return handle
+
+        db.collection.side_effect = collection
+        yield {'db': db, 'documents': documents}
+
+
+@pytest.fixture
+def no_threads():
+    """__init__ starts a heartbeat writer and a watchdog; keep them out."""
+    with patch.object(module.threading, 'Thread') as thread:
+        yield thread
+
+
+@pytest.fixture
+def operator(firestore, no_threads):
+    return FireOperator()
+
+
+class TestConstruction:
+    @pytest.mark.unit
+    def test_subscribes_to_the_capture_and_heartbeat_documents(self, operator, firestore):
+        assert firestore['documents']['inspections'].on_snapshot.called
+        assert firestore['documents']['heartbeat'].on_snapshot.called
 
     @pytest.mark.unit
-    @patch('datetime.datetime')
-    def test_ms_timestamp_returns_milliseconds(self, mock_datetime):
-        """Test that ms_timestamp returns time in milliseconds"""
-        # Mock datetime.now() to return a fixed timestamp
-        mock_now = MagicMock()
-        mock_now.timestamp.return_value = 1234567890.123456
-        mock_datetime.now.return_value = mock_now
+    def test_starts_the_heartbeat_writer_and_the_watchdog(self, firestore, no_threads):
+        operator = FireOperator()
 
-        # Replicate ms_timestamp logic
-        def ms_timestamp():
-            return int(datetime.datetime.now().timestamp()*1000)
-
-        result = ms_timestamp()
-        expected = int(1234567890.123456 * 1000)
-
-        assert result == expected
-        assert isinstance(result, int)
-
-
-class TestFireOperatorInit:
-    """Tests for FireOperator initialization"""
+        targets = [c[1]['target'] for c in no_threads.call_args_list]
+        assert operator._heartbeat_writer in targets
+        assert operator._watchdog in targets
+        assert all(c[1]['daemon'] is True for c in no_threads.call_args_list)
 
     @pytest.mark.unit
-    @patch('aws.FireOperator.firestore.Client')
-    @patch('aws.FireOperator.service_account')
-    @patch('os.path.isfile')
-    def test_fire_operator_initialization(self, mock_isfile, mock_service_account, mock_firestore_client):
-        """Test FireOperator class initialization"""
-        mock_isfile.return_value = True
-
-        # Mock firestore db
-        mock_db = MagicMock()
-        mock_collection = MagicMock()
-        mock_document = MagicMock()
-
-        mock_db.collection.return_value = mock_collection
-        mock_collection.document.return_value = mock_document
-
-        # Replicate FireOperator.__init__ logic
-        class MockFireOperator:
-            def __init__(self):
-                self.db = mock_db
-                self.collection = "test_collection"
-                self.document = "test_document"
-                self.capture_doc = self.db.collection("inspections").document(self.document)
-                self.status_doc = self.db.collection("status").document(self.document)
-                self.trigger_dest = "http://test.com"
-                self.last_read_time = None
-                self.intialized = False
-
-        fo = MockFireOperator()
-
-        assert fo.db == mock_db
-        assert fo.collection == "test_collection"
-        assert fo.document == "test_document"
-        assert fo.last_read_time is None
-        assert fo.intialized is False
-
-
-class TestSyncingAlive:
-    """Tests for syncing_alive method"""
+    def test_the_watchdog_clock_is_seeded(self, operator):
+        # Without the seed the watchdog would resubscribe immediately, before
+        # the first heartbeat has had a chance to arrive.
+        assert operator.last_heartbeat_seen <= time.time()
+        assert operator.last_heartbeat_seen > time.time() - 10
 
     @pytest.mark.unit
-    def test_syncing_alive_when_enabled(self):
-        """Test syncing_alive returns True when sync is enabled"""
-        mock_util_ref = MagicMock()
-
-        # Setup mock returns
-        mock_util_ref.find_one.side_effect = [
-            {'type': 'predict_sync', 'ms_time': '1000000'},
-            {'type': 'sync', 'is_enabled': True},
-            {'type': 'sync_interval', 'interval': '5'}
-        ]
-
-        # Replicate syncing_alive logic
-        def syncing_alive():
-            last_sync_ref = mock_util_ref.find_one({'type': 'predict_sync'}, {'_id': 0})
-            sync_enabled_ref = mock_util_ref.find_one({'type': 'sync'}, {'_id': 0})
-            sync_interval_ref = mock_util_ref.find_one({'type': 'sync_interval'}, {'_id': 0})
-
-            sync_enabled = sync_enabled_ref['is_enabled']
-            return sync_enabled
-
-        result = syncing_alive()
-        assert result is True
+    def test_the_trigger_destination_comes_from_configuration(self, operator):
+        assert operator.trigger_dest == module.trigger_dest
 
     @pytest.mark.unit
-    def test_syncing_alive_when_disabled_recent_sync(self):
-        """Test syncing_alive when disabled but recent sync exists"""
-        mock_util_ref = MagicMock()
-
-        current_time = 2000000
-        last_sync_time = 1900000  # Recent sync
-
-        mock_util_ref.find_one.side_effect = [
-            {'type': 'predict_sync', 'ms_time': str(last_sync_time)},
-            {'type': 'sync', 'is_enabled': False},
-            {'type': 'sync_interval', 'interval': '5'}
-        ]
-
-        # Replicate logic
-        def syncing_alive():
-            last_sync_ref = mock_util_ref.find_one({'type': 'predict_sync'}, {'_id': 0})
-            sync_enabled_ref = mock_util_ref.find_one({'type': 'sync'}, {'_id': 0})
-            sync_interval_ref = mock_util_ref.find_one({'type': 'sync_interval'}, {'_id': 0})
-
-            sync_enabled = sync_enabled_ref['is_enabled']
-            last_sync = int(last_sync_ref['ms_time'])
-            sync_interval = int(sync_interval_ref['interval'])
-
-            if sync_enabled == False and (last_sync + ((60000*sync_interval) * 10)) > current_time:
-                return True
-            else:
-                return False
-
-        result = syncing_alive()
-        assert result is True
+    def test_the_timeouts_are_a_multiple_of_the_heartbeat_interval(self):
+        # A timeout below the write interval would resubscribe constantly.
+        assert FireOperator.HEARTBEAT_TIMEOUT_S > FireOperator.HEARTBEAT_INTERVAL_S
+        assert FireOperator.WATCHDOG_INTERVAL_S < FireOperator.HEARTBEAT_TIMEOUT_S
 
 
 class TestListener:
-    """Tests for listener method"""
+    def _snapshot(self, doc_id='doc1', data=None):
+        doc = MagicMock()
+        doc.id = doc_id
+        doc.to_dict.return_value = data or {'part': 'A', 'action': 'inspect'}
+        return doc
 
     @pytest.mark.unit
-    @patch('requests.post')
-    def test_listener_initialized(self, mock_post):
-        """Test listener triggers when initialized"""
-        mock_doc = MagicMock()
-        mock_doc.id = 'doc123'
-        mock_doc.to_dict.return_value = {'data': 'test'}
+    def test_the_first_snapshot_does_not_fire_a_trigger(self, operator):
+        # Firestore replays the current document on subscribe; treating that
+        # as a trigger would inspect a part that was already handled.
+        with patch('requests.post') as post:
+            operator.listener([self._snapshot()], [], 'read-time')
 
-        mock_thread = MagicMock()
-        read_time = MagicMock()
-
-        # Replicate listener logic
-        def listener(doc_snapshot, changes, read_time, initialized, trigger_dest):
-            for doc in doc_snapshot:
-                trigger_record = doc.to_dict()
-                if initialized:
-                    mock_post(trigger_dest, json=trigger_record, timeout=10)
-
-        listener([mock_doc], [], read_time, True, 'http://test.com')
-
-        mock_post.assert_called_once_with('http://test.com', json={'data': 'test'}, timeout=10)
+        post.assert_not_called()
+        assert operator.intialized is True
 
     @pytest.mark.unit
-    @patch('requests.post')
-    def test_listener_not_initialized(self, mock_post):
-        """Test listener doesn't trigger when not initialized"""
-        mock_doc = MagicMock()
-        mock_doc.id = 'doc123'
-        mock_doc.to_dict.return_value = {'data': 'test'}
+    def test_a_later_snapshot_posts_the_trigger(self, operator):
+        operator.intialized = True
 
-        # Replicate listener logic
-        def listener(doc_snapshot, changes, read_time, initialized, trigger_dest):
-            for doc in doc_snapshot:
-                trigger_record = doc.to_dict()
-                if initialized:
-                    mock_post(trigger_dest, json=trigger_record, timeout=10)
+        with patch('requests.post') as post:
+            operator.listener([self._snapshot()], [], 'read-time')
 
-        listener([mock_doc], [], MagicMock(), False, 'http://test.com')
-
-        mock_post.assert_not_called()
-
-
-class TestUpdateStatus:
-    """Tests for update_status method"""
+        post.assert_called_once_with(
+            operator.trigger_dest,
+            json={'part': 'A', 'action': 'inspect'}, timeout=10)
 
     @pytest.mark.unit
-    def test_update_status(self):
-        """Test update_status sets status document"""
-        mock_status_doc = MagicMock()
+    def test_the_read_time_is_recorded(self, operator):
+        operator.intialized = True
+        with patch('requests.post'):
+            operator.listener([self._snapshot()], [], 'read-time-7')
 
-        status_data = {'status': 'active', 'message': 'processing'}
-
-        # Replicate update_status logic
-        def update_status(status):
-            mock_status_doc.set(status)
-
-        update_status(status_data)
-
-        mock_status_doc.set.assert_called_once_with(status_data)
+        assert operator.last_read_time == 'read-time-7'
 
     @pytest.mark.unit
-    def test_update_status_empty(self):
-        """Test update_status with empty status"""
-        mock_status_doc = MagicMock()
+    def test_every_document_in_a_batch_is_triggered(self, operator):
+        operator.intialized = True
+        batch = [self._snapshot('d1'), self._snapshot('d2')]
 
-        def update_status(status):
-            mock_status_doc.set(status)
+        with patch('requests.post') as post:
+            operator.listener(batch, [], 'read-time')
 
-        update_status({})
-
-        mock_status_doc.set.assert_called_once_with({})
-
-
-class TestGetStatus:
-    """Tests for get_status method"""
+        assert post.call_count == 2
 
     @pytest.mark.unit
-    def test_get_status_exists(self):
-        """Test get_status when document exists"""
-        mock_status_doc = MagicMock()
-        mock_doc = MagicMock()
-        mock_doc.exists = True
-        mock_doc.to_dict.return_value = {'status': 'active', 'count': 42}
+    def test_an_empty_snapshot_releases_the_waiter(self, operator):
+        with patch('requests.post') as post:
+            operator.listener([], [], 'read-time')
 
-        mock_status_doc.get.return_value = mock_doc
-
-        # Replicate get_status logic
-        def get_status():
-            status_ref = mock_status_doc
-            doc = status_ref.get()
-            if doc.exists:
-                return doc.to_dict()
-            else:
-                return None
-
-        result = get_status()
-
-        assert result == {'status': 'active', 'count': 42}
-        mock_status_doc.get.assert_called_once()
+        post.assert_not_called()
+        assert operator.thread.is_set()
 
     @pytest.mark.unit
-    def test_get_status_not_exists(self):
-        """Test get_status when document doesn't exist"""
-        mock_status_doc = MagicMock()
-        mock_doc = MagicMock()
-        mock_doc.exists = False
+    def test_the_trigger_post_is_bounded(self, operator):
+        operator.intialized = True
+        with patch('requests.post') as post:
+            operator.listener([self._snapshot()], [], 'read-time')
 
-        mock_status_doc.get.return_value = mock_doc
+        assert post.call_args[1]['timeout'] == 10
 
-        def get_status():
-            status_ref = mock_status_doc
-            doc = status_ref.get()
-            if doc.exists:
-                return doc.to_dict()
-            else:
-                return None
 
-        result = get_status()
+class TestHeartbeat:
+    @pytest.mark.unit
+    def test_any_heartbeat_snapshot_proves_the_stream_is_alive(self, operator):
+        operator.last_heartbeat_seen = 0
 
-        assert result is None
+        operator._heartbeat_listener([], [], 'read-time')
+
+        assert operator.last_heartbeat_seen > 0
+
+    @pytest.mark.unit
+    def test_the_first_write_waits_out_the_interval(self, operator, firestore, main_thread_sleep):
+        # The loop sleeps before writing, so a restart does not immediately
+        # re-stamp a document another process may have just written.
+        with patch('time.sleep', side_effect=main_thread_sleep([])):
+            with pytest.raises(KeyboardInterrupt):
+                operator._heartbeat_writer()
+
+        firestore['documents']['heartbeat'].set.assert_not_called()
+
+    @pytest.mark.unit
+    def test_the_writer_stamps_the_document(self, operator, firestore, main_thread_sleep):
+        calls = []
+
+        with patch('time.sleep', side_effect=main_thread_sleep(calls, 2)):
+            with pytest.raises(KeyboardInterrupt):
+                operator._heartbeat_writer()
+
+        written = firestore['documents']['heartbeat'].set.call_args[0][0]
+        assert 'ts' in written
+        assert isinstance(written['ts'], int)
+
+    @pytest.mark.unit
+    def test_the_writer_runs_on_the_configured_interval(self, operator, firestore, main_thread_sleep):
+        calls = []
+
+        with patch('time.sleep', side_effect=main_thread_sleep(calls, 2)):
+            with pytest.raises(KeyboardInterrupt):
+                operator._heartbeat_writer()
+
+        assert calls == [FireOperator.HEARTBEAT_INTERVAL_S] * 2
+        assert firestore['documents']['heartbeat'].set.call_count == 1
+
+    @pytest.mark.unit
+    def test_a_failed_heartbeat_write_does_not_kill_the_writer(self, operator, firestore, main_thread_sleep):
+        # The writer is a daemon thread; an escaping exception would silently
+        # stop every future heartbeat and trip the watchdog forever.
+        firestore['documents']['heartbeat'].set.side_effect = RuntimeError('offline')
+        calls = []
+
+        with patch('time.sleep', side_effect=main_thread_sleep(calls, 3)):
+            with pytest.raises(KeyboardInterrupt):
+                operator._heartbeat_writer()
+
+        assert firestore['documents']['heartbeat'].set.call_count == 2
+
+
+class TestWatchdog:
+    @pytest.mark.unit
+    def test_a_live_stream_is_left_alone(self, operator, main_thread_sleep):
+        operator.last_heartbeat_seen = time.time()
+        calls = []
+
+        with patch('time.sleep', side_effect=main_thread_sleep(calls, 2)), \
+             patch.object(operator, 'start_listener') as resubscribe:
+            with pytest.raises(KeyboardInterrupt):
+                operator._watchdog()
+
+        resubscribe.assert_not_called()
+
+    @pytest.mark.unit
+    def test_a_stale_stream_is_resubscribed(self, operator, main_thread_sleep):
+        operator.last_heartbeat_seen = time.time() - (
+            FireOperator.HEARTBEAT_TIMEOUT_S + 10)
+        calls = []
+
+        # The loop sleeps before it checks, so it has to be let round once.
+        with patch('time.sleep', side_effect=main_thread_sleep(calls, 2)), \
+             patch.object(operator, 'start_listener') as resubscribe:
+            with pytest.raises(KeyboardInterrupt):
+                operator._watchdog()
+
+        resubscribe.assert_called_once()
+
+    @pytest.mark.unit
+    def test_it_polls_on_the_configured_interval(self, operator, main_thread_sleep):
+        calls = []
+
+        with patch('time.sleep', side_effect=main_thread_sleep(calls)):
+            with pytest.raises(KeyboardInterrupt):
+                operator._watchdog()
+
+        assert calls == [FireOperator.WATCHDOG_INTERVAL_S]
+
+    @pytest.mark.unit
+    def test_a_failed_resubscribe_does_not_kill_the_watchdog(self, operator, main_thread_sleep):
+        operator.last_heartbeat_seen = 0
+        calls = []
+
+        with patch('time.sleep', side_effect=main_thread_sleep(calls, 3)), \
+             patch.object(operator, 'start_listener',
+                          side_effect=RuntimeError('offline')) as resubscribe:
+            with pytest.raises(KeyboardInterrupt):
+                operator._watchdog()
+
+        assert resubscribe.call_count == 2
+
+
+class TestStartListener:
+    @pytest.mark.unit
+    def test_previous_subscriptions_are_torn_down_first(self, operator):
+        # Leaving the old watch attached would double every trigger.
+        old_capture, old_heartbeat = MagicMock(), MagicMock()
+        operator._capture_watch = old_capture
+        operator._heartbeat_watch = old_heartbeat
+
+        operator.start_listener()
+
+        old_capture.unsubscribe.assert_called_once()
+        old_heartbeat.unsubscribe.assert_called_once()
+
+    @pytest.mark.unit
+    def test_a_failed_unsubscribe_does_not_prevent_resubscribing(self, operator):
+        operator._capture_watch = MagicMock()
+        operator._capture_watch.unsubscribe.side_effect = RuntimeError('already gone')
+
+        operator.start_listener()
+
+        assert operator._capture_watch is not None
+
+    @pytest.mark.unit
+    def test_the_replayed_snapshot_is_suppressed(self, operator):
+        operator.intialized = True
+
+        operator.start_listener()
+
+        assert operator.intialized is False
+
+    @pytest.mark.unit
+    def test_the_watchdog_clock_is_reset(self, operator):
+        operator.last_heartbeat_seen = 0
+
+        operator.start_listener()
+
+        assert operator.last_heartbeat_seen > 0
+
+
+class TestStatus:
+    @pytest.mark.unit
+    def test_update_writes_the_status_document(self, operator, firestore):
+        operator.update_status({'state': 'running'})
+
+        firestore['documents']['status'].set.assert_called_once_with(
+            {'state': 'running'})
+
+    @pytest.mark.unit
+    def test_get_returns_the_document_contents(self, operator, firestore):
+        doc = MagicMock(exists=True)
+        doc.to_dict.return_value = {'state': 'idle'}
+        firestore['documents']['status'].get.return_value = doc
+
+        assert operator.get_status() == {'state': 'idle'}
+
+    @pytest.mark.unit
+    def test_a_missing_status_document_is_none(self, operator, firestore):
+        firestore['documents']['status'].get.return_value = MagicMock(exists=False)
+
+        assert operator.get_status() is None
+
+
+class TestSyncingAlive:
+    def _utils(self, enabled=False, last_sync=None, interval=10):
+        import datetime
+        now_ms = int(datetime.datetime.now().timestamp() * 1000)
+        records = {
+            'predict_sync': {'ms_time': str(last_sync if last_sync is not None else now_ms)},
+            'sync': {'is_enabled': enabled},
+            'sync_interval': {'interval': interval},
+        }
+        return lambda query, projection=None: records[query['type']]
+
+    @pytest.mark.unit
+    def test_a_recently_synced_device_is_alive(self, operator):
+        with patch.object(module.util_ref, 'find_one', side_effect=self._utils()):
+            assert operator.syncing_alive() is True
+
+    @pytest.mark.unit
+    def test_a_device_with_syncing_enabled_is_not_alive(self, operator, firestore):
+        # The check only passes while syncing is disabled; with it enabled the
+        # operator defers and clears its status.
+        with patch.object(module.util_ref, 'find_one',
+                          side_effect=self._utils(enabled=True)):
+            assert operator.syncing_alive() is False
+
+        firestore['documents']['status'].set.assert_called_once_with({})
+
+    @pytest.mark.unit
+    def test_a_stale_sync_is_not_alive(self, operator, firestore):
+        import datetime
+        long_ago = int(datetime.datetime.now().timestamp() * 1000) - (10 * 60 * 60 * 1000)
+
+        with patch.object(module.util_ref, 'find_one',
+                          side_effect=self._utils(last_sync=long_ago, interval=1)):
+            assert operator.syncing_alive() is False
+
+        firestore['documents']['status'].set.assert_called_once_with({})
+
+    @pytest.mark.unit
+    def test_a_device_with_no_sync_records_raises(self, operator):
+        with patch.object(module.util_ref, 'find_one', return_value=None):
+            with pytest.raises(TypeError):
+                operator.syncing_alive()
+
+
+class TestMsTimestamp:
+    @pytest.mark.unit
+    def test_is_epoch_milliseconds(self):
+        import datetime
+        expected = datetime.datetime.now().timestamp() * 1000
+        value = module.ms_timestamp()
+
+        assert isinstance(value, int)
+        assert abs(value - expected) < 5000
 
 
 class TestRunOperator:
-    """Tests for run_operator function"""
+    def _forever(self, listing='', returncode=0):
+        return MagicMock(stdout=listing, stderr='', returncode=returncode)
 
     @pytest.mark.unit
-    @patch('subprocess.run')
-    @patch('subprocess.Popen')
-    def test_run_operator_not_running(self, mock_popen, mock_run):
-        """Test run_operator when fo_server is not running"""
-        mock_run.return_value = MagicMock(
-            stdout='No forever processes running',
-            returncode=0
-        )
+    def test_does_nothing_without_aws(self):
+        with patch('settings.config', {'use_aws': False}), \
+             patch('subprocess.run') as run, \
+             patch('subprocess.Popen') as popen:
+            assert run_operator() is None
 
-        # Replicate run_operator logic
-        def run_operator(use_aws, fo_server_path):
-            if use_aws:
-                result = mock_run(['forever', 'list'], capture_output=True, text=True, check=True)
-                forever_list_output = result.stdout
-
-                is_running = False
-                for line in forever_list_output.splitlines():
-                    if fo_server_path in line and "STOPPED" not in line:
-                        is_running = True
-                        break
-
-                if is_running:
-                    return 'skipped'
-                else:
-                    mock_popen(['forever', 'start', '-c', 'python3', fo_server_path],
-                              stdout=mock_popen.PIPE, stderr=mock_popen.PIPE)
-                    return 'started'
-
-        result = run_operator(True, '/path/to/fo_server.py')
-
-        assert result == 'started'
-        mock_popen.assert_called_once()
+        run.assert_not_called()
+        popen.assert_not_called()
 
     @pytest.mark.unit
-    @patch('subprocess.run')
-    def test_run_operator_already_running(self, mock_run):
-        """Test run_operator when fo_server is already running"""
-        fo_server_path = '/home/user/flex-run/aws/fo_server.py'
-        mock_run.return_value = MagicMock(
-            stdout=f'[0] {fo_server_path} RUNNING',
-            returncode=0
-        )
+    def test_starts_the_server_when_it_is_not_running(self, tmp_path, monkeypatch):
+        monkeypatch.setenv('HOME', str(tmp_path))
 
-        def run_operator(use_aws, fo_server_path):
-            if use_aws:
-                result = mock_run(['forever', 'list'], capture_output=True, text=True, check=True)
-                forever_list_output = result.stdout
+        with patch('settings.config', {'use_aws': True}), \
+             patch('subprocess.run', return_value=self._forever('no processes')), \
+             patch('subprocess.Popen') as popen:
+            assert run_operator() == 'started'
 
-                is_running = False
-                for line in forever_list_output.splitlines():
-                    if fo_server_path in line and "STOPPED" not in line:
-                        is_running = True
-                        break
-
-                if is_running:
-                    return 'skipped'
-                else:
-                    return 'started'
-
-        result = run_operator(True, fo_server_path)
-
-        assert result == 'skipped'
+        command = popen.call_args[0][0]
+        assert command[:4] == ['forever', 'start', '-c', 'python3']
+        assert command[4].endswith('/flex-run/aws/fo_server.py')
 
     @pytest.mark.unit
-    @patch('subprocess.run')
-    def test_run_operator_forever_command_fails(self, mock_run):
-        """Test run_operator handles forever command failure"""
-        import subprocess
-        mock_run.side_effect = subprocess.CalledProcessError(1, 'forever list', stderr='Command not found')
+    def test_a_running_server_is_not_started_twice(self, tmp_path, monkeypatch):
+        # Two operators on one device would double every trigger.
+        monkeypatch.setenv('HOME', str(tmp_path))
+        path = str(tmp_path / 'flex-run' / 'aws' / 'fo_server.py')
+        listing = f'data:    [0] abcd python3 {path} 1234'
 
-        def run_operator(use_aws):
-            if use_aws:
-                try:
-                    result = mock_run(['forever', 'list'], capture_output=True, text=True, check=True)
-                    return 'checked'
-                except subprocess.CalledProcessError as e:
-                    return 'error'
+        with patch('settings.config', {'use_aws': True}), \
+             patch('subprocess.run', return_value=self._forever(listing)), \
+             patch('subprocess.Popen') as popen:
+            assert run_operator() == 'skipped'
 
-        result = run_operator(True)
-
-        assert result == 'error'
-
-
-class TestGetStatusByServiceAccount:
-    """Tests for get_status_by_service_account method"""
+        popen.assert_not_called()
 
     @pytest.mark.unit
-    @patch('aws.FireOperator.AuthorizedSession')
-    @patch('aws.FireOperator.service_account.IDTokenCredentials')
-    def test_get_status_by_service_account(self, mock_id_token_creds, mock_authed_session):
-        """Test get_status_by_service_account API call"""
-        mock_response = MagicMock()
-        mock_response.json.return_value = {'status': 'success', 'data': 'test'}
+    def test_a_stopped_entry_is_restarted(self, tmp_path, monkeypatch):
+        monkeypatch.setenv('HOME', str(tmp_path))
+        path = str(tmp_path / 'flex-run' / 'aws' / 'fo_server.py')
+        listing = f'data:    [0] abcd python3 {path} STOPPED'
 
-        mock_session = MagicMock()
-        mock_session.post.return_value = mock_response
-        mock_authed_session.return_value = mock_session
+        with patch('settings.config', {'use_aws': True}), \
+             patch('subprocess.run', return_value=self._forever(listing)), \
+             patch('subprocess.Popen') as popen:
+            assert run_operator() == 'started'
 
-        # Replicate get_status_by_service_account logic
-        def get_status_by_service_account(document):
-            url = 'https://us-central1-testingprivateapis.cloudfunctions.net/get-status-by-service-account'
-            authed_session = mock_authed_session(mock_id_token_creds)
-            resp = authed_session.post(document)
-            return resp.json()
-
-        result = get_status_by_service_account('test_document')
-
-        assert result == {'status': 'success', 'data': 'test'}
-        mock_session.post.assert_called_once_with('test_document')
-
-
-class TestFirestoreIntegration:
-    """Tests for Firestore document operations"""
+        popen.assert_called_once()
 
     @pytest.mark.unit
-    def test_capture_doc_creation(self):
-        """Test capture document reference creation"""
-        mock_db = MagicMock()
-        mock_collection = MagicMock()
-        mock_document = MagicMock()
+    def test_a_failed_forever_list_does_not_raise(self, tmp_path, monkeypatch):
+        import subprocess as sp
+        monkeypatch.setenv('HOME', str(tmp_path))
+        error = sp.CalledProcessError(1, 'forever list')
+        error.stderr = 'forever not installed'
 
-        mock_db.collection.return_value = mock_collection
-        mock_collection.document.return_value = mock_document
+        with patch('settings.config', {'use_aws': True}), \
+             patch('subprocess.run', side_effect=error), \
+             patch('subprocess.Popen') as popen:
+            assert run_operator() is None
 
-        # Replicate document creation
-        document_name = 'warehouse_zone'
-        capture_doc = mock_db.collection("inspections").document(document_name)
-
-        mock_db.collection.assert_called_with("inspections")
-        mock_collection.document.assert_called_with(document_name)
+        popen.assert_not_called()
 
     @pytest.mark.unit
-    def test_status_doc_creation(self):
-        """Test status document reference creation"""
-        mock_db = MagicMock()
-        mock_collection = MagicMock()
-        mock_document = MagicMock()
+    def test_an_unexpected_error_does_not_raise(self, tmp_path, monkeypatch):
+        monkeypatch.setenv('HOME', str(tmp_path))
 
-        mock_db.collection.return_value = mock_collection
-        mock_collection.document.return_value = mock_document
+        with patch('settings.config', {'use_aws': True}), \
+             patch('subprocess.run', side_effect=FileNotFoundError('forever')), \
+             patch('subprocess.Popen') as popen:
+            assert run_operator() is None
 
-        document_name = 'warehouse_zone'
-        status_doc = mock_db.collection("status").document(document_name)
-
-        mock_db.collection.assert_called_with("status")
-        mock_collection.document.assert_called_with(document_name)
-
-
-class TestThreadingEvent:
-    """Tests for threading event handling"""
-
-    @pytest.mark.unit
-    def test_thread_event_initialization(self):
-        """Test thread event is created"""
-        import threading
-
-        thread_event = threading.Event()
-
-        assert isinstance(thread_event, threading.Event)
-        assert not thread_event.is_set()
-
-    @pytest.mark.unit
-    def test_thread_event_set(self):
-        """Test thread event can be set"""
-        import threading
-
-        thread_event = threading.Event()
-        thread_event.set()
-
-        assert thread_event.is_set()
+        popen.assert_not_called()

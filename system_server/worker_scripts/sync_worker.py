@@ -132,14 +132,26 @@ def sync_device():
         except:
             print('Failed to sync')
             time.sleep(5)
-        
-time.sleep(120)
 
-while True:
-    time.sleep(1)
-    if use_aws:
-        get_auth_token()
-        aws_client.validate_expiry()
 
-    time.sleep(10)
-    sync_device()
+# Long enough for the backend container to finish coming up; syncing before it
+# is listening just burns a cycle and logs a failure.
+STARTUP_DELAY = 120
+LOOP_DELAY = 10
+
+
+def main():
+    time.sleep(STARTUP_DELAY)
+
+    while True:
+        time.sleep(1)
+        if use_aws:
+            get_auth_token()
+            aws_client.validate_expiry()
+
+        time.sleep(LOOP_DELAY)
+        sync_device()
+
+
+if __name__ == '__main__':
+    main()

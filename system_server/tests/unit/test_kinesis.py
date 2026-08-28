@@ -1,568 +1,494 @@
+"""AWS Kinesis credential handling and record publishing.
+
+The previous version of this file defined copies of the functions inside each
+test body, so Kinesis.py itself was never imported and sat at 13.8% while 24
+tests reported green.
+
+The behaviour that matters is credential lifecycle. Credentials are short-lived
+and shared between processes through mongo: refreshing too late puts records
+through an expired key, refreshing on every call hammers the auth endpoint, and
+retrying a hard auth failure in a tight loop does both.
 """
-Unit tests for Kinesis.py
-"""
-import pytest
-import json
-import uuid
 import datetime
-from unittest.mock import Mock, patch, MagicMock, call
+import json
+import threading
+import pytest
+from unittest.mock import patch, MagicMock, call
+
+import botocore.exceptions
+
+from aws import Kinesis as kinesis_module
+from aws.Kinesis import Kinesis
+
+
+NOW_MS = 1_700_000_000_000
+HOUR_MS = 60 * 60 * 1000
+REFRESH_BUFFER_MS = 5 * 60 * 1000
+
+
+@pytest.fixture(autouse=True)
+def frozen_clock():
+    patcher = patch.object(kinesis_module, 'ms_timestamp', return_value=NOW_MS)
+    patcher.start()
+    yield patcher
+    patcher.stop()
+
+
+@pytest.fixture
+def credentials_cache():
+    """The mongo collection Kinesis shares credentials through."""
+    collection = MagicMock()
+    collection.find_one.return_value = None
+    with patch.object(kinesis_module, 'kinesis_log') as log:
+        log.database.__getitem__.return_value = collection
+        yield collection
+
+
+@pytest.fixture
+def auth_token():
+    with patch.object(kinesis_module, 'util_ref') as util:
+        util.find_one.return_value = {'token': 'id-token'}
+        yield util
+
+
+def _auth_response(status=200, expiration=NOW_MS + HOUR_MS):
+    response = MagicMock(status_code=status, text='')
+    response.json.return_value = {
+        'keys': {'access_key': 'AKIA', 'secret_key': 'SECRET', 'arn': 'arn:stream'},
+        'expiration': expiration,
+    }
+    return response
+
+
+@pytest.fixture
+def unauthorized():
+    """A Kinesis instance whose constructor authorize() was suppressed."""
+    with patch.object(Kinesis, 'authorize', return_value=False):
+        instance = Kinesis()
+    return instance
 
 
 class TestMsTimestamp:
-    """Tests for ms_timestamp function"""
+    @pytest.mark.unit
+    def test_is_epoch_milliseconds(self, frozen_clock):
+        # Every expiry comparison in this module is against this value, so it
+        # has to be in the same units as the 'expiration' the cloud returns.
+        frozen_clock.stop()
+        try:
+            value = kinesis_module.ms_timestamp()
+        finally:
+            frozen_clock.start()
+
+        expected = datetime.datetime.now().timestamp() * 1000
+        assert isinstance(value, int)
+        assert abs(value - expected) < 5000
+
+
+class TestConstruction:
+    @pytest.mark.unit
+    def test_authorizes_on_construction(self, credentials_cache, auth_token):
+        with patch.object(Kinesis, 'authorize') as authorize:
+            Kinesis()
+        authorize.assert_called_once()
 
     @pytest.mark.unit
-    @patch('datetime.datetime')
-    def test_ms_timestamp_returns_milliseconds(self, mock_datetime):
-        """Test that ms_timestamp returns time in milliseconds"""
-        mock_now = MagicMock()
-        mock_now.timestamp.return_value = 1234567890.123456
-        mock_datetime.now.return_value = mock_now
+    def test_a_failed_authorization_does_not_prevent_construction(self):
+        # settings imports Kinesis at startup; raising here would take the
+        # whole server down on a device with no network.
+        with patch.object(Kinesis, 'authorize', side_effect=RuntimeError('offline')):
+            instance = Kinesis()
 
-        def ms_timestamp():
-            return int(datetime.datetime.now().timestamp()*1000)
-
-        result = ms_timestamp()
-        expected = int(1234567890.123456 * 1000)
-
-        assert result == expected
-        assert isinstance(result, int)
-
-
-class TestKinesisInit:
-    """Tests for Kinesis class initialization"""
+        assert instance.authorized is False
 
     @pytest.mark.unit
-    def test_kinesis_initialization(self):
-        """Test Kinesis class initialization"""
-        # Replicate Kinesis.__init__ logic
-        class MockKinesis:
-            def __init__(self):
-                self.stream = None
-                self.expiration = None
-                self.REGION_NAME = 'us-east-1'
-                self.ACCESS_KEY = None
-                self.SECRET_KEY = None
-                self.CLIENT = None
-                self.authorized = False
-
-        kinesis = MockKinesis()
-
-        assert kinesis.stream is None
-        assert kinesis.expiration is None
-        assert kinesis.REGION_NAME == 'us-east-1'
-        assert kinesis.ACCESS_KEY is None
-        assert kinesis.SECRET_KEY is None
-        assert kinesis.CLIENT is None
-        assert kinesis.authorized is False
+    def test_defaults(self, unauthorized):
+        assert unauthorized.REGION_NAME == 'us-east-1'
+        assert unauthorized.CLIENT is None
+        assert unauthorized.AUTH_RETRY_MS == 60_000
 
 
 class TestAuthorize:
-    """Tests for authorize method"""
-
     @pytest.mark.unit
-    @patch('requests.post')
-    def test_authorize_success(self, mock_post):
-        """Test successful authorization"""
-        mock_response = MagicMock()
-        mock_response.status_code = 200
-        mock_response.json.return_value = {
-            'keys': {
-                'access_key': 'test_access_key',
-                'secret_key': 'test_secret_key',
-                'arn': 'test_stream_arn'
-            },
-            'expiration': 9999999999999
+    def test_valid_cached_credentials_are_reused(self, credentials_cache, unauthorized):
+        credentials_cache.find_one.return_value = {
+            'access_key': 'CACHED', 'secret_key': 'CSECRET', 'arn': 'arn:cached',
+            'expiration': NOW_MS + HOUR_MS,
         }
-        mock_post.return_value = mock_response
 
-        # Replicate authorize logic
-        class MockKinesis:
-            def __init__(self):
-                self.ACCESS_KEY = None
-                self.SECRET_KEY = None
-                self.stream = None
-                self.expiration = None
-                self.authorized = False
+        with patch('requests.post') as post:
+            assert unauthorized.authorize() is True
 
-            def authorize(self, access_token, cloud_functions_base):
-                auth_token = 'Bearer {}'.format(access_token)
-                headers = {'Authorization': auth_token}
-                url = '{}pull_foreign_auth'.format(cloud_functions_base)
-                data = {'resource_name': 'aws_kinesis'}
-                resp = mock_post(url, json=data, headers=headers, timeout=30)
-
-                if resp.status_code == 200:
-                    data = resp.json()
-                    self.ACCESS_KEY = data['keys']['access_key']
-                    self.SECRET_KEY = data['keys']['secret_key']
-                    self.stream = data['keys']['arn']
-                    self.expiration = data['expiration']
-                    self.authorized = True
-                    return True
-                else:
-                    self.authorized = False
-                    return False
-
-        kinesis = MockKinesis()
-        result = kinesis.authorize('test_token', 'https://test.cloudfunctions.net/')
-
-        assert result is True
-        assert kinesis.ACCESS_KEY == 'test_access_key'
-        assert kinesis.SECRET_KEY == 'test_secret_key'
-        assert kinesis.stream == 'test_stream_arn'
-        assert kinesis.expiration == 9999999999999
-        assert kinesis.authorized is True
+        # No round trip to the cloud: other processes on the device share this.
+        post.assert_not_called()
+        assert unauthorized.ACCESS_KEY == 'CACHED'
+        assert unauthorized.stream == 'arn:cached'
+        assert unauthorized.authorized is True
 
     @pytest.mark.unit
-    @patch('requests.post')
-    def test_authorize_failure(self, mock_post):
-        """Test authorization failure"""
-        mock_response = MagicMock()
-        mock_response.status_code = 403
-        mock_post.return_value = mock_response
+    def test_cached_credentials_inside_the_refresh_buffer_are_not_reused(
+            self, credentials_cache, auth_token, unauthorized):
+        # Expiring in 4 minutes: too close to hand to a long-running request.
+        credentials_cache.find_one.return_value = {
+            'access_key': 'CACHED', 'secret_key': 'C', 'arn': 'a',
+            'expiration': NOW_MS + (4 * 60 * 1000),
+        }
 
-        class MockKinesis:
-            def __init__(self):
-                self.ACCESS_KEY = None
-                self.SECRET_KEY = None
-                self.stream = None
-                self.expiration = None
-                self.authorized = False
+        with patch('requests.post', return_value=_auth_response()) as post:
+            assert unauthorized.authorize() is True
 
-            def authorize(self, access_token, cloud_functions_base):
-                auth_token = 'Bearer {}'.format(access_token)
-                headers = {'Authorization': auth_token}
-                url = '{}pull_foreign_auth'.format(cloud_functions_base)
-                data = {'resource_name': 'aws_kinesis'}
-                resp = mock_post(url, json=data, headers=headers, timeout=30)
+        post.assert_called_once()
+        assert unauthorized.ACCESS_KEY == 'AKIA'
 
-                if resp.status_code == 200:
-                    self.authorized = True
-                    return True
-                else:
-                    self.authorized = False
-                    return False
+    @pytest.mark.unit
+    def test_expired_cached_credentials_are_not_reused(
+            self, credentials_cache, auth_token, unauthorized):
+        credentials_cache.find_one.return_value = {
+            'access_key': 'CACHED', 'secret_key': 'C', 'arn': 'a',
+            'expiration': NOW_MS - HOUR_MS,
+        }
 
-        kinesis = MockKinesis()
-        result = kinesis.authorize('test_token', 'https://test.cloudfunctions.net/')
+        with patch('requests.post', return_value=_auth_response()):
+            unauthorized.authorize()
 
-        assert result is False
-        assert kinesis.authorized is False
+        assert unauthorized.ACCESS_KEY == 'AKIA'
+
+    @pytest.mark.unit
+    def test_a_cache_entry_without_an_expiry_is_not_reused(
+            self, credentials_cache, auth_token, unauthorized):
+        credentials_cache.find_one.return_value = {'access_key': 'CACHED'}
+
+        with patch('requests.post', return_value=_auth_response()) as post:
+            unauthorized.authorize()
+
+        post.assert_called_once()
+
+    @pytest.mark.unit
+    def test_fetches_credentials_with_the_device_token(
+            self, credentials_cache, auth_token, unauthorized):
+        with patch('requests.post', return_value=_auth_response()) as post:
+            assert unauthorized.authorize() is True
+
+        assert post.call_args[0][0] == kinesis_module.FOREIGN_PULL_PATH
+        assert post.call_args[1]['headers'] == {'Authorization': 'Bearer id-token'}
+        assert post.call_args[1]['json'] == {'resource_name': 'aws_kinesis'}
+        assert post.call_args[1]['timeout'] == 30
+
+    @pytest.mark.unit
+    def test_fresh_credentials_are_cached_for_other_processes(
+            self, credentials_cache, auth_token, unauthorized):
+        with patch('requests.post', return_value=_auth_response()):
+            unauthorized.authorize()
+
+        query, update = credentials_cache.update_one.call_args[0]
+        assert query == {'_id': 'aws_kinesis'}
+        assert update['$set']['access_key'] == 'AKIA'
+        assert update['$set']['arn'] == 'arn:stream'
+        assert credentials_cache.update_one.call_args[1]['upsert'] is True
+
+    @pytest.mark.unit
+    def test_a_rejected_request_records_the_failure_time(
+            self, credentials_cache, auth_token, unauthorized):
+        with patch('requests.post', return_value=_auth_response(status=403)):
+            assert unauthorized.authorize() is False
+
+        assert unauthorized.authorized is False
+        assert unauthorized._last_auth_failure == NOW_MS
+
+    @pytest.mark.unit
+    def test_a_successful_authorization_clears_a_previous_failure(
+            self, credentials_cache, auth_token, unauthorized):
+        unauthorized._last_auth_failure = NOW_MS - 1000
+
+        with patch('requests.post', return_value=_auth_response()):
+            unauthorized.authorize()
+
+        assert unauthorized._last_auth_failure is None
+
+    @pytest.mark.unit
+    def test_debug_logging_is_off_by_default(self, credentials_cache, auth_token,
+                                             unauthorized):
+        with patch('requests.post', return_value=_auth_response()), \
+             patch.object(unauthorized, '_log') as log:
+            unauthorized.authorize()
+        log.assert_not_called()
+
+    @pytest.mark.unit
+    def test_debug_logging_records_the_outcome(self, credentials_cache, auth_token,
+                                               unauthorized):
+        unauthorized.debug = True
+        with patch('requests.post', return_value=_auth_response()), \
+             patch.object(unauthorized, '_log') as log:
+            unauthorized.authorize()
+
+        assert log.call_args[0][0] == 'authorize_success'
 
 
 class TestValidateExpiry:
-    """Tests for validate_expiry method"""
+    @pytest.mark.unit
+    def test_an_expired_credential_is_refreshed(self, unauthorized):
+        unauthorized.expiration = NOW_MS - 1
+
+        with patch.object(unauthorized, 'authorize') as authorize:
+            unauthorized.validate_expiry()
+
+        authorize.assert_called_once()
 
     @pytest.mark.unit
-    @patch('aws.Kinesis.ms_timestamp')
-    def test_validate_expiry_not_expired(self, mock_ms_timestamp):
-        """Test validate_expiry when token is not expired"""
-        mock_ms_timestamp.return_value = 1000000
-        expiration = 2000000  # Future time
+    def test_a_live_credential_is_left_alone(self, unauthorized):
+        unauthorized.expiration = NOW_MS + HOUR_MS
 
-        # Replicate validate_expiry logic
-        def validate_expiry(expiration, current_time):
-            is_expired = expiration < current_time
-            return is_expired
+        with patch.object(unauthorized, 'authorize') as authorize:
+            unauthorized.validate_expiry()
 
-        result = validate_expiry(expiration, mock_ms_timestamp.return_value)
-
-        assert result is False
+        authorize.assert_not_called()
 
     @pytest.mark.unit
-    @patch('aws.Kinesis.ms_timestamp')
-    def test_validate_expiry_expired(self, mock_ms_timestamp):
-        """Test validate_expiry when token is expired"""
-        mock_ms_timestamp.return_value = 2000000
-        expiration = 1000000  # Past time
+    def test_an_unauthorized_instance_raises(self, unauthorized):
+        # expiration is None until the first successful authorize; the sync
+        # worker calls this every cycle, so a device that has never authorized
+        # takes the loop down.
+        unauthorized.expiration = None
 
-        def validate_expiry(expiration, current_time):
-            is_expired = expiration < current_time
-            return is_expired
-
-        result = validate_expiry(expiration, mock_ms_timestamp.return_value)
-
-        assert result is True
+        with pytest.raises(TypeError):
+            unauthorized.validate_expiry()
 
 
 class TestConnectClient:
-    """Tests for _connect_client method"""
+    @pytest.mark.unit
+    def test_a_live_credential_builds_a_client_without_reauthorizing(
+            self, unauthorized):
+        unauthorized.expiration = NOW_MS + HOUR_MS
+        unauthorized.ACCESS_KEY = 'AKIA'
+        unauthorized.SECRET_KEY = 'SECRET'
+
+        with patch('boto3.client') as boto, \
+             patch.object(unauthorized, 'authorize') as authorize:
+            assert unauthorized._connect_client() is boto.return_value
+
+        authorize.assert_not_called()
+        assert boto.call_args[1]['aws_access_key_id'] == 'AKIA'
+        assert boto.call_args[1]['region_name'] == 'us-east-1'
 
     @pytest.mark.unit
-    @patch('boto3.client')
-    def test_connect_client_success(self, mock_boto3_client):
-        """Test successful client connection"""
-        mock_client = MagicMock()
-        mock_boto3_client.return_value = mock_client
+    def test_an_existing_client_is_reused(self, unauthorized):
+        unauthorized.expiration = NOW_MS + HOUR_MS
+        unauthorized.CLIENT = MagicMock()
 
-        # Replicate _connect_client logic
-        class MockKinesis:
-            def __init__(self):
-                self.REGION_NAME = 'us-east-1'
-                self.ACCESS_KEY = 'test_key'
-                self.SECRET_KEY = 'test_secret'
-                self.CLIENT = None
-                self.authorized = False
-                self.expiration = 9999999999999
+        with patch('boto3.client') as boto:
+            assert unauthorized._connect_client() is unauthorized.CLIENT
 
-            def _connect_client(self):
-                did_authorize = True  # Assuming already authorized
-
-                if did_authorize:
-                    self.CLIENT = mock_boto3_client('kinesis',
-                                        region_name=self.REGION_NAME,
-                                        aws_access_key_id=self.ACCESS_KEY,
-                                        aws_secret_access_key=self.SECRET_KEY)
-                    self.authorized = True
-                    return self.CLIENT
-                else:
-                    return False
-
-        kinesis = MockKinesis()
-        result = kinesis._connect_client()
-
-        assert result == mock_client
-        assert kinesis.CLIENT == mock_client
-        assert kinesis.authorized is True
-        mock_boto3_client.assert_called_once_with(
-            'kinesis',
-            region_name='us-east-1',
-            aws_access_key_id='test_key',
-            aws_secret_access_key='test_secret'
-        )
+        boto.assert_not_called()
 
     @pytest.mark.unit
-    def test_connect_client_unauthorized(self):
-        """Test client connection when unauthorized"""
-        class MockKinesis:
-            def __init__(self):
-                self.CLIENT = None
-                self.authorized = False
+    def test_a_credential_inside_the_refresh_buffer_is_renewed(self, unauthorized):
+        # Renewed early so an in-flight put_record cannot straddle expiry.
+        unauthorized.expiration = NOW_MS + (REFRESH_BUFFER_MS - 1000)
 
-            def _connect_client(self):
-                did_authorize = False
+        def authorize():
+            unauthorized.ACCESS_KEY = 'NEW'
+            unauthorized.SECRET_KEY = 'NEWSECRET'
+            return True
 
-                if did_authorize:
-                    return self.CLIENT
-                else:
-                    return False
+        with patch('boto3.client') as boto, \
+             patch.object(unauthorized, 'authorize', side_effect=authorize) as auth:
+            unauthorized._connect_client()
 
-        kinesis = MockKinesis()
-        result = kinesis._connect_client()
+        auth.assert_called_once()
+        assert boto.call_args[1]['aws_access_key_id'] == 'NEW'
 
-        assert result is False
+    @pytest.mark.unit
+    def test_no_expiry_triggers_authorization(self, unauthorized):
+        unauthorized.expiration = None
+
+        with patch('boto3.client'), \
+             patch.object(unauthorized, 'authorize', return_value=True) as auth:
+            unauthorized._connect_client()
+
+        auth.assert_called_once()
+
+    @pytest.mark.unit
+    def test_a_failed_authorization_yields_no_client(self, unauthorized):
+        unauthorized.expiration = None
+
+        with patch('boto3.client') as boto, \
+             patch.object(unauthorized, 'authorize', return_value=False):
+            assert unauthorized._connect_client() is False
+
+        boto.assert_not_called()
+
+    @pytest.mark.unit
+    def test_a_recent_auth_failure_is_not_retried_immediately(self, unauthorized):
+        # Without the backoff every record would re-attempt a failing auth.
+        unauthorized.expiration = None
+        unauthorized._last_auth_failure = NOW_MS - 1000
+
+        with patch.object(unauthorized, 'authorize') as authorize:
+            assert unauthorized._connect_client() is False
+
+        authorize.assert_not_called()
+
+    @pytest.mark.unit
+    def test_the_backoff_expires(self, unauthorized):
+        unauthorized.expiration = None
+        unauthorized._last_auth_failure = NOW_MS - (unauthorized.AUTH_RETRY_MS + 1)
+
+        with patch('boto3.client'), \
+             patch.object(unauthorized, 'authorize', return_value=True) as authorize:
+            unauthorized._connect_client()
+
+        authorize.assert_called_once()
+
+    @pytest.mark.unit
+    def test_a_concurrent_refresh_is_not_repeated(self, unauthorized):
+        # Two threads reaching the buffer together must produce one auth call,
+        # not one per thread.
+        unauthorized.expiration = None
+        unauthorized.ACCESS_KEY = 'AKIA'
+
+        real_lock = unauthorized._auth_lock
+
+        class RefreshingLock:
+            def __enter__(self):
+                real_lock.acquire()
+                unauthorized.expiration = NOW_MS + HOUR_MS
+                return self
+
+            def __exit__(self, *exc):
+                real_lock.release()
+                return False
+
+        unauthorized._auth_lock = RefreshingLock()
+
+        with patch('boto3.client'), \
+             patch.object(unauthorized, 'authorize') as authorize:
+            unauthorized._connect_client()
+
+        authorize.assert_not_called()
+
+    @pytest.mark.unit
+    def test_no_credentials_at_all_yields_no_client(self, unauthorized):
+        unauthorized.expiration = NOW_MS + HOUR_MS
+        unauthorized.ACCESS_KEY = None
+
+        assert unauthorized._connect_client() is False
 
 
 class TestSendStream:
-    """Tests for send_stream method"""
+    @pytest.fixture
+    def authorized(self, unauthorized):
+        unauthorized.authorized = True
+        unauthorized.stream = 'arn:stream'
+        unauthorized.expiration = NOW_MS + HOUR_MS
+        unauthorized.ACCESS_KEY = 'AKIA'
+        unauthorized.SECRET_KEY = 'SECRET'
+        return unauthorized
 
     @pytest.mark.unit
-    @patch('uuid.uuid4')
-    def test_send_stream_success(self, mock_uuid):
-        """Test successful stream send"""
-        mock_uuid.return_value = 'test-uuid-1234'
+    def test_publishes_a_newline_delimited_record(self, authorized):
+        client = MagicMock()
+        with patch.object(authorized, '_connect_client', return_value=client):
+            assert authorized.send_stream({'a': 1}, partition_key='pk') is True
 
-        mock_client = MagicMock()
-
-        class MockKinesis:
-            def __init__(self):
-                self.authorized = True
-                self.stream = 'test_stream_arn'
-
-            def _connect_client(self):
-                return mock_client
-
-            def send_stream(self, data, partition_key=None):
-                if not self.authorized:
-                    return 'Service not authorized', 403
-
-                if partition_key == None:
-                    partition_key = mock_uuid()
-
-                client = self._connect_client()
-                if client:
-                    client.put_record(
-                        StreamARN=self.stream,
-                        Data=json.dumps(data)+'\n',
-                        PartitionKey=str(partition_key)
-                    )
-                    return True
-                else:
-                    return False
-
-        kinesis = MockKinesis()
-        test_data = {'id': 'rec1', 'value': 42}
-        result = kinesis.send_stream(test_data)
-
-        assert result is True
-        mock_client.put_record.assert_called_once_with(
-            StreamARN='test_stream_arn',
-            Data=json.dumps(test_data)+'\n',
-            PartitionKey='test-uuid-1234'
-        )
+        assert client.put_record.call_args[1]['StreamARN'] == 'arn:stream'
+        assert client.put_record.call_args[1]['Data'] == '{"a": 1}\n'
+        assert client.put_record.call_args[1]['PartitionKey'] == 'pk'
 
     @pytest.mark.unit
-    def test_send_stream_with_partition_key(self):
-        """Test stream send with custom partition key"""
-        mock_client = MagicMock()
+    def test_without_a_partition_key_records_are_spread_across_shards(self, authorized):
+        client = MagicMock()
+        with patch.object(authorized, '_connect_client', return_value=client):
+            authorized.send_stream({'a': 1})
+            authorized.send_stream({'a': 2})
 
-        class MockKinesis:
-            def __init__(self):
-                self.authorized = True
-                self.stream = 'test_stream_arn'
-
-            def _connect_client(self):
-                return mock_client
-
-            def send_stream(self, data, partition_key=None):
-                if not self.authorized:
-                    return 'Service not authorized', 403
-
-                client = self._connect_client()
-                if client:
-                    client.put_record(
-                        StreamARN=self.stream,
-                        Data=json.dumps(data)+'\n',
-                        PartitionKey=str(partition_key)
-                    )
-                    return True
-                else:
-                    return False
-
-        kinesis = MockKinesis()
-        test_data = {'id': 'rec1', 'value': 42}
-        result = kinesis.send_stream(test_data, partition_key='custom-key-123')
-
-        assert result is True
-        mock_client.put_record.assert_called_once_with(
-            StreamARN='test_stream_arn',
-            Data=json.dumps(test_data)+'\n',
-            PartitionKey='custom-key-123'
-        )
+        keys = [c[1]['PartitionKey'] for c in client.put_record.call_args_list]
+        assert keys[0] != keys[1]
 
     @pytest.mark.unit
-    def test_send_stream_unauthorized(self):
-        """Test stream send when unauthorized"""
-        class MockKinesis:
-            def __init__(self):
-                self.authorized = False
+    def test_an_unauthorized_instance_refuses(self, unauthorized):
+        unauthorized.authorized = False
 
-            def send_stream(self, data, partition_key=None):
-                if not self.authorized:
-                    return 'Service not authorized', 403
+        with patch.object(unauthorized, '_connect_client') as connect:
+            assert unauthorized.send_stream({'a': 1}) == ('Service not authorized', 403)
 
-        kinesis = MockKinesis()
-        result = kinesis.send_stream({'data': 'test'})
-
-        assert result == ('Service not authorized', 403)
+        connect.assert_not_called()
 
     @pytest.mark.unit
-    def test_send_stream_client_connection_fails(self):
-        """Test stream send when client connection fails"""
-        class MockKinesis:
-            def __init__(self):
-                self.authorized = True
+    def test_no_client_returns_false(self, authorized):
+        with patch.object(authorized, '_connect_client', return_value=False):
+            assert authorized.send_stream({'a': 1}) is False
 
-            def _connect_client(self):
-                return False
+    @pytest.mark.unit
+    @pytest.mark.parametrize('code', ['UnrecognizedClientException',
+                                      'ExpiredTokenException',
+                                      'InvalidSignatureException'])
+    def test_an_auth_error_discards_the_stale_client(self, authorized, code):
+        # Without this the instance would keep reusing a client AWS has already
+        # rejected, and every later record would fail the same way.
+        client = MagicMock()
+        client.put_record.side_effect = botocore.exceptions.ClientError(
+            {'Error': {'Code': code}}, 'PutRecord')
 
-            def send_stream(self, data, partition_key=None):
-                if not self.authorized:
-                    return 'Service not authorized', 403
+        with patch.object(authorized, '_connect_client', return_value=client), \
+             patch.object(authorized, '_log') as log:
+            with pytest.raises(botocore.exceptions.ClientError):
+                authorized.send_stream({'a': 1})
 
-                client = self._connect_client()
-                if client:
-                    return True
-                else:
-                    return False
+        assert authorized.CLIENT is None
+        assert authorized.expiration is None
+        assert log.call_args[0][0] == 'put_record_auth_error'
 
-        kinesis = MockKinesis()
-        result = kinesis.send_stream({'data': 'test'})
+    @pytest.mark.unit
+    def test_a_non_auth_error_keeps_the_client(self, authorized):
+        client = MagicMock()
+        client.put_record.side_effect = botocore.exceptions.ClientError(
+            {'Error': {'Code': 'ProvisionedThroughputExceededException'}}, 'PutRecord')
+        authorized.CLIENT = client
 
-        assert result is False
+        with patch.object(authorized, '_connect_client', return_value=client):
+            with pytest.raises(botocore.exceptions.ClientError):
+                authorized.send_stream({'a': 1})
+
+        assert authorized.CLIENT is client
+        assert authorized.expiration is not None
+
+
+class TestLog:
+    @pytest.mark.unit
+    def test_writes_an_audit_record(self, unauthorized):
+        with patch.object(kinesis_module, 'kinesis_log') as log:
+            unauthorized._log('authorize_failed', {'status': 403})
+
+        document = log.insert_one.call_args[0][0]
+        assert document['event'] == 'authorize_failed'
+        assert document['details'] == {'status': 403}
+        assert document['ts_ms'] == NOW_MS
+
+    @pytest.mark.unit
+    def test_details_default_to_empty(self, unauthorized):
+        with patch.object(kinesis_module, 'kinesis_log') as log:
+            unauthorized._log('authorize_success')
+
+        assert log.insert_one.call_args[0][0]['details'] == {}
+
+    @pytest.mark.unit
+    def test_a_mongo_failure_never_propagates(self, unauthorized):
+        # Logging sits inside the publish path; failing here must not lose the
+        # record or mask the original error.
+        with patch.object(kinesis_module, 'kinesis_log') as log:
+            log.insert_one.side_effect = Exception('no mongo')
+            unauthorized._log('authorize_failed')
 
 
 class TestGetAuthToken:
-    """Tests for get_auth_token method"""
+    @pytest.mark.unit
+    def test_reads_the_stored_access_token(self, auth_token, unauthorized):
+        assert unauthorized.get_auth_token() == 'id-token'
+        auth_token.find_one.assert_called_once_with(
+            {'type': 'access_token'}, {'_id': 0})
 
     @pytest.mark.unit
-    def test_get_auth_token_success(self):
-        """Test successful auth token retrieval"""
-        mock_util_ref = MagicMock()
-        mock_util_ref.find_one.return_value = {
-            'type': 'access_token',
-            'token': 'test_access_token_12345'
-        }
-
-        def get_auth_token():
-            access_token_obj = mock_util_ref.find_one({'type': 'access_token'}, {'_id': 0})
-            access_token = access_token_obj['token']
-            return access_token
-
-        result = get_auth_token()
-
-        assert result == 'test_access_token_12345'
-        mock_util_ref.find_one.assert_called_once_with({'type': 'access_token'}, {'_id': 0})
-
-    @pytest.mark.unit
-    def test_get_auth_token_not_found(self):
-        """Test auth token retrieval when not found"""
-        mock_util_ref = MagicMock()
-        mock_util_ref.find_one.return_value = None
-
-        def get_auth_token():
-            access_token_obj = mock_util_ref.find_one({'type': 'access_token'}, {'_id': 0})
-            if access_token_obj:
-                return access_token_obj['token']
-            return None
-
-        result = get_auth_token()
-
-        assert result is None
-
-
-class TestDataSerialization:
-    """Tests for data serialization"""
-
-    @pytest.mark.unit
-    def test_json_dumps_with_newline(self):
-        """Test that data is serialized with newline"""
-        data = {'id': 'test', 'value': 123}
-
-        serialized = json.dumps(data) + '\n'
-
-        assert serialized.endswith('\n')
-        assert json.loads(serialized.strip()) == data
-
-    @pytest.mark.unit
-    def test_json_dumps_various_types(self):
-        """Test JSON serialization of various data types"""
-        test_cases = [
-            {'string': 'value'},
-            {'number': 42},
-            {'float': 3.14},
-            {'bool': True},
-            {'null': None},
-            {'array': [1, 2, 3]},
-            {'nested': {'key': 'value'}}
-        ]
-
-        for data in test_cases:
-            serialized = json.dumps(data) + '\n'
-            assert isinstance(serialized, str)
-            assert serialized.endswith('\n')
-            deserialized = json.loads(serialized.strip())
-            assert deserialized == data
-
-
-class TestPartitionKey:
-    """Tests for partition key handling"""
-
-    @pytest.mark.unit
-    @patch('uuid.uuid4')
-    def test_partition_key_generated(self, mock_uuid):
-        """Test partition key is generated when not provided"""
-        mock_uuid.return_value = uuid.UUID('12345678-1234-5678-1234-567812345678')
-
-        partition_key = None
-        if partition_key == None:
-            partition_key = uuid.uuid4()
-
-        assert partition_key == uuid.UUID('12345678-1234-5678-1234-567812345678')
-        mock_uuid.assert_called_once()
-
-    @pytest.mark.unit
-    def test_partition_key_provided(self):
-        """Test partition key is used when provided"""
-        partition_key = 'custom-partition-key'
-
-        if partition_key == None:
-            partition_key = uuid.uuid4()
-
-        assert partition_key == 'custom-partition-key'
-
-    @pytest.mark.unit
-    def test_partition_key_string_conversion(self):
-        """Test partition key is converted to string"""
-        partition_keys = [
-            uuid.uuid4(),
-            123,
-            'string-key',
-            None
-        ]
-
-        for key in partition_keys:
-            if key is not None:
-                str_key = str(key)
-                assert isinstance(str_key, str)
-
-
-class TestRegionConfiguration:
-    """Tests for region configuration"""
-
-    @pytest.mark.unit
-    def test_default_region_name(self):
-        """Test default region name is us-east-1"""
-        class MockKinesis:
-            def __init__(self):
-                self.REGION_NAME = 'us-east-1'
-
-        kinesis = MockKinesis()
-
-        assert kinesis.REGION_NAME == 'us-east-1'
-
-
-class TestAuthorizationHeader:
-    """Tests for authorization header construction"""
-
-    @pytest.mark.unit
-    def test_bearer_token_format(self):
-        """Test Bearer token format"""
-        access_token = 'test_token_12345'
-        auth_token = 'Bearer {}'.format(access_token)
-
-        assert auth_token == 'Bearer test_token_12345'
-        assert auth_token.startswith('Bearer ')
-
-    @pytest.mark.unit
-    def test_authorization_headers(self):
-        """Test authorization headers dictionary"""
-        access_token = 'test_token_12345'
-        auth_token = 'Bearer {}'.format(access_token)
-        headers = {'Authorization': auth_token}
-
-        assert 'Authorization' in headers
-        assert headers['Authorization'] == 'Bearer test_token_12345'
-
-
-class TestRequestData:
-    """Tests for request data construction"""
-
-    @pytest.mark.unit
-    def test_resource_name_in_request(self):
-        """Test resource_name is included in request data"""
-        data = {'resource_name': 'aws_kinesis'}
-
-        assert 'resource_name' in data
-        assert data['resource_name'] == 'aws_kinesis'
-
-
-class TestStreamARN:
-    """Tests for Stream ARN handling"""
-
-    @pytest.mark.unit
-    def test_stream_arn_storage(self):
-        """Test stream ARN is stored correctly"""
-        class MockKinesis:
-            def __init__(self):
-                self.stream = None
-
-            def set_stream(self, arn):
-                self.stream = arn
-
-        kinesis = MockKinesis()
-        kinesis.set_stream('arn:aws:kinesis:us-east-1:123456789:stream/test-stream')
-
-        assert kinesis.stream == 'arn:aws:kinesis:us-east-1:123456789:stream/test-stream'
-        assert kinesis.stream.startswith('arn:aws:kinesis:')
+    def test_an_unregistered_device_raises(self, unauthorized):
+        with patch.object(kinesis_module, 'util_ref') as util:
+            util.find_one.return_value = None
+            with pytest.raises(TypeError):
+                unauthorized.get_auth_token()

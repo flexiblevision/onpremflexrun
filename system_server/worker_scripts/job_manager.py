@@ -385,16 +385,22 @@ def push_analytics_to_cloud(domain, access_token):
     return True
 
 
+# Deploying an addon now happens in addons.jobs.enable_addon, driven by the
+# descriptor in addons/catalog/<name>/. These three remain only because rq
+# serialises a job by import path: a job queued before the upgrade still names
+# one of them, and deleting them would strand it.
+def _enable_addon(name):
+    from addons.jobs import enable_addon
+    return enable_addon(name)
+
+
 def enable_ocr():
-    install_file = f"{os.environ['HOME']}/flex-run/helpers/install_ocr.sh"
-    os.system(f"sudo sh {install_file}")
+    return _enable_addon('ocr')
 
 
 def enable_assembly_guidance():
-    install_file = f"{os.environ['HOME']}/flex-run/helpers/install_assembly.sh"
-    os.system(f"sudo sh {install_file}")
+    return _enable_addon('assembly')
 
 
 def enable_audio():
-    install_file = f"{os.environ['HOME']}/flex-run/helpers/install_audio.sh"
-    os.system(f"sudo sh {install_file}")
+    return _enable_addon('anomaly_audio')

@@ -1,5 +1,8 @@
 requests==2.31.0
 python-jose==3.1.0
+# release/verify.py checks the release signature with this rather than
+# shelling out to cosign, which is a 141MB binary wanting a transparency log.
+cryptography>=41.0.0
 Flask==2.3.3
 flask-restx==1.3.0
 Flask-Cors==3.0.8

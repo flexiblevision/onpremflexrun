@@ -13,7 +13,7 @@ from . import (
     ftp_routes,
     timemachine_routes,
     assembly_routes,
-    audio_routes,
+    addon_routes,
     mqtt_routes
 )
 
@@ -46,14 +46,16 @@ def register_all_routes(api, settings):
     # FTP management routes
     ftp_routes.register_routes(api)
 
-    # Timemachine and OCR routes
+    # Timemachine install/uninstall routes
     timemachine_routes.register_routes(api)
 
-    # Assembly upload, media, and assembly-guidance enable/status routes
+    # Assembly content upload and media serving
     assembly_routes.register_routes(api)
 
-    # Audio devices feature enable/status routes
-    audio_routes.register_routes(api)
+    # Every addon's enable/disable/status, generated from addons/catalog.
+    # Registers the legacy per-addon paths too, so an older captureui keeps
+    # working against a device that has been upgraded.
+    addon_routes.register_routes(api)
 
     # MQTT bridge management routes
     if 'use_mqtt' in settings.config and settings.config['use_mqtt']:

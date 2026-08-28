@@ -228,3 +228,35 @@ class TestFlexRunErrorMapping:
 
     def test_unknown_code_degrades_gracefully(self):
         assert upgrade_runner.flex_run_error(77) == 'Update fetch failed (exit 77)'
+
+    def test_every_exit_code_the_script_defines_has_a_message(self):
+        """Two files have to agree. An unmapped code reaches the operator as
+        'exit 15', which is not something a floor operator can act on."""
+        import os
+        import re
+
+        script = os.path.join(
+            os.path.dirname(os.path.abspath(__file__)),
+            '..', '..', '..', 'upgrades', 'upgrade_flex_run.sh')
+        with open(script) as handle:
+            lines = handle.read().splitlines()
+
+        # Only the "Exit codes:" block, so an unrelated number in a comment
+        # cannot invent a code and fail this spuriously.
+        block, collecting = [], False
+        for line in lines:
+            if not line.startswith('#'):
+                break
+            if 'Exit codes' in line:
+                collecting = True
+            elif collecting and not re.match(r'^#\s+\d', line):
+                collecting = False
+            if collecting:
+                block.append(line)
+
+        documented = {int(code) for code in
+                      re.findall(r'\b(\d+)\s+\w', ' '.join(block))} - {0}
+        assert documented, 'could not parse exit codes out of the script header'
+        assert documented <= set(upgrade_runner.FLEX_RUN_ERRORS), \
+            'unmapped exit codes: {}'.format(
+                sorted(documented - set(upgrade_runner.FLEX_RUN_ERRORS)))

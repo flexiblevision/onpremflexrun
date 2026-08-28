@@ -1,0 +1,47 @@
+{
+  "schema": "flexrun.addon/v1",
+  "name": "anomaly_audio",
+  "label": "Audio Anomaly Detection",
+  "description": "Audio-based anomaly detection for connected devices.",
+  "group": {"key": "anomaly", "label": "Anomaly Detection"},
+  "tier": "enterprise",
+  "entitlement": "audio_anomaly",
+  "kind": "container",
+  "arches": ["x86", "arm"],
+  "component": "audio-anomaly",
+  "source": "https://github.com/flexiblevision/audio_anomaly",
+  "container": {
+    "name": "audio-anomaly",
+    "default_tag": "1",
+    "restart": "unless-stopped",
+    "network": "host",
+    "gpu": "optional",
+    "env": {
+      "MONGO_URI": "mongodb://172.17.0.1:27017/"
+    },
+    "volumes": [
+      {
+        "host": "/home/visioncell/Documents/audio_anomaly_data",
+        "container": "/app/data",
+        "create": true
+      }
+    ],
+    "log_opts": {"max-size": "50m", "max-file": "5"}
+  },
+  "health": {
+    "type": "http",
+    "host": "172.17.0.1",
+    "port": 5702,
+    "path": "/api/audio/devices",
+    "timeout": 2
+  },
+  "ui": {
+    "icon": "GraphicEq",
+    "order": 30,
+    "manage": "toggle"
+  },
+  "legacy_routes": {
+    "manage": "/manage_audio_devices",
+    "status": "/audio_devices_status"
+  }
+}

@@ -1,581 +1,542 @@
-"""
-Unit and integration tests for TCP server functionality
+"""The TCP command server the PLC talks to on port 5300.
 
-Note: tcp_server.py has module-level code that creates a socket server and runs
-an infinite loop. To test the functions, we extract and test their logic separately.
+This is a socket on the plant network that accepts commands, drives output pins
+and triggers inspections. Its loops used to run at import, so nothing could
+load it; they are now behind main(). The cases that matter are the ones a
+neighbour device can actually produce: a partial frame, a command that is not
+in the preset table, and a prediction that comes back non-200.
 """
-import pytest
-import socket
+import importlib.util
 import json
-from unittest.mock import Mock, patch, MagicMock, call
+import os
+import socket
+import sys
+import pytest
+from testsupport import thread_aware_sleep_mock
+from unittest.mock import patch, MagicMock, call
+
+
+REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
+TCP_DIR = os.path.join(REPO, 'tcp')
+
+
+def _load_tcp_server():
+    """Import tcp_server with the native GPIO library stubbed out.
+
+    tcp_server does `from gpio_helper import *`, a bare import that resolves
+    only with its own directory on sys.path - true when it runs as a script,
+    not when the package is imported.
+    """
+    path = os.path.join(TCP_DIR, 'tcp_server.py')
+    spec = importlib.util.spec_from_file_location('_tcp_server_under_test', path)
+    module = importlib.util.module_from_spec(spec)
+
+    sys.path.insert(0, TCP_DIR)
+    sys.modules['_tcp_server_under_test'] = module
+    try:
+        with patch('ctypes.CDLL', return_value=MagicMock()):
+            spec.loader.exec_module(module)
+    finally:
+        sys.path.pop(0)
+        sys.modules.pop('_tcp_server_under_test', None)
+    return module
+
+
+ts = _load_tcp_server()
+
+
+PRESET = {
+    'ioVal': 'cmd1', 'modelName': 'widgets', 'modelVersion': 3,
+    'cameraId': 'cam0', 'presetId': 'p1',
+}
+CONFIG = {'type': 'tcp_config', 'packet_header': False,
+          'predictions': True, 'image': False}
+
+
+@pytest.fixture
+def conn():
+    """A socket double whose recv() yields a scripted set of frames."""
+    sock = MagicMock()
+    return sock
+
+
+def _frames(*payloads):
+    """recv() side effect: the given frames, then b'' to close."""
+    return list(payloads) + [b'']
+
+
+def _sent(conn):
+    return [c[0][0] for c in conn.send.call_args_list]
 
 
 class TestTakeAction:
-    """Tests for take_action helper function"""
+    @pytest.mark.unit
+    def test_builds_a_detection_id_query_parameter(self):
+        assert ts.take_action({'did': '12345'}) == '&did=12345'
 
     @pytest.mark.unit
-    def test_take_action_with_did(self):
-        """Test take_action with device ID"""
-        # Replicate the take_action logic
-        def take_action(actions):
-            params = ''
-            for key in actions.keys():
-                if key == 'did':
-                    params += '&did=' + str(actions[key])
-            return params
-
-        actions = {'did': '12345'}
-        result = take_action(actions)
-        assert result == '&did=12345'
+    def test_unknown_keys_are_ignored(self):
+        assert ts.take_action({'other': 'x'}) == ''
 
     @pytest.mark.unit
-    def test_take_action_with_multiple_params(self):
-        """Test take_action with multiple parameters including did"""
-        def take_action(actions):
-            params = ''
-            for key in actions.keys():
-                if key == 'did':
-                    params += '&did=' + str(actions[key])
-            return params
-
-        actions = {'did': '67890', 'other_param': 'value'}
-        result = take_action(actions)
-        assert '&did=67890' in result
+    def test_no_actions_produce_no_parameters(self):
+        assert ts.take_action({}) == ''
 
     @pytest.mark.unit
-    def test_take_action_without_did(self):
-        """Test take_action without device ID"""
-        def take_action(actions):
-            params = ''
-            for key in actions.keys():
-                if key == 'did':
-                    params += '&did=' + str(actions[key])
-            return params
-
-        actions = {'other_param': 'value'}
-        result = take_action(actions)
-        assert result == ''
-
-    @pytest.mark.unit
-    def test_take_action_empty_dict(self):
-        """Test take_action with empty dictionary"""
-        def take_action(actions):
-            params = ''
-            for key in actions.keys():
-                if key == 'did':
-                    params += '&did=' + str(actions[key])
-            return params
-
-        actions = {}
-        result = take_action(actions)
-        assert result == ''
+    def test_a_non_string_detection_id_is_coerced(self):
+        assert ts.take_action({'did': 42}) == '&did=42'
 
 
 class TestReadGpioState:
-    """Tests for read_gpio_state function"""
+    @pytest.mark.unit
+    @pytest.mark.gpio
+    def test_input_request_returns_only_inputs(self):
+        state = {'inputs': [1, 0], 'outputs': [0, 1]}
+        with patch.object(ts, 'read_all_gpio_states_as_json', return_value=state):
+            assert ts.read_gpio_state('input') == {'inputs': [1, 0]}
 
     @pytest.mark.unit
-    def test_read_gpio_state_input(self):
-        """Test reading input GPIO state"""
-        # Replicate read_gpio_state logic
-        def read_all_gpio_states_as_json():
-            return {
-                "inputs": [0, 1, 0, 1, 0, 1, 0, 1],
-                "outputs": [1, 0, 1, 0, 1, 0, 1, 0]
-            }
-
-        def read_gpio_state(type):
-            io_state = read_all_gpio_states_as_json()
-            if type == 'input':
-                return {"inputs": io_state["inputs"]}
-            elif type == 'output':
-                return {"outputs": io_state["outputs"]}
-            else:
-                return {'error': 'Invalid state type requested'}
-
-        result = read_gpio_state('input')
-        assert 'inputs' in result
-        assert 'outputs' not in result
-        assert result['inputs'] == [0, 1, 0, 1, 0, 1, 0, 1]
+    @pytest.mark.gpio
+    def test_output_request_returns_only_outputs(self):
+        state = {'inputs': [1, 0], 'outputs': [0, 1]}
+        with patch.object(ts, 'read_all_gpio_states_as_json', return_value=state):
+            assert ts.read_gpio_state('output') == {'outputs': [0, 1]}
 
     @pytest.mark.unit
-    def test_read_gpio_state_output(self):
-        """Test reading output GPIO state"""
-        def read_all_gpio_states_as_json():
-            return {
-                "inputs": [0, 1, 0, 1, 0, 1, 0, 1],
-                "outputs": [1, 0, 1, 0, 1, 0, 1, 0]
-            }
-
-        def read_gpio_state(type):
-            io_state = read_all_gpio_states_as_json()
-            if type == 'input':
-                return {"inputs": io_state["inputs"]}
-            elif type == 'output':
-                return {"outputs": io_state["outputs"]}
-            else:
-                return {'error': 'Invalid state type requested'}
-
-        result = read_gpio_state('output')
-        assert 'outputs' in result
-        assert 'inputs' not in result
-        assert result['outputs'] == [1, 0, 1, 0, 1, 0, 1, 0]
-
-    @pytest.mark.unit
-    def test_read_gpio_state_invalid_type(self):
-        """Test reading GPIO state with invalid type"""
-        def read_all_gpio_states_as_json():
-            return {
-                "inputs": [0, 1, 0, 1, 0, 1, 0, 1],
-                "outputs": [1, 0, 1, 0, 1, 0, 1, 0]
-            }
-
-        def read_gpio_state(type):
-            io_state = read_all_gpio_states_as_json()
-            if type == 'input':
-                return {"inputs": io_state["inputs"]}
-            elif type == 'output':
-                return {"outputs": io_state["outputs"]}
-            else:
-                return {'error': 'Invalid state type requested'}
-
-        result = read_gpio_state('invalid')
-        assert 'error' in result
-        assert result['error'] == 'Invalid state type requested'
+    @pytest.mark.gpio
+    def test_an_unknown_type_is_an_error(self):
+        with patch.object(ts, 'read_all_gpio_states_as_json', return_value={}):
+            assert ts.read_gpio_state('sideways') == \
+                {'error': 'Invalid state type requested'}
 
 
 class TestSetPassFailPins:
-    """Tests for set_pass_fail_pins function logic"""
+    @pytest.mark.unit
+    @pytest.mark.gpio
+    def test_a_pass_pulses_pin_five(self):
+        with patch.object(ts, 'functions') as driver, \
+             patch.object(ts, 'pin_state_ref') as pins, \
+             patch('time.sleep', new=thread_aware_sleep_mock()):
+            assert ts.set_pass_fail_pins({'pass_fail': 'PASS'}) == 'PASS'
+
+        # Pin driven low (asserted), then high again (released).
+        assert call(1, 5, 0) in driver.set_gpio.call_args_list
+        assert call(1, 5, 1) in driver.set_gpio.call_args_list
+        assert pins.update_one.call_count == 2
 
     @pytest.mark.unit
-    @patch('time.sleep')
-    def test_set_pass_fail_pins_pass(self, mock_sleep):
-        """Test setting PASS pin logic"""
-        mock_functions = MagicMock()
-        mock_pin_state_ref = MagicMock()
-        mock_functions.set_gpio.return_value = 0
+    @pytest.mark.gpio
+    def test_a_fail_pulses_pin_six(self):
+        with patch.object(ts, 'functions') as driver, \
+             patch.object(ts, 'pin_state_ref'), \
+             patch('time.sleep', new=thread_aware_sleep_mock()):
+            assert ts.set_pass_fail_pins({'pass_fail': 'FAIL'}) == 'FAIL'
 
-        # Replicate set_pass_fail_pins logic
-        def set_pass_fail_pins(data):
-            if 'pass_fail' in data:
-                new_pin_state = {}
-                if data['pass_fail'] == 'PASS':
-                    mock_functions.set_gpio(1, 5, 0)  # PASS PIN ON
-                    new_pin_state['GPO5'] = True
-                if data['pass_fail'] == 'FAIL':
-                    mock_functions.set_gpio(1, 6, 0)  # FAIL PIN ON
-                    new_pin_state['GPO6'] = True
-
-                mock_pin_state_ref.update_one({'type': 'gpio_pin_state'}, {'$set': new_pin_state}, True)
-                mock_sleep(.5)
-
-                mock_functions.set_gpio(1, 5, 1)  # PASS PIN OFF
-                mock_functions.set_gpio(1, 6, 1)  # FAIL PIN OFF
-                new_pin_state['GPO5'] = False
-                new_pin_state['GPO6'] = False
-                mock_pin_state_ref.update_one({'type': 'gpio_pin_state'}, {'$set': new_pin_state}, True)
-                return data['pass_fail']
-            return None
-
-        data = {'pass_fail': 'PASS'}
-        result = set_pass_fail_pins(data)
-
-        assert result == 'PASS'
-        # PASS pin ON (1 call), then both PASS and FAIL pins OFF (2 calls) = 3 total
-        assert mock_functions.set_gpio.call_count == 3
+        assert call(1, 6, 0) in driver.set_gpio.call_args_list
 
     @pytest.mark.unit
-    @patch('time.sleep')
-    def test_set_pass_fail_pins_fail(self, mock_sleep):
-        """Test setting FAIL pin logic"""
-        mock_functions = MagicMock()
-        mock_pin_state_ref = MagicMock()
-        mock_functions.set_gpio.return_value = 0
+    @pytest.mark.gpio
+    def test_both_pins_are_always_released(self):
+        # A pin left asserted latches the reject gate open on the next part.
+        with patch.object(ts, 'functions') as driver, \
+             patch.object(ts, 'pin_state_ref') as pins, \
+             patch('time.sleep', new=thread_aware_sleep_mock()):
+            ts.set_pass_fail_pins({'pass_fail': 'PASS'})
 
-        def set_pass_fail_pins(data):
-            if 'pass_fail' in data:
-                new_pin_state = {}
-                if data['pass_fail'] == 'PASS':
-                    mock_functions.set_gpio(1, 5, 0)
-                    new_pin_state['GPO5'] = True
-                if data['pass_fail'] == 'FAIL':
-                    mock_functions.set_gpio(1, 6, 0)
-                    new_pin_state['GPO6'] = True
-
-                mock_pin_state_ref.update_one({'type': 'gpio_pin_state'}, {'$set': new_pin_state}, True)
-                mock_sleep(.5)
-
-                mock_functions.set_gpio(1, 5, 1)
-                mock_functions.set_gpio(1, 6, 1)
-                new_pin_state['GPO5'] = False
-                new_pin_state['GPO6'] = False
-                mock_pin_state_ref.update_one({'type': 'gpio_pin_state'}, {'$set': new_pin_state}, True)
-                return data['pass_fail']
-            return None
-
-        data = {'pass_fail': 'FAIL'}
-        result = set_pass_fail_pins(data)
-
-        assert result == 'FAIL'
-        # FAIL pin ON (1 call), then both PASS and FAIL pins OFF (2 calls) = 3 total
-        assert mock_functions.set_gpio.call_count == 3
+        released = pins.update_one.call_args[0][1]['$set']
+        assert released['GPO5'] is False
+        assert released['GPO6'] is False
+        assert driver.set_gpio.call_args_list[-2:] == [call(1, 5, 1), call(1, 6, 1)]
 
     @pytest.mark.unit
-    def test_set_pass_fail_pins_no_data(self):
-        """Test set_pass_fail_pins with no pass_fail data"""
-        def set_pass_fail_pins(data):
-            if 'pass_fail' in data:
-                return data['pass_fail']
-            return None
+    @pytest.mark.gpio
+    def test_the_pulse_is_held_before_release(self):
+        with patch.object(ts, 'functions'), \
+             patch.object(ts, 'pin_state_ref'), \
+             patch('time.sleep', new=thread_aware_sleep_mock()) as sleep:
+            ts.set_pass_fail_pins({'pass_fail': 'FAIL'})
 
-        data = {'other_field': 'value'}
-        result = set_pass_fail_pins(data)
-
-        assert result is None
-
-
-class TestTCPServerCommands:
-    """Integration tests for TCP server command handling"""
-
-    @pytest.mark.integration
-    def test_help_command_format(self):
-        """Test help command returns valid format"""
-        valid_commands = {'cmd1': {'modelName': 'test_model'}}
-
-        help_map = {
-            "commands": {
-                "Read Input Pins": "GPIread",
-                "Read Output Pins": "GPOread",
-                "Set Output Pin State (on/off)": ["{\"1\": true}", "{\"1\": false}"],
-                "Run Prediction": {
-                    "Valid Commands (based on your presets)": list(valid_commands.keys()),
-                    "Format": "{\"cmd1\": {\"did\": \"12345\"}}"
-                }
-            }
-        }
-
-        assert "commands" in help_map
-        assert "Read Input Pins" in help_map["commands"]
-        assert "GPIread" == help_map["commands"]["Read Input Pins"]
-        assert "cmd1" in help_map["commands"]["Run Prediction"]["Valid Commands (based on your presets)"]
-
-    @pytest.mark.integration
-    @patch('requests.get')
-    def test_prediction_command_success(self, mock_requests):
-        """Test successful prediction command"""
-        mock_response = MagicMock()
-        mock_response.status_code = 200
-        mock_response.json.return_value = {
-            'prediction': 'PASS',
-            'confidence': 0.95,
-            'pass_fail': 'PASS'
-        }
-        mock_requests.return_value = mock_response
-
-        response = mock_requests(
-            'http://172.17.0.1:5000/api/capture/predict/snap/test_model/1/cam1',
-            headers={'Authorization': 'Bearer test_token_12345'}
-        )
-
-        assert response.status_code == 200
-        assert response.json()['prediction'] == 'PASS'
-        assert response.json()['pass_fail'] == 'PASS'
-
-    @pytest.mark.integration
-    @patch('requests.get')
-    def test_prediction_command_failure(self, mock_requests):
-        """Test failed prediction command"""
-        mock_response = MagicMock()
-        mock_response.status_code = 500
-        mock_requests.return_value = mock_response
-
-        response = mock_requests(
-            'http://172.17.0.1:5000/api/capture/predict/snap/test_model/1/cam1',
-            headers={'Authorization': 'Bearer test_token_12345'}
-        )
-
-        assert response.status_code == 500
-
-
-class TestTCPServerPacketHeader:
-    """Tests for TCP packet header functionality"""
+        sleep.assert_called_once_with(.5)
 
     @pytest.mark.unit
-    def test_packet_with_header(self):
-        """Test packet formatting with header enabled"""
-        data = {'prediction': 'PASS', 'confidence': 0.95}
-        data_bytes = json.dumps(data).encode('utf-8')
+    @pytest.mark.gpio
+    def test_a_result_without_a_verdict_touches_nothing(self):
+        with patch.object(ts, 'functions') as driver, \
+             patch.object(ts, 'pin_state_ref') as pins:
+            assert ts.set_pass_fail_pins({'other': 1}) is None
 
-        # Simulate packet header creation
-        packet_header = b'\x01' + str(len(data_bytes)).encode('utf-8')
-        full_packet = packet_header + b'\x02' + data_bytes + b'\x03' + b'\x0d'
-
-        assert full_packet.startswith(b'\x01')
-        assert b'\x02' in full_packet
-        assert b'\x03' in full_packet
-        assert full_packet.endswith(b'\x0d')
-        assert data_bytes in full_packet
+        driver.set_gpio.assert_not_called()
+        pins.update_one.assert_not_called()
 
     @pytest.mark.unit
-    def test_packet_without_header(self):
-        """Test packet formatting without header"""
-        data = {'prediction': 'PASS', 'confidence': 0.95}
-        data_bytes = json.dumps(data).encode('utf-8')
+    @pytest.mark.gpio
+    def test_an_unrecognised_verdict_still_releases_both_pins(self):
+        with patch.object(ts, 'functions') as driver, \
+             patch.object(ts, 'pin_state_ref'), \
+             patch('time.sleep', new=thread_aware_sleep_mock()):
+            assert ts.set_pass_fail_pins({'pass_fail': 'UNKNOWN'}) == 'UNKNOWN'
 
-        assert data_bytes == json.dumps(data).encode('utf-8')
-        assert not data_bytes.startswith(b'\x01')
+        assert driver.set_gpio.call_args_list == [call(1, 5, 1), call(1, 6, 1)]
+
+
+class TestHelpPayload:
+    @pytest.mark.unit
+    def test_lists_the_configured_prediction_commands(self):
+        payload = ts.help_payload({'cmd1': PRESET, 'cmd2': PRESET})
+        run = payload['commands']['Run Prediction']
+
+        assert sorted(run['Valid Commands (based on your presets)']) == ['cmd1', 'cmd2']
 
     @pytest.mark.unit
-    def test_config_filter_keys(self):
-        """Test filtering response data based on config"""
-        config = {
-            'packet_header': True,
-            'confidence': True,
-            'prediction': True,
-            'bbox': False,
-            'image': False
-        }
-
-        data = {
-            'prediction': 'PASS',
-            'confidence': 0.95,
-            'bbox': [10, 20, 30, 40],
-            'image': 'base64string'
-        }
-
-        # Simulate config filtering
-        keys_to_remove = [k for k in config if not config[k] and k != 'packet_header']
-        for k in keys_to_remove:
-            if k in data:
-                del data[k]
-
-        assert 'prediction' in data
-        assert 'confidence' in data
-        assert 'bbox' not in data
-        assert 'image' not in data
-
-
-class TestTCPServerErrorHandling:
-    """Tests for error handling in TCP server"""
+    def test_documents_the_pin_read_commands(self):
+        commands = ts.help_payload({})['commands']
+        assert commands['Read Input Pins'] == 'GPIread'
+        assert commands['Read Output Pins'] == 'GPOread'
 
     @pytest.mark.unit
-    def test_invalid_json_command(self):
-        """Test handling of invalid JSON command"""
-        invalid_json = b'{"invalid_json": '
+    def test_is_json_serialisable(self):
+        assert json.loads(json.dumps(ts.help_payload({'cmd1': PRESET})))
 
-        with pytest.raises(json.JSONDecodeError):
-            json.loads(invalid_json.decode('utf-8'))
+
+class TestLoadValidCommands:
+    @pytest.mark.unit
+    def test_indexes_tcp_presets_by_their_command_string(self):
+        with patch.object(ts.io_ref, 'find', return_value=[PRESET]) as find:
+            assert ts.load_valid_commands() == {'cmd1': PRESET}
+        find.assert_called_once_with({'ioType': 'TCP'})
 
     @pytest.mark.unit
-    def test_empty_command(self):
-        """Test handling of empty command"""
-        empty_data = b''
+    def test_no_presets_is_an_empty_table(self):
+        with patch.object(ts.io_ref, 'find', return_value=[]):
+            assert ts.load_valid_commands() == {}
 
-        # Empty data should be treated as connection close
-        assert len(empty_data) == 0
+
+class TestHandleConnectionReadCommands:
+    @pytest.mark.unit
+    def test_help_returns_the_command_reference(self, conn):
+        conn.recv.side_effect = _frames(b'help')
+
+        ts.handle_connection(conn, ('10.0.0.9', 4000), {'cmd1': PRESET}, CONFIG)
+
+        assert json.loads(_sent(conn)[0])['commands']['Read Input Pins'] == 'GPIread'
 
     @pytest.mark.unit
-    def test_unknown_command(self):
-        """Test handling of unknown command"""
-        command_data = json.dumps({"unknown_cmd": {"did": "12345"}})
-        incoming_command = json.loads(command_data)
-        command = list(incoming_command.keys())[0]
+    @pytest.mark.gpio
+    def test_gpiread_returns_the_input_pins(self, conn):
+        conn.recv.side_effect = _frames(b'GPIread')
+        with patch.object(ts, 'read_all_gpio_states_as_json',
+                          return_value={'inputs': [1, 0], 'outputs': [0, 0]}):
+            ts.handle_connection(conn, ('10.0.0.9', 4000), {}, CONFIG)
 
-        valid_commands = {'cmd1': {}, 'cmd2': {}}
-
-        assert command not in valid_commands.keys()
-
-    @pytest.mark.unit
-    def test_socket_error_on_send(self):
-        """Test socket error during data send"""
-        mock_socket = MagicMock()
-        mock_socket.sendall.side_effect = socket.error('Connection broken')
-
-        data_bytes = b'test_data'
-
-        with pytest.raises(socket.error):
-            mock_socket.sendall(data_bytes)
-
-
-class TestTCPServerConnection:
-    """Tests for TCP server connection handling"""
+        assert json.loads(_sent(conn)[0]) == {'inputs': [1, 0]}
 
     @pytest.mark.unit
-    @patch('socket.socket')
-    def test_socket_creation(self, mock_socket_class):
-        """Test socket creation and configuration"""
-        mock_sock = MagicMock()
-        mock_socket_class.return_value = mock_sock
+    @pytest.mark.gpio
+    def test_gporead_returns_the_output_pins(self, conn):
+        conn.recv.side_effect = _frames(b'GPOread')
+        with patch.object(ts, 'read_all_gpio_states_as_json',
+                          return_value={'inputs': [0, 0], 'outputs': [1, 1]}):
+            ts.handle_connection(conn, ('10.0.0.9', 4000), {}, CONFIG)
 
-        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        server_address = ('0.0.0.0', 5300)
+        assert json.loads(_sent(conn)[0]) == {'outputs': [1, 1]}
 
-        # Verify socket was created
-        mock_socket_class.assert_called_once_with(socket.AF_INET, socket.SOCK_STREAM)
+
+class TestHandleConnectionPinCommands:
+    @pytest.mark.unit
+    @pytest.mark.gpio
+    def test_a_single_character_key_sets_an_output_pin(self, conn):
+        conn.recv.side_effect = _frames(b'{"1": true}')
+        with patch.object(ts, 'set_pin_state', return_value='on') as set_pin, \
+             patch.object(ts, 'log_signal') as log:
+            ts.handle_connection(conn, ('10.0.0.9', 4000), {}, CONFIG)
+
+        set_pin.assert_called_once_with('1', True)
+        assert _sent(conn) == [b'on\n']
+        log.assert_called_once_with(b'{"1": true}')
 
     @pytest.mark.unit
-    def test_server_address_format(self):
-        """Test server address format"""
-        server_name = '0.0.0.0'
-        server_port = 5300
-        server_address = (server_name, server_port)
+    @pytest.mark.gpio
+    def test_turning_a_pin_off_is_acknowledged(self, conn):
+        conn.recv.side_effect = _frames(b'{"2": false}')
+        with patch.object(ts, 'set_pin_state', return_value='off'), \
+             patch.object(ts, 'log_signal'):
+            ts.handle_connection(conn, ('10.0.0.9', 4000), {}, CONFIG)
 
-        assert server_address[0] == '0.0.0.0'
-        assert server_address[1] == 5300
-        assert isinstance(server_address, tuple)
-
-    @pytest.mark.unit
-    @patch('socket.socket')
-    def test_socket_bind_and_listen(self, mock_socket_class):
-        """Test socket bind and listen"""
-        mock_sock = MagicMock()
-        mock_socket_class.return_value = mock_sock
-
-        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        server_address = ('0.0.0.0', 5300)
-
-        sock.bind(server_address)
-        sock.listen(1)
-
-        mock_sock.bind.assert_called_once_with(server_address)
-        mock_sock.listen.assert_called_once_with(1)
+        assert _sent(conn) == [b'off\n']
 
     @pytest.mark.unit
-    @patch('socket.socket')
-    def test_connection_accept(self, mock_socket_class):
-        """Test accepting connections"""
-        mock_sock = MagicMock()
-        mock_connection = MagicMock()
-        mock_client_address = ('192.168.1.100', 54321)
+    @pytest.mark.gpio
+    def test_the_raw_frame_is_recorded_before_the_pin_moves(self, conn):
+        # gpio_csv_logger reconstructs cycle timing from these frames; logging
+        # after the driver call would attribute the wrong timestamp.
+        order = []
+        conn.recv.side_effect = _frames(b'{"1": true}')
+        with patch.object(ts, 'set_pin_state',
+                          side_effect=lambda *a: order.append('set') or 'on'), \
+             patch.object(ts, 'log_signal', side_effect=lambda d: order.append('log')):
+            ts.handle_connection(conn, ('10.0.0.9', 4000), {}, CONFIG)
 
-        mock_sock.accept.return_value = (mock_connection, mock_client_address)
-        mock_socket_class.return_value = mock_sock
-
-        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        connection, client_address = sock.accept()
-
-        assert connection == mock_connection
-        assert client_address == mock_client_address
+        assert order == ['log', 'set']
 
 
-class TestTCPServerPresets:
-    """Tests for TCP preset and command validation"""
-
-    @pytest.mark.unit
-    def test_load_valid_commands(self):
-        """Test loading valid commands from database"""
-        mock_io_ref = MagicMock()
-        mock_io_ref.find.return_value = [
-            {'ioType': 'TCP', 'ioVal': 'cmd1', 'modelName': 'model1'},
-            {'ioType': 'TCP', 'ioVal': 'cmd2', 'modelName': 'model2'},
-            {'ioType': 'TCP', 'ioVal': 'cmd3', 'modelName': 'model3'}
-        ]
-
-        query = {'ioType': 'TCP'}
-        presets = mock_io_ref.find(query)
-        valid_commands = {}
-
-        for preset in presets:
-            valid_commands[preset['ioVal']] = preset
-
-        assert len(valid_commands) == 3
-        assert 'cmd1' in valid_commands
-        assert 'cmd2' in valid_commands
-        assert 'cmd3' in valid_commands
+class TestHandleConnectionPredictions:
+    def _response(self, status=200, body=None):
+        resp = MagicMock(status_code=status)
+        resp.json.return_value = body if body is not None else {'pass_fail': 'PASS'}
+        return resp
 
     @pytest.mark.unit
-    def test_preset_with_all_fields(self):
-        """Test preset with all required fields"""
-        preset = {
-            'ioType': 'TCP',
-            'ioVal': 'test_cmd',
-            'modelName': 'test_model',
-            'modelVersion': 1,
-            'cameraId': 'cam1',
-            'presetId': 'preset123'
-        }
+    def test_a_known_command_triggers_a_prediction(self, conn):
+        conn.recv.side_effect = _frames(b'{"cmd1": {}}')
+        with patch.object(ts.util_ref, 'find_one', return_value={'token': 'tok'}), \
+             patch('requests.get', return_value=self._response()) as get, \
+             patch.object(ts, 'set_pass_fail_pins'):
+            ts.handle_connection(conn, ('10.0.0.9', 4000), {'cmd1': PRESET}, CONFIG)
 
-        assert preset['ioType'] == 'TCP'
-        assert preset['ioVal'] == 'test_cmd'
-        assert preset['modelName'] == 'test_model'
-        assert preset['modelVersion'] == 1
-        assert preset['cameraId'] == 'cam1'
-        assert preset['presetId'] == 'preset123'
+        url = get.call_args[0][0]
+        assert '/api/capture/predict/snap/widgets/3/cam0' in url
+        assert get.call_args[1]['headers'] == {'Authorization': 'Bearer tok'}
 
     @pytest.mark.unit
-    def test_build_prediction_url(self):
-        """Test building prediction URL from preset"""
-        preset = {
-            'modelName': 'test_model',
-            'modelVersion': 1,
-            'cameraId': 'cam1',
-            'presetId': 'preset1',
-            'ioVal': 'cmd1'
-        }
+    def test_the_workstation_records_the_caller_address(self, conn):
+        conn.recv.side_effect = _frames(b'{"cmd1": {}}')
+        with patch.object(ts.util_ref, 'find_one', return_value={'token': 'tok'}), \
+             patch('requests.get', return_value=self._response()) as get, \
+             patch.object(ts, 'set_pass_fail_pins'):
+            ts.handle_connection(conn, ('10.0.0.9', 4000), {'cmd1': PRESET}, CONFIG)
 
-        host = 'http://172.17.0.1'
-        port = '5000'
-        client_address = ('192.168.1.100', 54321)
-        params = '&did=12345'
-
-        path = f"/api/capture/predict/snap/{preset['modelName']}/{preset['modelVersion']}/{preset['cameraId']}?workstation=TCP: {client_address[0]}:{preset['ioVal']}&preset_id={preset['presetId']}{params}"
-        url = host + ':' + port + path
-
-        assert 'test_model' in url
-        assert '192.168.1.100' in url
-        assert 'preset1' in url
-        assert 'did=12345' in url
-
-
-class TestTCPServerDataEncoding:
-    """Tests for data encoding and decoding"""
+        assert 'workstation=TCP: 10.0.0.9:cmd1' in get.call_args[0][0]
 
     @pytest.mark.unit
-    def test_encode_json_response(self):
-        """Test encoding JSON response to bytes"""
-        response_data = {
-            'prediction': 'PASS',
-            'confidence': 0.95,
-            'timestamp': '2025-10-11T12:00:00'
-        }
+    def test_a_detection_id_is_forwarded(self, conn):
+        conn.recv.side_effect = _frames(b'{"cmd1": {"did": "12345"}}')
+        with patch.object(ts.util_ref, 'find_one', return_value={'token': 'tok'}), \
+             patch('requests.get', return_value=self._response()) as get, \
+             patch.object(ts, 'set_pass_fail_pins'):
+            ts.handle_connection(conn, ('10.0.0.9', 4000), {'cmd1': PRESET}, CONFIG)
 
-        json_str = json.dumps(response_data)
-        data_bytes = json_str.encode('utf-8')
-
-        assert isinstance(data_bytes, bytes)
-        assert b'PASS' in data_bytes
-        assert b'0.95' in data_bytes
+        assert '&did=12345' in get.call_args[0][0]
 
     @pytest.mark.unit
-    def test_decode_received_data(self):
-        """Test decoding received data"""
-        received_data = b'{"cmd1": {"did": "12345"}}'
+    def test_the_result_is_returned_to_the_neighbour(self, conn):
+        conn.recv.side_effect = _frames(b'{"cmd1": {}}')
+        body = {'pass_fail': 'PASS', 'predictions': [1]}
+        with patch.object(ts.util_ref, 'find_one', return_value={'token': 'tok'}), \
+             patch('requests.get', return_value=self._response(body=body)), \
+             patch.object(ts, 'set_pass_fail_pins'):
+            ts.handle_connection(conn, ('10.0.0.9', 4000), {'cmd1': PRESET}, CONFIG)
 
-        decoded = received_data.decode('utf-8')
-        parsed = json.loads(decoded)
-
-        assert isinstance(parsed, dict)
-        assert 'cmd1' in parsed
-        assert parsed['cmd1']['did'] == '12345'
-
-    @pytest.mark.unit
-    def test_handle_string_commands(self):
-        """Test handling simple string commands"""
-        help_command = b'help'
-        gpiread_command = b'GPIread'
-        gporead_command = b'GPOread'
-
-        assert help_command.decode('utf-8') == 'help'
-        assert gpiread_command.decode('utf-8') == 'GPIread'
-        assert gporead_command.decode('utf-8') == 'GPOread'
+        assert json.loads(conn.sendall.call_args[0][0]) == body
 
     @pytest.mark.unit
-    def test_handle_utf8_encoding(self):
-        """Test UTF-8 encoding/decoding"""
-        test_data = {'message': 'Test with special chars: ñ, é, ü'}
+    @pytest.mark.gpio
+    def test_the_verdict_drives_the_pass_fail_pins(self, conn):
+        conn.recv.side_effect = _frames(b'{"cmd1": {}}')
+        with patch.object(ts.util_ref, 'find_one', return_value={'token': 'tok'}), \
+             patch('requests.get', return_value=self._response()), \
+             patch.object(ts, 'set_pass_fail_pins') as pins:
+            ts.handle_connection(conn, ('10.0.0.9', 4000), {'cmd1': PRESET}, CONFIG)
 
-        encoded = json.dumps(test_data).encode('utf-8')
-        decoded = encoded.decode('utf-8')
-        parsed = json.loads(decoded)
+        pins.assert_called_once_with({'pass_fail': 'PASS'})
 
-        assert parsed['message'] == test_data['message']
+    @pytest.mark.unit
+    @pytest.mark.gpio
+    def test_a_gpio_failure_does_not_stop_the_reply(self, conn):
+        # The neighbour is waiting on the socket; a driver fault must not hang
+        # it.
+        conn.recv.side_effect = _frames(b'{"cmd1": {}}')
+        with patch.object(ts.util_ref, 'find_one', return_value={'token': 'tok'}), \
+             patch('requests.get', return_value=self._response()), \
+             patch.object(ts, 'set_pass_fail_pins', side_effect=OSError('no driver')):
+            ts.handle_connection(conn, ('10.0.0.9', 4000), {'cmd1': PRESET}, CONFIG)
+
+        conn.sendall.assert_called_once()
+
+    @pytest.mark.unit
+    def test_fields_disabled_in_config_are_stripped(self, conn):
+        conn.recv.side_effect = _frames(b'{"cmd1": {}}')
+        body = {'pass_fail': 'PASS', 'predictions': [1], 'image': 'base64...'}
+        with patch.object(ts.util_ref, 'find_one', return_value={'token': 'tok'}), \
+             patch('requests.get', return_value=self._response(body=body)), \
+             patch.object(ts, 'set_pass_fail_pins'):
+            ts.handle_connection(conn, ('10.0.0.9', 4000), {'cmd1': PRESET}, CONFIG)
+
+        sent = json.loads(conn.sendall.call_args[0][0])
+        assert 'image' not in sent
+        assert sent['predictions'] == [1]
+
+    @pytest.mark.unit
+    def test_the_packet_header_frames_the_payload_when_enabled(self, conn):
+        # STX/ETX framing with a length prefix, for neighbours that cannot
+        # read a bare JSON stream.
+        conn.recv.side_effect = _frames(b'{"cmd1": {}}')
+        config = dict(CONFIG, packet_header=True)
+        with patch.object(ts.util_ref, 'find_one', return_value={'token': 'tok'}), \
+             patch('requests.get', return_value=self._response(body={'a': 1})), \
+             patch.object(ts, 'set_pass_fail_pins'):
+            ts.handle_connection(conn, ('10.0.0.9', 4000), {'cmd1': PRESET}, config)
+
+        framed = conn.sendall.call_args[0][0]
+        payload = json.dumps({'a': 1}).encode()
+        assert framed == b'\x01' + str(len(payload)).encode() + \
+            b'\x02' + payload + b'\x03' + b'\x0d'
+
+    @pytest.mark.unit
+    def test_a_failed_send_falls_back_to_an_error_marker(self, conn):
+        conn.recv.side_effect = _frames(b'{"cmd1": {}}')
+        conn.sendall.side_effect = [socket.error('broken pipe'), None]
+        with patch.object(ts.util_ref, 'find_one', return_value={'token': 'tok'}), \
+             patch('requests.get', return_value=self._response()), \
+             patch.object(ts, 'set_pass_fail_pins'):
+            ts.handle_connection(conn, ('10.0.0.9', 4000), {'cmd1': PRESET}, CONFIG)
+
+        assert conn.sendall.call_args_list[-1] == call(b'-1')
+
+    @pytest.mark.unit
+    def test_a_non_200_prediction_reports_failure(self, conn):
+        conn.recv.side_effect = _frames(b'{"cmd1": {}}')
+        with patch.object(ts.util_ref, 'find_one', return_value={'token': 'tok'}), \
+             patch('requests.get', return_value=self._response(status=500)):
+            ts.handle_connection(conn, ('10.0.0.9', 4000), {'cmd1': PRESET}, CONFIG)
+
+        assert _sent(conn) == [b'request failed\n']
+        conn.sendall.assert_not_called()
+
+
+class TestHandleConnectionErrors:
+    @pytest.mark.unit
+    def test_an_unknown_command_is_rejected(self, conn):
+        conn.recv.side_effect = _frames(b'{"nope": {}}')
+        ts.handle_connection(conn, ('10.0.0.9', 4000), {'cmd1': PRESET}, CONFIG)
+
+        assert _sent(conn) == [b'Invalid Command\n']
+
+    @pytest.mark.unit
+    def test_unparseable_json_is_rejected_without_dropping_the_connection(self, conn):
+        conn.recv.side_effect = _frames(b'not json at all', b'{"nope": {}}')
+        ts.handle_connection(conn, ('10.0.0.9', 4000), {'cmd1': PRESET}, CONFIG)
+
+        # Both frames answered; the neighbour is not disconnected on a typo.
+        assert _sent(conn) == [b'Invalid Command\n', b'Invalid Command\n']
+
+    @pytest.mark.unit
+    def test_an_empty_frame_closes_the_connection(self, conn):
+        conn.recv.side_effect = [b'']
+        ts.handle_connection(conn, ('10.0.0.9', 4000), {'cmd1': PRESET}, CONFIG)
+
+        conn.send.assert_not_called()
+
+    @pytest.mark.unit
+    def test_a_socket_error_does_not_end_the_session(self, conn):
+        conn.recv.side_effect = [socket.error('reset'), b'{"nope": {}}', b'']
+        ts.handle_connection(conn, ('10.0.0.9', 4000), {'cmd1': PRESET}, CONFIG)
+
+        assert _sent(conn) == [b'Invalid Command\n']
+
+    @pytest.mark.unit
+    def test_invalid_utf8_on_the_first_frame_crashes_the_handler(self, conn):
+        # `command` is assigned only after data.decode() succeeds, so a frame
+        # that is not valid UTF-8 leaves it unbound and the `command in
+        # valid_commands` check below raises. A neighbour with a mismatched
+        # encoding takes the connection handler down.
+        conn.recv.side_effect = _frames(b'\xff\xfe')
+
+        with pytest.raises(NameError):
+            ts.handle_connection(conn, ('10.0.0.9', 4000), {'cmd1': PRESET}, CONFIG)
+
+    @pytest.mark.unit
+    def test_a_later_invalid_frame_is_answered_with_the_previous_command(self, conn):
+        # Once `command` is bound by an earlier frame it survives the decode
+        # failure, so the bad frame is answered rather than crashing.
+        conn.recv.side_effect = _frames(b'{"nope": {}}', b'\xff\xfe')
+        ts.handle_connection(conn, ('10.0.0.9', 4000), {'cmd1': PRESET}, CONFIG)
+
+        assert _sent(conn) == [b'Invalid Command\n', b'Invalid Command\n']
+
+    @pytest.mark.unit
+    def test_a_missing_id_token_crashes_the_handler(self, conn):
+        # An unauthorised device has no token document, and the lookup result
+        # is subscripted without a guard.
+        conn.recv.side_effect = _frames(b'{"cmd1": {}}')
+        with patch.object(ts.util_ref, 'find_one', return_value=None):
+            with pytest.raises(TypeError):
+                ts.handle_connection(conn, ('10.0.0.9', 4000), {'cmd1': PRESET}, CONFIG)
+
+
+class TestHandleConnectionDefaults:
+    @pytest.mark.unit
+    def test_presets_and_config_are_loaded_per_connection(self, conn):
+        # Reloading on each connect is what lets a preset edit take effect
+        # without restarting the daemon.
+        conn.recv.side_effect = [b'']
+        with patch.object(ts, 'load_valid_commands', return_value={}) as commands, \
+             patch.object(ts, 'load_tcp_config', return_value=CONFIG) as config:
+            ts.handle_connection(conn, ('10.0.0.9', 4000))
+
+        commands.assert_called_once()
+        config.assert_called_once()
+
+
+class TestServerLifecycle:
+    @pytest.mark.unit
+    def test_binds_and_listens_on_the_documented_port(self):
+        sock = MagicMock()
+        with patch('socket.socket', return_value=sock):
+            assert ts.create_server() is sock
+
+        sock.bind.assert_called_once_with(('0.0.0.0', 5300))
+        sock.listen.assert_called_once_with(1)
+
+    @pytest.mark.unit
+    def test_the_socket_is_a_tcp_stream(self):
+        with patch('socket.socket', return_value=MagicMock()) as factory:
+            ts.create_server()
+        factory.assert_called_once_with(socket.AF_INET, socket.SOCK_STREAM)
+
+    @pytest.mark.unit
+    def test_each_connection_is_closed_after_being_served(self):
+        sock = MagicMock()
+        conn = MagicMock()
+        sock.accept.side_effect = [(conn, ('10.0.0.9', 4000)), KeyboardInterrupt]
+
+        with patch.object(ts, 'handle_connection'):
+            with pytest.raises(KeyboardInterrupt):
+                ts.serve_forever(sock)
+
+        conn.close.assert_called_once()
+
+    @pytest.mark.unit
+    def test_a_handler_that_raises_still_closes_the_socket(self):
+        # A leaked descriptor per crash exhausts the process over a shift.
+        sock = MagicMock()
+        conn = MagicMock()
+        sock.accept.return_value = (conn, ('10.0.0.9', 4000))
+
+        with patch.object(ts, 'handle_connection', side_effect=RuntimeError('boom')):
+            with pytest.raises(RuntimeError):
+                ts.serve_forever(sock)
+
+        conn.close.assert_called_once()
+
+    @pytest.mark.unit
+    def test_main_creates_the_server_and_serves(self):
+        sock = MagicMock()
+        with patch.object(ts, 'create_server', return_value=sock) as create, \
+             patch.object(ts, 'serve_forever') as serve:
+            ts.main()
+
+        create.assert_called_once()
+        serve.assert_called_once_with(sock)
+
+    @pytest.mark.unit
+    def test_importing_does_not_bind_a_listening_socket(self):
+        # The bind and the accept loop used to run at module scope, which is
+        # why this module sat at 0% coverage and could not be imported at all
+        # off a device. Asserting on socket.socket directly is not usable here
+        # - the MongoDB monitor threads open sockets of their own - so the
+        # check is that no module-level server socket survives the import.
+        module = _load_tcp_server()
+
+        assert not hasattr(module, 'sock')
+        assert not hasattr(module, 'connections')
+        assert callable(module.main)

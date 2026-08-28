@@ -25,6 +25,7 @@ FLEX_RUN_ERRORS = {
     12: 'Fetched update was incomplete - nothing was changed',
     13: 'Not enough disk space to apply the update',
     14: 'Copying the update into place failed - do not reboot, contact support',
+    15: 'Update did not match the version this release was signed for - nothing was changed',
 }
 
 LOCK_PATH = os.environ.get('FLEXRUN_UPGRADE_LOCK', '/var/lock/flex-run-upgrade.lock')

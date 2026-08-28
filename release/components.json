@@ -1,0 +1,22 @@
+{
+  "components": {
+    "arm": {
+      "backend": "1.93",
+      "frontend": "1.9.2",
+      "nodecreator": "0.1",
+      "prediction": "0.1",
+      "predictlite": "2.1",
+      "vision": "1.1"
+    },
+    "x86": {
+      "backend": "1.97",
+      "frontend": "1.9.4",
+      "nodecreator": "0.5",
+      "prediction": "0.51",
+      "predictlite": "0.1",
+      "vernemq": "dev",
+      "vision": "1.2",
+      "visiontools": "0.43"
+    }
+  }
+}

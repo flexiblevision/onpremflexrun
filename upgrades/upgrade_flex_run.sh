@@ -7,8 +7,14 @@
 # therefore checked, and any failure exits non-zero with the live tree
 # untouched.
 #
+# --commit <sha> (or FLEXRUN_PIN_COMMIT) pins the tree to the commit a signed
+# release names. Without it we take branch tip, so whoever can move the branch
+# replaces the code that checks the signature. Unpinned stays the default
+# because first install has no manifest to read a commit from; it warns.
+#
 # Exit codes:  0 updated   10 bad config   11 clone failed
 #             12 clone tree invalid   13 not enough disk   14 copy failed
+#             15 pinned commit not checked out
 
 set -eu
 
@@ -26,6 +32,32 @@ fail() { echo "[upgrade_flex_run] ERROR: $*" >&2; }
 
 cleanup() { rm -rf "$TMP_TREE"; }
 trap cleanup EXIT HUP INT TERM
+
+# --- resolve the pin --------------------------------------------------------
+PIN_COMMIT="${FLEXRUN_PIN_COMMIT:-}"
+
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --commit)   PIN_COMMIT="${2:-}"; shift 2 ;;
+        --commit=*) PIN_COMMIT="${1#--commit=}"; shift ;;
+        *)          fail "unknown argument '$1'"; exit 10 ;;
+    esac
+done
+
+# Full sha only: this reaches git, and a short sha or ref name would make "the
+# commit the release names" ambiguous.
+if [ -n "$PIN_COMMIT" ]; then
+    case "$PIN_COMMIT" in
+        *[!0-9a-f]*)
+            fail "pinned commit '$PIN_COMMIT' is not lowercase hex"
+            exit 10
+            ;;
+    esac
+    if [ "${#PIN_COMMIT}" -ne 40 ]; then
+        fail "pinned commit '$PIN_COMMIT' is not a full 40-character sha"
+        exit 10
+    fi
+fi
 
 # --- resolve the branch -----------------------------------------------------
 # jq prints the string "null" and exits 0 when .branch is absent, so an
@@ -51,11 +83,39 @@ esac
 # --- clone ------------------------------------------------------------------
 rm -rf "$TMP_TREE"
 
-log "cloning branch '$BRANCH'"
-if ! git clone --quiet --depth 1 --single-branch --branch "$BRANCH" \
-        "$REPO_URL" "$TMP_TREE"; then
-    fail "clone of branch '$BRANCH' failed - live tree left as it was"
-    exit 11
+# Shallow sha fetch is cheaper but not all remotes serve it; fall back to a full
+# clone rather than dropping back to branch tip.
+clone_pinned() {
+    mkdir -p "$TMP_TREE" || return 1
+    git -C "$TMP_TREE" init --quiet || return 1
+    git -C "$TMP_TREE" remote add origin "$REPO_URL" || return 1
+
+    if git -C "$TMP_TREE" fetch --quiet --depth 1 origin "$PIN_COMMIT" 2>/dev/null; then
+        git -C "$TMP_TREE" checkout --quiet FETCH_HEAD || return 1
+        return 0
+    fi
+
+    log "remote will not serve $PIN_COMMIT directly - cloning branch instead"
+    rm -rf "$TMP_TREE"
+    git clone --quiet --single-branch --branch "$BRANCH" "$REPO_URL" "$TMP_TREE" \
+        || return 1
+    git -C "$TMP_TREE" checkout --quiet "$PIN_COMMIT" || return 1
+}
+
+if [ -n "$PIN_COMMIT" ]; then
+    log "fetching pinned commit $PIN_COMMIT"
+    if ! clone_pinned; then
+        fail "could not check out pinned commit $PIN_COMMIT on branch '$BRANCH' - live tree left as it was"
+        exit 11
+    fi
+else
+    log "cloning branch '$BRANCH'"
+    log "WARNING: no commit pinned - taking branch tip, which is not the code any release was signed against"
+    if ! git clone --quiet --depth 1 --single-branch --branch "$BRANCH" \
+            "$REPO_URL" "$TMP_TREE"; then
+        fail "clone of branch '$BRANCH' failed - live tree left as it was"
+        exit 11
+    fi
 fi
 
 # --- verify what we cloned --------------------------------------------------
@@ -67,6 +127,12 @@ for sentinel in $SENTINELS; do
 done
 
 COMMIT="$(git -C "$TMP_TREE" rev-parse HEAD 2>/dev/null || echo unknown)"
+
+# Catches a checkout that quietly landed elsewhere.
+if [ -n "$PIN_COMMIT" ] && [ "$COMMIT" != "$PIN_COMMIT" ]; then
+    fail "release pins $PIN_COMMIT but the tree is at $COMMIT - not copying it over the live tree"
+    exit 15
+fi
 
 # --- check there is room before starting the copy ---------------------------
 # A copy that runs out of space part-way leaves a tree matching no commit.
@@ -89,12 +155,18 @@ if ! cp -r "$TMP_TREE"/* "$LIVE_TREE"/; then
     exit 14
 fi
 
-# Record what was deployed so the running version is answerable on the device.
-printf 'commit=%s\nbranch=%s\nupdated=%s\n' \
-    "$COMMIT" "$BRANCH" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+# pinned= matters during an incident: "which code is this?" and "did a release
+# vouch for it?" are different questions.
+printf 'commit=%s\nbranch=%s\npinned=%s\nupdated=%s\n' \
+    "$COMMIT" "$BRANCH" "$([ -n "$PIN_COMMIT" ] && echo yes || echo no)" \
+    "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
     > "$LIVE_TREE/.flexrun_version" 2>/dev/null || true
 
-log "updated to $COMMIT on branch '$BRANCH'"
+if [ -n "$PIN_COMMIT" ]; then
+    log "updated to pinned commit $COMMIT on branch '$BRANCH'"
+else
+    log "updated to $COMMIT (branch tip of '$BRANCH', unpinned)"
+fi
 
 # Let filesystem writes settle before the caller executes the scripts we just
 # replaced.

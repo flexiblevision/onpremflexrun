@@ -54,6 +54,173 @@ set_conf_directive() {
     echo "set $key $value in $file"
 }
 
+# ---- container swap, with a way back ---------------------------------------
+#
+# The upgrade path removes a container and then creates the new one, so a
+# crash-looping image leaves a dead service and the script carries on to the
+# next container. Nothing restores anything.
+#
+# These four functions make the swap reversible: the previous container is
+# renamed out of the way rather than deleted, so it is intact for the whole
+# window and a rollback is a rename instead of a re-pull over a factory network.
+
+# retire_container <name>
+# Moves the running container aside. Returns 1 when it cannot be moved safely,
+# and the caller must then leave it alone rather than proceed.
+retire_container() {
+    local name="$1"
+    local prev="${name}_prev"
+
+    # A leftover _prev means an earlier run died mid-swap. Discard it, or the
+    # rename below fails and the only way forward would be deleting the live
+    # container - exactly what this exists to avoid.
+    if docker ps -a --format '{{.Names}}' | grep -q "^${prev}$"; then
+        echo "discarding a leftover $prev from an interrupted run"
+        docker rm -f "$prev" >/dev/null 2>&1
+    fi
+
+    if ! docker ps -a --format '{{.Names}}' | grep -q "^${name}$"; then
+        echo "$name does not exist yet - nothing to retire"
+        return 0
+    fi
+
+    docker stop "$name" >/dev/null 2>&1
+
+    if ! docker rename "$name" "$prev"; then
+        echo "ERROR: could not rename $name to $prev - leaving it in place"
+        return 1
+    fi
+
+    echo "retired $name to $prev"
+}
+
+# rollback_container <name>
+# The edge that does not exist in the current upgrade path.
+rollback_container() {
+    local name="$1"
+    local prev="${name}_prev"
+
+    echo "ROLLBACK: $name did not come up - restoring the previous image"
+    docker rm -f "$name" >/dev/null 2>&1
+
+    if ! docker ps -a --format '{{.Names}}' | grep -q "^${prev}$"; then
+        echo "ERROR: there is no $prev to restore - $name is DOWN"
+        return 1
+    fi
+
+    if ! docker rename "$prev" "$name"; then
+        echo "ERROR: could not rename $prev back to $name - $name is DOWN"
+        return 1
+    fi
+
+    if ! docker start "$name" >/dev/null 2>&1; then
+        echo "ERROR: $name would not start from the previous image - $name is DOWN"
+        return 1
+    fi
+
+    echo "rolled back: $name is running the previous image again"
+}
+
+# discard_previous <name>
+# Only once the new container has proven itself.
+discard_previous() {
+    local prev="${1}_prev"
+    if docker ps -a --format '{{.Names}}' | grep -q "^${prev}$"; then
+        docker rm -f "$prev" >/dev/null 2>&1
+        echo "discarded $prev"
+    fi
+}
+
+# safe_pull <image>
+# Pull, reporting the image that failed. Both the install and the upgrade path
+# pull, so this lives here rather than in either one.
+safe_pull() {
+    local image="$1"
+    echo "Pulling image: $image"
+    if docker pull "$image"; then
+        echo "Pull succeeded: $image"
+        return 0
+    fi
+    echo "ERROR: Pull failed for $image"
+    return 1
+}
+
+# smoke_http <name> <url> [attempts] [delay]
+# A readiness check, not a liveness one. `docker ps` is satisfied by a container
+# that started and cannot reach Mongo, which is the failure that presents as
+# "the upgrade succeeded and the line stopped producing".
+smoke_http() {
+    local name="$1"
+    local url="$2"
+    local attempts="${3:-15}"
+    local delay="${4:-2}"
+    local i=0
+
+    while [ "$i" -lt "$attempts" ]; do
+        if curl -fsS --max-time 5 "$url" >/dev/null 2>&1; then
+            echo "smoke: $name answered $url"
+            return 0
+        fi
+        i=$((i + 1))
+        sleep "$delay"
+    done
+
+    echo "ERROR: smoke: $name never answered $url ($attempts attempts)"
+    return 1
+}
+
+# smoke_running <name> [attempts] [delay]
+# For a container with no HTTP surface. Named honestly: this only proves the
+# process is up, so it is a weaker check than smoke_http, not an equal one.
+smoke_running() {
+    local name="$1"
+    local attempts="${2:-3}"
+    local delay="${3:-3}"
+    local i=0
+
+    while [ "$i" -lt "$attempts" ]; do
+        if docker ps --format '{{.Names}}' | grep -q "^${name}$"; then
+            echo "smoke: $name is running (process only)"
+            return 0
+        fi
+        i=$((i + 1))
+        sleep "$delay"
+    done
+
+    echo "ERROR: smoke: $name is not running after $attempts checks"
+    return 1
+}
+
+# smoke_settled <name> [settle_seconds]
+# smoke_running returns on the first successful docker ps, so a container that
+# starts and then crash-loops passes it. This re-checks after a settle period
+# and fails on any restart. Use where there is no HTTP surface to probe.
+smoke_settled() {
+    local name="$1"
+    local settle="${2:-8}"
+    local restarts
+
+    smoke_running "$name" 5 2 || return 1
+    sleep "$settle"
+
+    if ! docker ps --format '{{.Names}}' | grep -q "^${name}$"; then
+        echo "ERROR: smoke: $name started then stopped within ${settle}s"
+        return 1
+    fi
+
+    restarts="$(docker inspect -f '{{.RestartCount}}' "$name" 2>/dev/null || echo 0)"
+    case "$restarts" in
+        ''|*[!0-9]*) restarts=0 ;;
+    esac
+    if [ "$restarts" -gt 0 ]; then
+        echo "ERROR: smoke: $name restarted $restarts time(s) - crash looping"
+        return 1
+    fi
+
+    echo "smoke: $name settled (running, no restarts)"
+    return 0
+}
+
 # ---- root crontab ----------------------------------------------------------
 # Installed as one atomic `crontab -` call, so the crontab is never left
 # half-written if the calling script dies mid-run. Entries between the markers

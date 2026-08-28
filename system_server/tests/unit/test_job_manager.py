@@ -2,6 +2,7 @@
 Unit tests for job_manager.py worker script
 """
 import pytest
+from testsupport import thread_aware_sleep_mock
 import time
 from unittest.mock import Mock, patch, MagicMock, call
 from datetime import datetime
@@ -118,7 +119,7 @@ class TestGetUnsyncedRecords:
     @patch('worker_scripts.job_manager.analytics_coll')
     @patch('worker_scripts.job_manager.util_collection')
     @patch('worker_scripts.job_manager.time_now_ms')
-    @patch('time.sleep')
+    @patch('time.sleep', new_callable=thread_aware_sleep_mock)
     def test_get_unsynced_records_claims_pending_then_stuck(
             self, mock_sleep, mock_time_now_ms, mock_util_collection,
             mock_analytics_coll):
@@ -212,7 +213,7 @@ class TestCloudCall:
     @pytest.mark.unit
     @patch('worker_scripts.job_manager.mark_as_synced')
     @patch('requests.post')
-    @patch('time.sleep')
+    @patch('time.sleep', new_callable=thread_aware_sleep_mock)
     def test_cloud_call_success(self, mock_sleep, mock_post, mock_mark_synced):
         """Test successful cloud API call"""
         from worker_scripts.job_manager import cloud_call
@@ -237,7 +238,7 @@ class TestCloudCall:
     @pytest.mark.unit
     @patch('worker_scripts.job_manager.mark_as_synced')
     @patch('requests.post')
-    @patch('time.sleep')
+    @patch('time.sleep', new_callable=thread_aware_sleep_mock)
     def test_cloud_call_targets_bq_when_not_local(self, mock_sleep, mock_post,
                                                   mock_mark_synced):
         """A cloud device sends analytics to the ingest queue, not the domain."""
@@ -253,7 +254,7 @@ class TestCloudCall:
     @pytest.mark.unit
     @patch('worker_scripts.job_manager.mark_as_synced')
     @patch('requests.post')
-    @patch('time.sleep')
+    @patch('time.sleep', new_callable=thread_aware_sleep_mock)
     def test_cloud_call_targets_the_url_when_local(self, mock_sleep, mock_post,
                                                    mock_mark_synced):
         """A local-cluster device posts to the master it was given."""
@@ -279,7 +280,7 @@ class TestCloudCall:
 
     @pytest.mark.unit
     @patch('requests.post')
-    @patch('time.sleep')
+    @patch('time.sleep', new_callable=thread_aware_sleep_mock)
     def test_cloud_call_failure(self, mock_sleep, mock_post):
         """Test cloud call handles request failure"""
         from worker_scripts.job_manager import cloud_call
@@ -297,7 +298,7 @@ class TestCloudCall:
     @pytest.mark.unit
     @patch('worker_scripts.job_manager.mark_as_synced')
     @patch('requests.post')
-    @patch('time.sleep')
+    @patch('time.sleep', new_callable=thread_aware_sleep_mock)
     def test_cloud_call_non_200_status(self, mock_sleep, mock_post, mock_mark_synced):
         """Test cloud call with non-200 status code"""
         from worker_scripts.job_manager import cloud_call
@@ -322,7 +323,7 @@ class TestKinesisCall:
     @pytest.mark.unit
     @patch('worker_scripts.job_manager.mark_as_synced')
     @patch('worker_scripts.job_manager.aws_client')
-    @patch('time.sleep')
+    @patch('time.sleep', new_callable=thread_aware_sleep_mock)
     def test_kinesis_call_success(self, mock_sleep, mock_aws_client, mock_mark_synced):
         """Test successful Kinesis stream call"""
         from worker_scripts.job_manager import kinesis_call
@@ -438,19 +439,17 @@ class TestPushAnalyticsToCloud:
 
 
 class TestEnableOCR:
-    """Tests for enable_ocr function"""
+    """Tests for the enable_ocr shim"""
 
     @pytest.mark.unit
-    @patch('os.system')
-    @patch.dict('os.environ', {'HOME': '/test/home'})
-    def test_enable_ocr(self, mock_os_system):
-        """Test enabling OCR functionality"""
+    def test_enable_ocr(self):
+        """OCR now deploys through the addon registry, not an install script"""
         from worker_scripts.job_manager import enable_ocr
 
-        enable_ocr()
+        with patch('addons.jobs.enable_addon') as enable:
+            enable_ocr()
 
-        expected_path = '/test/home/flex-run/helpers/install_ocr.sh'
-        mock_os_system.assert_called_once_with(f"sudo sh {expected_path}")
+        enable.assert_called_once_with('ocr')
 
 
 class TestBatchSize:

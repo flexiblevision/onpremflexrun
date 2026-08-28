@@ -81,6 +81,16 @@ def requires_auth(f):
         if ENVIRON == 'local':
             rsa_key = True
         if rsa_key:
+            # verify_exp is off deliberately, on both paths. These devices run
+            # on isolated factory networks with no reliable time source, so a
+            # skewed clock would reject valid tokens and lock operators out of
+            # /upgrade and /restart - a truck roll per device. A long-lived
+            # token is the accepted trade; the boundary is network and physical
+            # access, not token freshness. Do not "fix" this without first
+            # confirming the fleet has trustworthy time (timedatectl on a real
+            # unit) - and then prefer a generous leeway over strict expiry.
+            # There is no automatic revocation as a result: a lost token means
+            # re-provisioning the device.
             try:
                 if ENVIRON == 'local':
                     payload = jwt.decode(

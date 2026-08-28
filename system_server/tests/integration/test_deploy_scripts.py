@@ -9,6 +9,7 @@ Each test runs the real script or the real function with `docker`, `git`,
 `crontab`, `sudo` and `nvidia-smi` replaced by stubs, so nothing touches the
 host.
 """
+import json
 import os
 import re
 import stat
@@ -21,6 +22,7 @@ REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', '..')
 LIB = os.path.join(REPO, 'upgrades', 'lib', 'deploy_common.sh')
 FLEX_RUN = os.path.join(REPO, 'upgrades', 'upgrade_flex_run.sh')
 CONTAINER_UPGRADES = os.path.join(REPO, 'upgrades', 'system_container_upgrades.sh')
+SYSTEM_SETUP = os.path.join(REPO, 'setup', 'system_setup.sh')
 
 
 def _write_stub(directory, name, body):
@@ -155,6 +157,469 @@ class TestUpgradeFlexRun:
         flexrun.git('ok')
         flexrun('sh %s' % FLEX_RUN)
         assert not (flexrun.home / 'flex-run-temp').exists()
+
+    def test_an_unpinned_refresh_says_so(self, flexrun):
+        """Branch tip is not the code any release was signed against, so the
+        weaker mode has to be visible in the log."""
+        flexrun.git('ok')
+        result = flexrun('sh %s' % FLEX_RUN)
+        assert result.returncode == 0
+        assert 'no commit pinned' in result.stdout
+        assert 'pinned=no' in (flexrun.home / 'flex-run' / '.flexrun_version').read_text()
+
+
+PIN = 'a1b2c3d4e5f60718293a4b5c6d7e8f9012345678'
+OTHER = 'ffffffffffffffffffffffffffffffffffffffff'
+
+
+@pytest.fixture
+def pinned(sh):
+    """flexrun home plus a git stub that understands the pinned fetch path."""
+    home = sh.tmp / 'home'
+    (home / 'flex-run').mkdir(parents=True)
+    (home / 'flex-run' / 'deploy.py').write_text('OLD-VERSION-CODE\n')
+    (home / 'fvconfig.json').write_text('{"branch": "master"}')
+
+    def git_stub(mode, head=PIN):
+        _write_stub(sh.stubs, 'git', """
+            populate() {
+                mkdir -p "$1/system_server" "$1/upgrades/lib"
+                echo NEW-VERSION-CODE > "$1/deploy.py"
+                : > "$1/requirements.txt"
+                : > "$1/system_server/server.py"
+                : > "$1/system_server/upgrade_runner.py"
+                : > "$1/upgrades/system_container_upgrades.sh"
+                : > "$1/upgrades/lib/deploy_common.sh"
+            }
+            MODE=%s
+            if [ "$1" = "-C" ]; then
+                tree="$2"; shift 2
+                case "$1" in
+                  init)      mkdir -p "$tree"; exit 0 ;;
+                  remote)    exit 0 ;;
+                  fetch)     [ "$MODE" = fallback ] && exit 128
+                             populate "$tree"; exit 0 ;;
+                  checkout)  [ "$MODE" = checkout_fail ] && exit 128
+                             populate "$tree"; exit 0 ;;
+                  rev-parse) echo %s; exit 0 ;;
+                esac
+                exit 0
+            fi
+            # plain clone, used by the fallback path
+            for a in "$@"; do d="$a"; done
+            mkdir -p "$d"
+            exit 0
+            """ % (mode, head))
+
+    sh.git = git_stub
+    sh.home = home
+    return sh
+
+
+class TestPinnedCommit:
+    """Pinning is what stops branch tip from replacing the code that checks the
+    manifest signature, so the refusals matter more than the happy path."""
+
+    @pytest.mark.parametrize('bad', [
+        'abc', 'A1B2C3D4E5F60718293A4B5C6D7E8F9012345678',
+        'a1b2c3d4e5f60718293a4b5c6d7e8f901234567', 'master',
+        'a1b2c3d4e5f60718293a4b5c6d7e8f9012345678a', '../../etc/passwd',
+        'HEAD', '$(rm -rf /)',
+    ])
+    def test_anything_but_a_full_sha_is_refused(self, pinned, bad):
+        pinned.git('ok')
+        result = pinned("sh %s --commit '%s'" % (FLEX_RUN, bad))
+        assert result.returncode == 10, result.stderr
+        assert 'flex-run-temp' not in os.listdir(str(pinned.home))
+
+    def test_an_unknown_argument_is_refused(self, pinned):
+        pinned.git('ok')
+        assert pinned('sh %s --release 1.9.2' % FLEX_RUN).returncode == 10
+
+    def test_a_pinned_commit_is_fetched_and_applied(self, pinned):
+        pinned.git('ok')
+        result = pinned('sh %s --commit %s' % (FLEX_RUN, PIN))
+        assert result.returncode == 0, result.stderr
+        assert 'NEW-VERSION-CODE' in (pinned.home / 'flex-run' / 'deploy.py').read_text()
+
+    def test_the_pin_is_recorded(self, pinned):
+        pinned.git('ok')
+        pinned('sh %s --commit %s' % (FLEX_RUN, PIN))
+        version = (pinned.home / 'flex-run' / '.flexrun_version').read_text()
+        assert 'commit=%s' % PIN in version
+        assert 'pinned=yes' in version
+
+    def test_the_environment_variable_works_too(self, pinned):
+        pinned.git('ok')
+        result = pinned('sh %s' % FLEX_RUN, env={'FLEXRUN_PIN_COMMIT': PIN})
+        assert result.returncode == 0, result.stderr
+        assert 'pinned=yes' in (pinned.home / 'flex-run' / '.flexrun_version').read_text()
+
+    def test_a_remote_that_will_not_serve_the_sha_falls_back_to_a_clone(self, pinned):
+        """Refusing to pin here would silently drop back to branch tip."""
+        pinned.git('fallback')
+        result = pinned('sh %s --commit %s' % (FLEX_RUN, PIN))
+        assert result.returncode == 0, result.stderr
+        assert 'cloning branch instead' in result.stdout
+        assert 'pinned=yes' in (pinned.home / 'flex-run' / '.flexrun_version').read_text()
+
+    def test_a_tree_that_landed_on_another_commit_is_refused(self, pinned):
+        """The check that makes the pin worth anything."""
+        pinned.git('ok', head=OTHER)
+        result = pinned('sh %s --commit %s' % (FLEX_RUN, PIN))
+        assert result.returncode == 15, result.stderr
+        assert PIN in result.stderr and OTHER in result.stderr
+        assert (pinned.home / 'flex-run' / 'deploy.py').read_text() == 'OLD-VERSION-CODE\n'
+
+    def test_a_failed_checkout_leaves_the_live_tree_alone(self, pinned):
+        pinned.git('checkout_fail')
+        result = pinned('sh %s --commit %s' % (FLEX_RUN, PIN))
+        assert result.returncode == 11
+        assert (pinned.home / 'flex-run' / 'deploy.py').read_text() == 'OLD-VERSION-CODE\n'
+        assert not (pinned.home / 'flex-run' / '.flexrun_version').exists()
+
+    def test_a_bad_branch_still_stops_a_pinned_refresh(self, pinned):
+        pinned.git('ok')
+        (pinned.home / 'fvconfig.json').write_text('{"environ":"cloud"}')
+        assert pinned('sh %s --commit %s' % (FLEX_RUN, PIN)).returncode == 10
+
+
+# --------------------------------------------------------------------------
+# system_setup.sh - first install. An unverified install presents as a device
+# that looks set up and does not work, which costs a site visit.
+# --------------------------------------------------------------------------
+
+SETUP_ARGS = '1.9.2 1.9.2 1.9.2 x86 1.9.2 1.9.2 1.9.2 1.9.2'
+
+
+@pytest.fixture
+def setup_env(sh, tmp_path):
+    """Runs the real script and the real library, with a stubbed mqtt step.
+
+    The script is copied into a controlled tree because it resolves both the
+    library and setup_mqtt.sh relative to its own location.
+    """
+    tree = tmp_path / 'tree'
+    (tree / 'setup' / 'mqtt').mkdir(parents=True)
+    (tree / 'upgrades' / 'lib').mkdir(parents=True)
+    shutil.copy(SYSTEM_SETUP, str(tree / 'setup' / 'system_setup.sh'))
+    shutil.copy(LIB, str(tree / 'upgrades' / 'lib' / 'deploy_common.sh'))
+
+    state = tmp_path / 'state'
+    state.mkdir()
+    home = sh.tmp / 'home'
+    home.mkdir(parents=True, exist_ok=True)
+    (home / 'fvconfig.json').write_text(json.dumps({
+        'auth0_domain': 'auth.flexiblevision.com',
+        'auth0_CID': 'abc123',
+        'auth_alg': 'RS256',
+        'environ': 'cloud',
+        'cloud_domain': 'cloud.example.com',
+        'gcp_functions_domain': 'functions.example.com',
+        'jwt_secret_key': 'secret',
+    }))
+
+    _write_stub(str(tree / 'setup' / 'mqtt'), 'setup_mqtt.sh',
+                'echo "mqtt stub $*" >> %s/calls\n'
+                'test ! -f %s/mqtt_fail\n' % (state, state))
+
+    _write_stub(sh.stubs, 'docker', """
+        STATE=%s
+        echo "docker $*" >> "$STATE/calls"
+        name=''; prev=''
+        for a in "$@"; do
+            case "$prev" in --name) name="$a" ;; esac
+            case "$a" in --name=*) name="${a#--name=}" ;; esac
+            prev="$a"
+        done
+        case "$1" in
+          pull)
+            grep -qxF "$2" "$STATE/pull_fail" 2>/dev/null && exit 1
+            exit 0 ;;
+          run)
+            grep -qxF "$name" "$STATE/run_fail" 2>/dev/null && exit 1
+            grep -qxF "$name" "$STATE/never_running" 2>/dev/null && exit 0
+            echo "$name" >> "$STATE/running"
+            exit 0 ;;
+          ps)
+            sort -u "$STATE/running" 2>/dev/null || true
+            exit 0 ;;
+          rm)
+            shift
+            for a in "$@"; do
+                # -e matters: a bare "-f" would be read as grep's own flag.
+                case "$a" in -*) continue ;; esac
+                if [ -f "$STATE/running" ]; then
+                    grep -vxF -e "$a" "$STATE/running" > "$STATE/running.new" || true
+                    mv "$STATE/running.new" "$STATE/running" || true
+                fi
+            done
+            exit 0 ;;
+          inspect)
+            for a in "$@"; do last="$a"; done
+            if grep -qxF "$last" "$STATE/restarting" 2>/dev/null; then echo 3; else echo 0; fi
+            exit 0 ;;
+        esac
+        exit 0
+        """ % state)
+
+    _write_stub(sh.stubs, 'curl', """
+        STATE=%s
+        echo "curl $*" >> "$STATE/calls"
+        for a in "$@"; do
+            case "$a" in
+              *172.17.0.1:5000*)
+                 test ! -f "$STATE/capdev_dead"
+                 exit $? ;;
+            esac
+        done
+        echo 'stub'
+        exit 0
+        """ % state)
+
+    for name in ('apt-get', 'gpg', 'tee', 'nvidia-ctk', 'wget'):
+        _write_stub(sh.stubs, name, 'exit 0\n')
+    # tar must actually produce the tree, or the arm node step is not exercised.
+    _write_stub(sh.stubs, 'tar', 'mkdir -p node-v10.16.1-linux-arm64/bin\nexit 0\n')
+    # Real sleeps would add ~60s: smoke_settled waits per container.
+    _write_stub(sh.stubs, 'sleep', 'exit 0\n')
+
+    def run(args=SETUP_ARGS, **kwargs):
+        return sh('sh %s %s' % (tree / 'setup' / 'system_setup.sh', args), **kwargs)
+
+    run.state = state
+    run.tree = tree
+    run.home = home
+
+    def calls():
+        path = state / 'calls'
+        return path.read_text().splitlines() if path.exists() else []
+
+    def mark(filename, *values):
+        (state / filename).write_text('\n'.join(values) + '\n')
+
+    run.calls = calls
+    run.mark = mark
+    return run
+
+
+class TestSystemSetupArguments:
+
+    @pytest.mark.parametrize('args,missing', [
+        ('"" 1.9.2 1.9.2 x86 1.9.2 1.9.2 1.9.2 1.9.2', 'capdev'),
+        ('1.9.2 "" 1.9.2 x86 1.9.2 1.9.2 1.9.2 1.9.2', 'captureui'),
+        ('1.9.2 1.9.2 1.9.2 x86 1.9.2 1.9.2 1.9.2 ""', 'visiontools'),
+    ])
+    def test_an_empty_version_names_the_argument(self, setup_env, args, missing):
+        result = setup_env(args)
+        assert result.returncode == 20, result.stderr
+        assert missing in result.stderr
+
+    def test_nothing_is_pulled_when_arguments_are_bad(self, setup_env):
+        setup_env('1.9.2 1.9.2 1.9.2 x86 1.9.2 1.9.2 1.9.2 ""')
+        assert not any('pull' in line for line in setup_env.calls())
+
+    @pytest.mark.parametrize('arch', ['', 'amd64', 'x86_64', 'arm64'])
+    def test_an_unsupported_arch_is_refused(self, setup_env, arch):
+        result = setup_env('1.9.2 1.9.2 1.9.2 "%s" 1.9.2 1.9.2 1.9.2 1.9.2' % arch)
+        assert result.returncode == 20, result.stdout
+
+
+class TestSystemSetupConfig:
+
+    def test_a_missing_config_is_refused(self, setup_env):
+        (setup_env.home / 'fvconfig.json').unlink()
+        assert setup_env().returncode == 21
+
+    @pytest.mark.parametrize('key', ['auth0_domain', 'auth0_CID', 'environ'])
+    def test_a_null_required_value_is_refused(self, setup_env, key):
+        """jq prints "null" and exits 0 for an absent key, so unchecked this
+        installs containers configured to authenticate against "null"."""
+        config = json.loads((setup_env.home / 'fvconfig.json').read_text())
+        del config[key]
+        (setup_env.home / 'fvconfig.json').write_text(json.dumps(config))
+
+        result = setup_env()
+        assert result.returncode == 21, result.stdout
+        assert key.upper() in result.stderr or key in result.stderr
+
+    def test_nothing_is_pulled_when_config_is_bad(self, setup_env):
+        config = json.loads((setup_env.home / 'fvconfig.json').read_text())
+        del config['environ']
+        (setup_env.home / 'fvconfig.json').write_text(json.dumps(config))
+        setup_env()
+        assert not any('pull' in line for line in setup_env.calls())
+
+    def test_an_optional_value_only_warns(self, setup_env):
+        config = json.loads((setup_env.home / 'fvconfig.json').read_text())
+        del config['cloud_domain']
+        (setup_env.home / 'fvconfig.json').write_text(json.dumps(config))
+
+        result = setup_env()
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert 'CLOUD_DOMAIN' in result.stdout
+
+
+class TestSystemSetupHappyPath:
+
+    def test_it_succeeds(self, setup_env):
+        result = setup_env()
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert 'all containers verified' in result.stdout
+
+    def test_every_image_is_pulled(self, setup_env):
+        setup_env()
+        pulled = [line.split()[-1] for line in setup_env.calls()
+                  if line.startswith('docker pull')]
+        assert 'mongo:4.2' in pulled
+        for component in ('backend', 'frontend', 'prediction', 'predictlite',
+                          'vision', 'nodecreator', 'visiontools'):
+            assert any('x86-%s:1.9.2' % component in image for image in pulled), component
+
+    def test_every_container_is_started(self, setup_env):
+        setup_env()
+        started = [line for line in setup_env.calls() if line.startswith('docker run')]
+        assert len(started) == 8
+        for name in ('mongo', 'capdev', 'captureui', 'localprediction',
+                     'predictlite', 'vision', 'nodecreator', 'visiontools'):
+            assert any(name in line for line in started), name
+
+    def test_all_pulls_happen_before_any_container_starts(self, setup_env):
+        """The whole point of the ordering: a bad version must not leave a
+        half-built device."""
+        setup_env()
+        calls = setup_env.calls()
+        last_pull = max(i for i, c in enumerate(calls) if c.startswith('docker pull'))
+        first_run = min(i for i, c in enumerate(calls) if c.startswith('docker run'))
+        assert last_pull < first_run
+
+    def test_capdev_gets_a_readiness_check_not_just_a_process_check(self, setup_env):
+        setup_env()
+        assert any('172.17.0.1:5000' in line and 'jwks' in line
+                   for line in setup_env.calls() if line.startswith('curl'))
+
+    def test_the_mqtt_broker_is_set_up(self, setup_env):
+        setup_env()
+        assert any(line.startswith('mqtt stub') for line in setup_env.calls())
+
+    def test_the_arch_reaches_every_image_name(self, setup_env):
+        setup_env('1.9.2 1.9.2 1.9.2 arm 1.9.2 1.9.2 1.9.2 1.9.2')
+        pulled = [line.split()[-1] for line in setup_env.calls()
+                  if line.startswith('docker pull')]
+        assert all('arm-' in p or p.startswith('mongo:') for p in pulled), pulled
+
+
+class TestSystemSetupArchCoverage:
+    """visiontools has no arm image yet. Pull-all-first turns that from a
+    skipped container into a failed install unless the script knows."""
+
+    def test_arm_skips_visiontools_entirely(self, setup_env):
+        result = setup_env('1.9.2 1.9.2 1.9.2 arm 1.9.2 1.9.2 1.9.2 1.9.2')
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert not any('visiontools' in line for line in setup_env.calls())
+        assert 'skipping visiontools' in result.stdout
+
+    def test_x86_still_installs_visiontools(self, setup_env):
+        setup_env()
+        assert any('visiontools' in line and line.startswith('docker run')
+                   for line in setup_env.calls())
+
+    def test_arm_installs_the_other_seven_containers(self, setup_env):
+        setup_env('1.9.2 1.9.2 1.9.2 arm 1.9.2 1.9.2 1.9.2 1.9.2')
+        started = [l for l in setup_env.calls() if l.startswith('docker run')]
+        assert len(started) == 7
+
+    def test_arm_succeeds_with_no_visiontools_version_at_all(self, setup_env):
+        """deploy.py cannot supply one, so it must not be required."""
+        result = setup_env('1.9.2 1.9.2 1.9.2 arm 1.9.2 1.9.2 1.9.2 ""')
+        assert result.returncode == 0, result.stdout + result.stderr
+
+    def test_the_version_check_sentinel_is_not_treated_as_a_tag(self, setup_env):
+        """is_container_uptodate returns the string 'True' when it thinks
+        nothing is needed; pulling fvonprem/x86-visiontools:True would fail."""
+        result = setup_env('1.9.2 1.9.2 1.9.2 x86 1.9.2 1.9.2 1.9.2 True')
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert not any('visiontools:True' in line for line in setup_env.calls())
+
+    def test_arm_does_not_verify_a_container_it_never_started(self, setup_env):
+        setup_env('1.9.2 1.9.2 1.9.2 arm 1.9.2 1.9.2 1.9.2 1.9.2')
+        assert not any('visiontools' in l for l in setup_env.calls()
+                       if l.startswith('docker inspect'))
+
+
+class TestSystemSetupFailures:
+
+    def test_a_pull_failure_starts_nothing(self, setup_env):
+        """The single biggest change: previously one bad version left some
+        containers running and some not."""
+        setup_env.mark('pull_fail', 'fvonprem/x86-vision:1.9.2')
+        result = setup_env()
+        assert result.returncode == 22, result.stdout
+        assert not any(line.startswith('docker run') for line in setup_env.calls())
+
+    def test_a_pull_failure_names_the_image(self, setup_env):
+        setup_env.mark('pull_fail', 'fvonprem/x86-vision:1.9.2')
+        assert 'x86-vision:1.9.2' in setup_env().stderr
+
+    def test_a_run_failure_stops_the_install(self, setup_env):
+        setup_env.mark('run_fail', 'vision')
+        result = setup_env()
+        assert result.returncode == 23, result.stdout
+        assert 'vision' in result.stderr
+
+    def test_a_container_that_never_comes_up_fails_the_install(self, setup_env):
+        setup_env.mark('never_running', 'visiontools')
+        result = setup_env()
+        assert result.returncode == 24, result.stdout
+        assert 'visiontools' in result.stderr
+
+    def test_a_crash_looping_container_fails_the_install(self, setup_env):
+        """docker ps is satisfied by a container that is restarting in a loop."""
+        setup_env.mark('restarting', 'predictlite')
+        result = setup_env()
+        assert result.returncode == 24, result.stdout
+        assert 'predictlite' in result.stderr
+
+    def test_capdev_not_answering_fails_the_install(self, setup_env):
+        (setup_env.state / 'capdev_dead').write_text('')
+        result = setup_env()
+        assert result.returncode == 24, result.stdout
+        assert 'capdev' in result.stderr
+
+    def test_every_broken_container_is_reported_not_just_the_first(self, setup_env):
+        """An engineer on a first install wants the whole picture."""
+        setup_env.mark('never_running', 'vision', 'visiontools')
+        setup_env.mark('restarting', 'predictlite')
+        result = setup_env()
+        assert result.returncode == 24
+        for name in ('vision', 'visiontools', 'predictlite'):
+            assert name in result.stderr, name
+
+    def test_a_failed_install_says_the_device_is_not_ready(self, setup_env):
+        setup_env.mark('never_running', 'vision')
+        assert 'NOT ready' in setup_env().stderr
+
+    def test_an_mqtt_failure_stops_the_install(self, setup_env):
+        (setup_env.state / 'mqtt_fail').write_text('')
+        result = setup_env()
+        assert result.returncode == 23
+        assert 'MQTT' in result.stderr
+
+
+class TestSystemSetupRerun:
+
+    def test_an_existing_container_is_replaced_rather_than_colliding(self, setup_env):
+        (setup_env.state / 'running').write_text('capdev\nmongo\n')
+        result = setup_env()
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert any(line.startswith('docker rm -f capdev') or
+                   'rm -f capdev' in line for line in setup_env.calls())
+
+    def test_a_rerun_after_a_partial_install_succeeds(self, setup_env):
+        setup_env.mark('run_fail', 'vision')
+        assert setup_env().returncode == 23
+        (setup_env.state / 'run_fail').unlink()
+        assert setup_env().returncode == 0
 
 
 # --------------------------------------------------------------------------
@@ -495,6 +960,153 @@ class TestContainerStateStaging:
 
 
 # --------------------------------------------------------------------------
+# container swap and rollback - the edge that did not exist before
+# --------------------------------------------------------------------------
+
+class TestSwapAndRollback:
+    """A crash-looping image used to leave a dead service and the script
+    carried on to the next container. These tests are about the previous
+    container surviving the window and coming back."""
+
+    @pytest.fixture
+    def swap(self, sh):
+        state = sh.tmp / 'containers.txt'
+        calls = sh.tmp / 'docker-calls.log'
+
+        def docker_stub(existing, running, curl_ok):
+            state.write_text('\n'.join(existing) + '\n' if existing else '')
+            # Every invocation is logged to a file, not stdout: the real
+            # functions send `docker stop`/`rm` to /dev/null, so asserting on
+            # stub chatter would silently assert nothing.
+            _write_stub(sh.stubs, 'docker', """
+                STATE=%s
+                LOG=%s
+                echo "$@" >> "$LOG"
+                case "$1" in
+                  ps)
+                    [ -f "$STATE" ] && cat "$STATE" || true ;;
+                  rename)
+                    grep -vx "$2" "$STATE" > "$STATE.t" 2>/dev/null || true
+                    mv "$STATE.t" "$STATE" 2>/dev/null || true
+                    echo "$3" >> "$STATE" ;;
+                  rm)
+                    target="$3"; [ "$2" = "-f" ] || target="$2"
+                    grep -vx "$target" "$STATE" > "$STATE.t" 2>/dev/null || true
+                    mv "$STATE.t" "$STATE" 2>/dev/null || true ;;
+                  run)
+                    for a in "$@"; do
+                      case "$a" in --name=*) echo "${a#--name=}" >> "$STATE" ;; esac
+                    done ;;
+                esac
+                exit 0
+                """ % (state, calls))
+            _write_stub(sh.stubs, 'curl', 'exit %d\n' % (0 if curl_ok else 7))
+
+        def run(script, existing=('capdev',), running=True, curl_ok=True, env=None):
+            docker_stub(list(existing), running, curl_ok)
+            if calls.exists():
+                calls.unlink()
+            result = sh('. %s\n%s' % (LIB, script), env=env)
+            names = state.read_text().split() if state.exists() else []
+            result.docker = calls.read_text() if calls.exists() else ''
+            return result, names
+
+        return run
+
+    def test_retire_renames_instead_of_removing(self, swap):
+        """The previous container has to still exist during the window."""
+        result, names = swap('retire_container capdev')
+        assert 'rename capdev capdev_prev' in result.docker
+        assert 'rm ' not in result.docker
+        assert 'capdev_prev' in names
+
+    def test_retire_stops_the_container_first(self, swap):
+        result, _ = swap('retire_container capdev')
+        assert 'stop capdev' in result.docker
+
+    def test_retire_on_a_fresh_unit_is_not_an_error(self, swap):
+        result, _ = swap('retire_container capdev', existing=[])
+        assert result.returncode == 0
+        assert 'nothing to retire' in result.stdout
+
+    def test_a_leftover_prev_from_an_interrupted_run_is_discarded(self, swap):
+        """Otherwise the rename fails and the only way on would be deleting
+        the live container - what this exists to avoid."""
+        result, names = swap('retire_container capdev',
+                             existing=['capdev', 'capdev_prev'])
+        assert 'leftover capdev_prev' in result.stdout
+        assert names.count('capdev_prev') == 1
+
+    def test_rollback_restores_and_starts_the_previous(self, swap):
+        result, names = swap('rollback_container capdev', existing=['capdev', 'capdev_prev'])
+        assert result.returncode == 0
+        assert 'rm -f capdev' in result.docker
+        assert 'rename capdev_prev capdev' in result.docker
+        assert 'start capdev' in result.docker
+        assert 'capdev' in names
+
+    def test_rollback_with_nothing_to_restore_says_the_service_is_down(self, swap):
+        """Honest failure: better than reporting success with a dead service."""
+        result, _ = swap('rollback_container capdev', existing=['capdev'])
+        assert result.returncode != 0
+        assert 'is DOWN' in result.stdout
+
+    def test_discard_previous_only_removes_the_prev(self, swap):
+        result, names = swap('discard_previous capdev', existing=['capdev', 'capdev_prev'])
+        assert 'rm -f capdev_prev' in result.docker
+        assert 'capdev' in names
+        assert 'capdev_prev' not in names
+
+    def test_discard_previous_is_safe_when_there_is_none(self, swap):
+        result, _ = swap('discard_previous capdev', existing=['capdev'])
+        assert result.returncode == 0
+
+    def test_smoke_http_passes_when_the_endpoint_answers(self, swap):
+        result, _ = swap('smoke_http capdev http://x/ready 2 0', curl_ok=True)
+        assert result.returncode == 0
+        assert 'answered' in result.stdout
+
+    def test_smoke_http_fails_when_it_never_answers(self, swap):
+        """A container that started but cannot reach Mongo fails here and
+        passes `docker ps` - which is the whole reason this exists."""
+        result, _ = swap('smoke_http capdev http://x/ready 2 0', curl_ok=False)
+        assert result.returncode != 0
+        assert 'never answered' in result.stdout
+
+    def test_the_full_swap_rolls_back_on_a_failed_smoke_check(self, swap):
+        """End to end: retire, start, smoke fails, previous comes back."""
+        script = (
+            'retire_container capdev\n'
+            'docker run -d --name=capdev image\n'
+            'if smoke_http capdev http://x/ready 1 0; then\n'
+            '  discard_previous capdev\n'
+            'else\n'
+            '  rollback_container capdev\n'
+            'fi'
+        )
+        result, names = swap(script, existing=['capdev'], curl_ok=False)
+        assert 'ROLLBACK' in result.stdout
+        assert 'rename capdev_prev capdev' in result.docker
+        assert 'capdev' in names, 'the service must be back'
+        assert 'capdev_prev' not in names, 'the rename consumed it'
+
+    def test_the_full_swap_keeps_the_new_image_on_success(self, swap):
+        script = (
+            'retire_container capdev\n'
+            'docker run -d --name=capdev image\n'
+            'if smoke_http capdev http://x/ready 1 0; then\n'
+            '  discard_previous capdev\n'
+            'else\n'
+            '  rollback_container capdev\n'
+            'fi'
+        )
+        result, names = swap(script, existing=['capdev'], curl_ok=True)
+        assert 'ROLLBACK' not in result.stdout
+        assert 'rm -f capdev_prev' in result.docker
+        assert 'capdev' in names
+
+
+# --------------------------------------------------------------------------
 # container dispatch - which containers get upgraded, and with what image name
 # --------------------------------------------------------------------------
 
@@ -686,8 +1298,10 @@ SHELLCHECK_CLEAN = [
     'upgrades/upgrade_flex_run.sh',
     'upgrades/lib/deploy_common.sh',
     'upgrades/install_dependencies.sh',
+    'upgrades/system_container_upgrades.sh',
     'system_server/upgrade_system.sh',
     'scripts/local_setup.sh',
+    'setup/system_setup.sh',
 ]
 
 # SC2034 fires on variables the docker run lines read indirectly, and SC1090 on

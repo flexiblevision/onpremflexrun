@@ -28,3 +28,21 @@ setup/mqtt/vernemq-local.conf
 
 # Release notes
 release_notes/
+
+# guided release tool scratch (release/cut.py)
+.release-work/
+
+# Key material. The repo is public, and system_server/timemachine/server.key
+# was committed in 2022 and is still in origin/master.
+*.key
+*.pem
+*.crt
+*.p12
+*.pfx
+cosign.key
+!setup/mqtt/ssl/*.example
+
+# scratch/working artifacts, not part of the system
+*.dc.html
+canvas.json
+onprem-release-pipeline.html
