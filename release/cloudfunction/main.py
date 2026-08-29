@@ -3,7 +3,7 @@
 Deploy (Gen 2, us-central1, flexible-vision-staging):
 
     gcloud functions deploy release_manifest \\
-      --gen2 --runtime python310 --trigger-http --allow-unauthenticated \\
+      --gen2 --runtime python312 --trigger-http --allow-unauthenticated \\
       --entry-point release_manifest --region us-central1 \\
       --source release/cloudfunction
 
