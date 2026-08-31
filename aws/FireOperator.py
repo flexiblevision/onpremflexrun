@@ -4,6 +4,7 @@ from firebase_admin import credentials
 from firebase_admin import firestore
 from google.oauth2 import service_account
 from google.auth.transport.requests import AuthorizedSession
+from google.auth.exceptions import DefaultCredentialsError
 
 import time
 import requests
@@ -25,7 +26,13 @@ if 'fire_operator' in settings.config:
     document     = settings.config['fire_operator']['document'] #(warehouse_zone)
     trigger_dest = settings.config['fire_operator']['trigger_dest']
 
-db = firestore.Client(project="testingprivateapis", credentials=cred, database=db_name) 
+# Built at import, but a machine with no credentials must still be able to
+# import this module - CI has neither fire_creds.json nor application default
+# credentials, and the collection error is raised before any test can patch db.
+try:
+    db = firestore.Client(project="testingprivateapis", credentials=cred, database=db_name)
+except DefaultCredentialsError:
+    db = None
 
 client   = MongoClient("172.17.0.1")
 util_ref = client["fvonprem"]["utils"]
@@ -39,6 +46,10 @@ class FireOperator:
     WATCHDOG_INTERVAL_S  = 30
 
     def __init__(self):
+        if db is None:
+            raise RuntimeError(
+                'no Firestore credentials: expected {} or application default '
+                'credentials'.format(FIRESTORE_CREDS))
         self.db            = db
         self.collection    = collection
         self.document      = document
