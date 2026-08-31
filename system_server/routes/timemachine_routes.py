@@ -96,9 +96,21 @@ class OcrStatus(Resource):
             print(error)
             return False, 500
 
+class AnomalyStatus(Resource):
+    def get(self):
+        # anomaly-server is deployed and runs under --restart unless-stopped, so
+        # this reports whether it is answering rather than managing its lifecycle.
+        try:
+            res = requests.get('http://172.17.0.1:5703/api/system', timeout=2)
+            return res.status_code == 200
+        except Exception as error:
+            print(error)
+            return False, 500
+
 def register_routes(api):
     api.add_resource(EnableTimemachine, '/enable_timemachine')
     api.add_resource(DisableTimemachine, '/disable_timemachine')
     api.add_resource(CleanupTimemachine, '/cleanup_timemachine')
     api.add_resource(ManageOcr, '/manage_ocr')
     api.add_resource(OcrStatus, '/ocr_status')
+    api.add_resource(AnomalyStatus, '/anomaly_status')
