@@ -216,7 +216,11 @@ def per_arch_tags(tags, arches=ARCHES):
     if not isinstance(tags, dict) or not tags:
         raise ManifestError('tags must be a non-empty object')
 
-    keyed_by_arch = set(tags) <= set(arches)
+    # Tested against every known arch, not the subset being built. A per-arch
+    # map covering both is still a per-arch map when only x86 is wanted -
+    # reading it as a flat component map instead would look for components
+    # literally called "x86" and "arm".
+    keyed_by_arch = set(tags) <= set(ARCHES)
     if not keyed_by_arch:
         # A flat map means "this tag on every arch", so components an arch does
         # not have are dropped here. Naming one explicitly under an arch stays
@@ -337,7 +341,7 @@ def build_manifest(release, counter, tags, flexrun_commit, resolver,
             }
         images[arch] = per_arch
 
-    return {
+    document = {
         'schema': SCHEMA,
         'release': str(release),
         'counter': counter,
@@ -350,6 +354,14 @@ def build_manifest(release, counter, tags, flexrun_commit, resolver,
         'images': images,
         'notes': normalise_notes(notes),
     }
+
+    # A single-arch manifest names its architecture. Counters are per arch, so a
+    # device has to be able to tell that a manifest is for its own arch before
+    # comparing counters at all - otherwise an x86 counter 7 would look newer
+    # than an arm device's counter 5 and be accepted.
+    if len(images) == 1:
+        document['arch'] = next(iter(images))
+    return document
 
 
 def canonical_bytes(manifest):
@@ -409,6 +421,12 @@ def validate(manifest):
                 raise ManifestError(
                     'images.{}.{} has a malformed digest: {!r}'
                     .format(arch, component, entry['digest']))
+
+    arch = manifest.get('arch')
+    if arch is not None and set(images) != {arch}:
+        raise ManifestError(
+            'manifest declares arch {!r} but carries images for {} - a release '
+            'is for one architecture'.format(arch, sorted(images)))
 
     normalise_notes(manifest.get('notes'))
     return manifest

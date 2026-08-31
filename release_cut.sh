@@ -1,0 +1,67 @@
+#!/bin/sh
+# Cut a release. See release/RELEASING.md for the whole procedure.
+#
+#   ./release_cut.sh check              what is set up, writes nothing
+#   ./release_cut.sh candidates         what CI has published, rewrites components.json
+#   ./release_cut.sh cut                the guided cut for x86
+#   ./release_cut.sh cut --arch arm     the same for arm
+#
+# Anything after the verb is passed straight through to release.cut, so
+# --allow-dirty, --arch, --strict-provenance and the rest still work.
+set -eu
+
+cd "$(dirname "$0")"
+
+# The signing key. Public information - authority to sign lives in IAM, not in
+# knowing this path. Override with KEY=... for the standby key or a rotation.
+: "${KEY:=gcpkms://projects/flexible-vision-staging/locations/us-central1/keyRings/onprem-release-signing/cryptoKeys/release-signing/versions/1}"
+
+# Reuses `docker login`. The fvonprem repos are private, so digest resolution
+# is a 401 without credentials.
+COMMON="--use-docker-login --key $KEY"
+
+usage() {
+    sed -n '2,10p' "$0" | sed 's/^# \{0,1\}//'
+    echo
+    echo "KEY=<gcpkms://...>   sign with a different key"
+    exit "${1:-0}"
+}
+
+verb="${1:-}"
+[ $# -gt 0 ] && shift || true
+
+case "$verb" in
+    check)
+        # shellcheck disable=SC2086
+        exec python3 -m release.cut --preflight-only $COMMON "$@"
+        ;;
+    candidates)
+        # Rewrites release/components.json from what CI has published, then
+        # stops. Committing the diff is the promote - this does not do that.
+        # shellcheck disable=SC2086
+        exec python3 -m release.cut --update-components $COMMON "$@"
+        ;;
+    cut)
+        # --public-key verifies the signature the way a device will, before
+        # anything is published. Skipped silently if no trust store is set up,
+        # rather than refusing to cut over it.
+        TRUST="${TRUST:-$HOME/.flexrun-trust}"
+        VERIFY=""
+        [ -e "$TRUST" ] && VERIFY="--public-key $TRUST"
+
+        # The previously promoted manifest, if the last cut left one behind.
+        # It is what produces the CHANGED markers on the signing screen.
+        PREV=""
+        [ -f .release-work/manifest.json ] && PREV="--previous .release-work/manifest.json"
+
+        # shellcheck disable=SC2086
+        exec python3 -m release.cut $COMMON $VERIFY $PREV "$@"
+        ;;
+    ''|-h|--help|help)
+        usage 0
+        ;;
+    *)
+        echo "unknown command '$verb'" >&2
+        usage 2
+        ;;
+esac

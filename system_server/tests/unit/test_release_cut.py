@@ -21,7 +21,7 @@ NOW = datetime.datetime(2026, 8, 27, 12, 0, 0)
 HEAD = 'a' * 40
 
 
-def FAKE_RESERVE(build_no, commit, message=None):
+def FAKE_RESERVE(build_no, commit, arch='x86', message=None):
     """Stand-in for the tag push. Every cut() call in these tests must pass a
     reserve, or it would push a real git tag to the real remote."""
     return 'refs/tags/release/{}'.format(build_no)
@@ -278,7 +278,7 @@ class TestCut:
             key_path='k.pem', resolver=resolver, now=NOW,
             editor=self._editor, confirm=lambda t, r: True,
             signer=lambda p, k: b'SIG\n',
-            existing_tags=['release/47'], head=HEAD, reserve=FAKE_RESERVE)
+            existing_tags=['release/x86/47'], head=HEAD, reserve=FAKE_RESERVE)
         assert json.loads(signable.decode('utf-8'))['counter'] == 48
 
     def test_declining_to_sign_stops_it(self, tmp_path):
@@ -304,9 +304,24 @@ class TestCut:
         tags['arm']['visiontools'] = '0.43'
         with pytest.raises(m.ManifestError, match='not built for arm'):
             c.cut(tags=tags, version_text='1.9', work_dir=str(tmp_path),
-                  key_path='k.pem', resolver=resolver, now=NOW,
+                  key_path='k.pem', resolver=resolver, now=NOW, arch='arm',
                   editor=self._editor, confirm=lambda t, r: True,
                   signer=lambda p, k: b'SIG\n', existing_tags=[], head=HEAD, reserve=FAKE_RESERVE)
+
+    def test_the_other_arch_is_not_validated(self, tmp_path):
+        """Releases are per arch, so cutting x86 must not fail on an arm entry.
+        The arm map is checked when arm is cut."""
+        tags = self._tags()
+        tags['arm']['visiontools'] = '0.43'
+        signable, _ = c.cut(
+            tags=tags, version_text='1.9', work_dir=str(tmp_path),
+            key_path='k.pem', resolver=resolver, now=NOW, arch='x86',
+            editor=self._editor, confirm=lambda t, r: True,
+            signer=lambda p, k: b'SIG\n', existing_tags=[], head=HEAD,
+            reserve=FAKE_RESERVE)
+        document = json.loads(signable.decode('utf-8'))
+        assert document['arch'] == 'x86'
+        assert set(document['images']) == {'x86'}
 
 
 class TestCounterIsReserved:
@@ -322,7 +337,7 @@ class TestCounterIsReserved:
                 'impact:\ncapdev restarts once\n')
 
     def _cut(self, tmp_path, order, reserve=None, **kwargs):
-        def default_reserve(build_no, commit, message=None):
+        def default_reserve(build_no, commit, arch='x86', message=None):
             order.append('reserve')
             return 'refs/tags/release/{}'.format(build_no)
 
@@ -344,8 +359,8 @@ class TestCounterIsReserved:
         seen = []
         signable, _ = self._cut(
             tmp_path, [],
-            reserve=lambda n, commit, message=None: seen.append(n) or 'refs/tags/release/%d' % n,
-            existing_tags=['release/47'])
+            reserve=lambda n, commit, arch='x86', message=None: seen.append(n) or 'refs/tags/release/%d' % n,
+            existing_tags=['release/x86/47'])
         assert seen == [48]
         assert json.loads(signable.decode('utf-8'))['counter'] == 48
 
@@ -353,7 +368,7 @@ class TestCounterIsReserved:
         seen = []
         signable, _ = self._cut(
             tmp_path, [],
-            reserve=lambda n, commit, message=None: seen.append(commit) or 'refs/tags/release/%d' % n)
+            reserve=lambda n, commit, arch='x86', message=None: seen.append(commit) or 'refs/tags/release/%d' % n)
         assert seen == [HEAD]
         assert json.loads(signable.decode('utf-8'))['flexrun']['commit'] == HEAD
 
@@ -362,7 +377,7 @@ class TestCounterIsReserved:
         releases into the fleet under one counter."""
         order = []
 
-        def taken(build_no, commit, message=None):
+        def taken(build_no, commit, arch='x86', message=None):
             raise build_mod.BuildError('could not reserve release/1')
 
         with pytest.raises(build_mod.BuildError, match='could not reserve'):
@@ -396,9 +411,9 @@ class TestRemoteTags:
 
     def test_it_reads_release_tags_from_the_remote(self):
         run = self._run(
-            'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\trefs/tags/release/1\n'
-            'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\trefs/tags/release/12\n')
-        assert build_mod.remote_release_tags(run) == ['release/1', 'release/12']
+            'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\trefs/tags/release/x86/1\n'
+            'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\trefs/tags/release/x86/12\n')
+        assert build_mod.remote_release_tags(run) == ['release/x86/1', 'release/x86/12']
 
     def test_unrelated_tags_are_ignored(self):
         """v1.9.1 and archive/* already exist in this repo. Letting them into
@@ -406,16 +421,16 @@ class TestRemoteTags:
         run = self._run(
             'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\trefs/tags/v1.9.1\n'
             'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\trefs/tags/archive/v1.9\n'
-            'cccccccccccccccccccccccccccccccccccccccc\trefs/tags/release/3\n')
-        assert build_mod.remote_release_tags(run) == ['release/3']
+            'cccccccccccccccccccccccccccccccccccccccc\trefs/tags/release/x86/3\n')
+        assert build_mod.remote_release_tags(run) == ['release/x86/3']
 
     def test_dereferenced_tag_lines_do_not_double_count(self):
         """Annotated tags list a second ^{} line for the same tag."""
         run = self._run(
-            'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\trefs/tags/release/5\n'
-            'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\trefs/tags/release/5^{}\n')
-        assert build_mod.remote_release_tags(run) == ['release/5']
-        assert build_mod.next_build(build_mod.remote_release_tags(run)) == 6
+            'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\trefs/tags/release/x86/5\n'
+            'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\trefs/tags/release/x86/5^{}\n')
+        assert build_mod.remote_release_tags(run) == ['release/x86/5']
+        assert build_mod.next_build(build_mod.remote_release_tags(run), 'x86') == 6
 
     def test_an_unreachable_remote_is_an_error_not_an_empty_list(self):
         """Returning [] would silently restart the counter at 1 and re-issue
@@ -437,10 +452,10 @@ class TestRemoteTags:
 
     def test_reserve_creates_an_annotated_tag_then_pushes_it(self):
         run, calls = self._recorder()
-        assert build_mod.reserve_build(7, 'c' * 40, run) == 'refs/tags/release/7'
+        assert build_mod.reserve_build(7, 'c' * 40, 'x86', run) == 'refs/tags/release/x86/7'
         assert calls[0][:4] == ['git', 'tag', '-a', '-f']
-        assert calls[0][-2:] == ['release/7', 'c' * 40]
-        assert calls[-1] == ['git', 'push', 'origin', 'refs/tags/release/7']
+        assert calls[0][-2:] == ['release/x86/7', 'c' * 40]
+        assert calls[-1] == ['git', 'push', 'origin', 'refs/tags/release/x86/7']
 
     def test_the_tag_is_annotated_not_lightweight(self):
         """The whole reservation rests on this. A lightweight tag is just the
@@ -449,28 +464,28 @@ class TestRemoteTags:
         nothing. An annotated tag is a distinct object, so the second push is
         refused."""
         run, calls = self._recorder()
-        build_mod.reserve_build(7, 'c' * 40, run)
+        build_mod.reserve_build(7, 'c' * 40, 'x86', run)
         tag_cmd = calls[0]
         assert '-a' in tag_cmd, 'must be annotated or the reservation is a no-op'
 
     def test_the_message_is_carried_onto_the_tag(self):
         run, calls = self._recorder()
-        build_mod.reserve_build(7, 'c' * 40, run, message='release 1.9.7')
+        build_mod.reserve_build(7, 'c' * 40, 'x86', run, message='release 1.9.7')
         assert 'release 1.9.7' in calls[0]
 
     def test_a_rejected_push_is_raised_with_what_to_do(self):
         run, _ = self._recorder(fail_on='push',
                                 stderr='! [rejected] already exists')
         with pytest.raises(build_mod.BuildError, match='someone else took that number'):
-            build_mod.reserve_build(7, 'c' * 40, run)
+            build_mod.reserve_build(7, 'c' * 40, 'x86', run)
 
     def test_a_rejected_push_does_not_leave_the_local_tag_behind(self):
         """A local tag the remote never granted would make the next cut skip a
         number, and worse, look like the number was legitimately taken."""
         run, calls = self._recorder(fail_on='push', stderr='rejected')
         with pytest.raises(build_mod.BuildError):
-            build_mod.reserve_build(7, 'c' * 40, run)
-        assert ['git', 'tag', '-d', 'release/7'] in calls
+            build_mod.reserve_build(7, 'c' * 40, 'x86', run)
+        assert ['git', 'tag', '-d', 'release/x86/7'] in calls
 
 
 class TestPublishBlock:
@@ -493,7 +508,7 @@ class TestPublishBlock:
         stream = self.Stream()
         c.publish_block(b'{}', b'SIG\n', 48, stream)
         assert '    48: {' in stream.text
-        assert "CHANNELS['stable'] = 48" in stream.text
+        assert "CHANNELS['x86']['stable'] = 48" in stream.text
 
     def test_the_signature_is_stripped_of_its_newline(self):
         stream = self.Stream()
@@ -517,9 +532,14 @@ class TestCli:
         assert code == 1
         assert 'cannot read' in capsys.readouterr().err
 
-    def test_a_component_source_is_required(self):
-        with pytest.raises(SystemExit):
-            c.main(['--key', 'k'])
+    def test_no_source_given_does_not_abort_the_parse(self):
+        """Naming --components every time was noise: the checked-in file is the
+        normal source. Omitting it must reach preflight, not argparse's exit."""
+        code = c.main(['--key', '/nope/k.pem'])
+        assert code == 1          # preflight refused the key, not argparse
+
+    def test_the_default_is_the_checked_in_component_file(self):
+        assert c.DEFAULT_COMPONENTS == 'release/components.json'
 
     def test_the_two_sources_are_mutually_exclusive(self):
         with pytest.raises(SystemExit):

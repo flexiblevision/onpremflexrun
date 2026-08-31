@@ -29,6 +29,7 @@ from . import sign as sign_mod
 from . import verify as verify_mod
 
 DEFAULT_WORK_DIR = '.release-work'
+DEFAULT_COMPONENTS = 'release/components.json'
 STABLE_BASE = 'https://functions-proxy.flexiblevision.com/'
 STABLE_REF = 'latest_stable_version'
 
@@ -83,7 +84,7 @@ def kms_reachable(key_ref, run=None):
 
 def preflight(key_path, version_text, allow_dirty=False, need_credentials=True,
               which=shutil.which, environ=None, run=None,
-              use_docker_login=False, config_path=None):
+              use_docker_login=False, config_path=None, arch='x86'):
     """Everything that must be true before a release is worth starting."""
     env = environ if environ is not None else os.environ
     checks = []
@@ -163,11 +164,11 @@ def preflight(key_path, version_text, allow_dirty=False, need_credentials=True,
     # are resolved and notes are written.
     try:
         remote_tags = build_mod.remote_release_tags(run=run)
-        highest = build_mod.next_build(remote_tags) - 1
+        highest = build_mod.next_build(remote_tags, arch) - 1
         checks.append(Check(
             'release tags on remote', True,
-            'highest release/{} -> next is {}'.format(highest, highest + 1)
-            if highest else 'none yet -> next is 1'))
+            'highest release/{}/{} -> next is {}'.format(arch, highest, highest + 1)
+            if highest else 'none yet for {} -> next is 1'.format(arch)))
     except build_mod.BuildError as exc:
         checks.append(Check(
             'release tags on remote', False, str(exc).splitlines()[0],
@@ -277,7 +278,7 @@ def cut(tags, version_text, work_dir, key_path, previous_raw=None,
     sys.stderr.write('\nresolving digests (one registry call per image)...\n')
     document, build_no = build_mod.build(
         version_text=version_text, existing_tags=existing_tags,
-        flexrun_commit=head, tags=tags, resolver=resolver, now=now)
+        flexrun_commit=head, tags=tags, resolver=resolver, now=now, arch=arch)
 
     previous = manifest_mod.loads(previous_raw) if previous_raw else None
     summary = build_mod.diff_summary(previous, document, arch=arch)
@@ -311,7 +312,8 @@ def cut(tags, version_text, work_dir, key_path, previous_raw=None,
     # trustworthy. Abandoning the cut from here on leaves a gap in the sequence,
     # which devices cannot see; reusing a number would be invisible here and
     # break anti-rollback on every device that had already taken it.
-    ref = reserve(build_no, head, message='release {}'.format(document['release']))
+    ref = reserve(build_no, head, arch,
+                  message='release {} ({})'.format(document['release'], arch))
     sys.stderr.write('\nreserved {} on the remote - counter {} is now spent, '
                      'whether or not this cut finishes\n'.format(ref, build_no))
 
@@ -408,16 +410,18 @@ def compare_to_stable(tags, fetch, stream=sys.stderr):
     return differences
 
 
-def publish_block(signable, signature, counter, stream=sys.stderr):
+def publish_block(signable, signature, counter, stream=sys.stderr, arch='x86'):
     """What to paste into release/cloudfunction/releases.py."""
-    stream.write('\nAdd to RELEASES in release/cloudfunction/releases.py:\n\n')
-    stream.write('    {}: {{\n'.format(counter))
-    stream.write("        'manifest_b64': '{}',\n".format(
+    stream.write("\nAdd to RELEASES['{}'] in release/cloudfunction/releases.py:"
+                 '\n\n'.format(arch))
+    stream.write('        {}: {{\n'.format(counter))
+    stream.write("            'manifest_b64': '{}',\n".format(
         base64.b64encode(signable).decode('ascii')))
-    stream.write("        'signature':    '{}',\n".format(
+    stream.write("            'signature':    '{}',\n".format(
         signature.decode('ascii').strip()))
-    stream.write('    },\n\n')
-    stream.write("Then point a channel at it:  CHANNELS['stable'] = {}\n".format(counter))
+    stream.write('        },\n\n')
+    stream.write("Then point that arch's channel at it:  "
+                 "CHANNELS['{}']['stable'] = {}\n".format(arch, counter))
     stream.write('and redeploy the function. Devices refuse anything not newer\n'
                  'than their own high-water mark, so a mistaken promote cannot\n'
                  'downgrade a device that moved past it.\n')
@@ -426,9 +430,10 @@ def publish_block(signable, signature, counter, stream=sys.stderr):
 def main(argv=None):
     parser = argparse.ArgumentParser(
         description='Cut, sign and verify a release, with preflight checks.')
-    source = parser.add_mutually_exclusive_group(required=True)
-    source.add_argument('--components',
-                        help='checked-in per-arch tag JSON - the normal path')
+    source = parser.add_mutually_exclusive_group()
+    source.add_argument('--components', default=DEFAULT_COMPONENTS,
+                        help='checked-in per-arch tag JSON (default: {})'
+                             .format(DEFAULT_COMPONENTS))
     source.add_argument('--from-stable', action='store_true',
                         help='read current versions from the latest_stable_version '
                              'endpoint; for seeding --write-components, or a '
@@ -470,7 +475,7 @@ def main(argv=None):
 
     sys.stderr.write('preflight\n')
     checks = preflight(args.key, version_text, allow_dirty=args.allow_dirty,
-                       need_credentials=True,
+                       need_credentials=True, arch=args.arch,
                        use_docker_login=args.use_docker_login)
     blocking = render_checks(checks)
     if blocking:
@@ -571,7 +576,7 @@ def main(argv=None):
             '\nskipped local verify (pass --public-key to check the signature '
             'before publishing)\n')
 
-    publish_block(signable, signature, document['counter'])
+    publish_block(signable, signature, document['counter'], arch=args.arch)
     sys.stderr.write('\nartifacts in {}\n'.format(args.work_dir))
     return 0
 

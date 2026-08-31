@@ -38,8 +38,11 @@ import sys
 from . import manifest as manifest_mod
 from . import registry as registry_mod
 
-RELEASE_TAG_RE = re.compile(r'^release/(\d+)$')
-REMOTE_TAG_RE = re.compile(r'^[0-9a-f]{40}\s+refs/tags/(release/\d+)$')
+# release/<arch>/<n>. Counters are per architecture: x86 and arm ship on their
+# own cadence, and a shared sequence would make an arm device look behind
+# because an x86 release consumed a number it will never see.
+RELEASE_TAG_RE = re.compile(r'^release/([a-z0-9]+)/(\d+)$')
+REMOTE_TAG_RE = re.compile(r'^[0-9a-f]{40}\s+refs/tags/(release/[a-z0-9]+/\d+)$')
 VERSION_RE = re.compile(r'^(\d+)\.(\d+)$')
 
 DEFAULT_REMOTE = 'origin'
@@ -63,17 +66,20 @@ def parse_version_file(text):
     return int(match.group(1)), int(match.group(2))
 
 
-def next_build(existing_tags):
-    """One more than the highest release tag. Never reuses or resets.
+def next_build(existing_tags, arch):
+    """One more than the highest release tag for this arch. Never reuses.
 
-    Anything that is not release/<int> is ignored rather than guessed at, so an
-    unrelated tag cannot perturb the sequence.
+    Anything that is not release/<arch>/<int> is ignored rather than guessed at,
+    so an unrelated tag - or another architecture's - cannot perturb this
+    sequence.
     """
+    if not arch:
+        raise BuildError('next_build needs an arch: counters are per architecture')
     highest = 0
     for tag in existing_tags or ():
         match = RELEASE_TAG_RE.match(str(tag).strip())
-        if match:
-            highest = max(highest, int(match.group(1)))
+        if match and match.group(1) == arch:
+            highest = max(highest, int(match.group(2)))
     return highest + 1
 
 
@@ -125,7 +131,8 @@ def remote_release_tags(run=None, remote=DEFAULT_REMOTE):
     return tags
 
 
-def reserve_build(build_no, commit, run=None, remote=DEFAULT_REMOTE, message=None):
+def reserve_build(build_no, commit, arch, run=None, remote=DEFAULT_REMOTE,
+                  message=None):
     """Claim a build number on the remote, before anything is signed.
 
     Pushed first rather than last, and that ordering is the point. Two people
@@ -147,9 +154,9 @@ def reserve_build(build_no, commit, run=None, remote=DEFAULT_REMOTE, message=Non
     """
     runner = run or (lambda argv: subprocess.run(
         argv, capture_output=True, text=True, check=False))
-    name = 'release/{}'.format(build_no)
+    name = 'release/{}/{}'.format(arch, build_no)
     ref = 'refs/tags/' + name
-    message = message or 'release build {}'.format(build_no)
+    message = message or 'release build {} ({})'.format(build_no, arch)
 
     # -f because a previous cut that failed at the push may have left this tag
     # behind locally. The remote is the authority on what is taken, so a local
@@ -237,9 +244,9 @@ def components_from_stable(fetch, components=manifest_mod.FOUNDATIONAL, arch='x8
 # --- assembly ---------------------------------------------------------------
 
 def build(version_text, existing_tags, flexrun_commit, tags, resolver, now,
-          features=None, valid_days=DEFAULT_VALID_DAYS, notes=None):
+          arch='x86', features=None, valid_days=DEFAULT_VALID_DAYS, notes=None):
     major, minor = parse_version_file(version_text)
-    build_no = next_build(existing_tags)
+    build_no = next_build(existing_tags, arch)
     version = release_version(major, minor, build_no)
 
     document = manifest_mod.build_manifest(
@@ -252,6 +259,7 @@ def build(version_text, existing_tags, flexrun_commit, tags, resolver, now,
         now=now,
         valid_days=valid_days,
         notes=notes,
+        arches=(arch,),
     )
     return document, build_no
 

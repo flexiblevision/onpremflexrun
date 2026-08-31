@@ -48,34 +48,34 @@ class TestNextBuild:
     """Monotonic forever. This is the anti-rollback counter."""
 
     def test_first_release_is_one(self):
-        assert b.next_build([]) == 1
+        assert b.next_build([], 'x86') == 1
 
     def test_increments_from_the_highest(self):
-        assert b.next_build(['release/1', 'release/47']) == 48
+        assert b.next_build(['release/x86/1', 'release/x86/47'], 'x86') == 48
 
     def test_ignores_unrelated_tags(self):
         """A semver tag or a branch-archive tag must not perturb the sequence."""
-        assert b.next_build(['v1.9.2', 'archive/v1.8', 'release/12', 'nightly']) == 13
+        assert b.next_build(['v1.9.2', 'archive/v1.8', 'release/x86/12', 'nightly'], 'x86') == 13
 
     def test_ignores_malformed_release_tags(self):
-        assert b.next_build(['release/x', 'release/', 'release/1.2', 'release/9']) == 10
+        assert b.next_build(['release/x', 'release/', 'release/1.2', 'release/x86/9'], 'x86') == 10
 
     def test_uses_the_highest_not_the_count(self):
         """A deleted tag must not cause a number to be reused."""
-        assert b.next_build(['release/3', 'release/9', 'release/7']) == 10
+        assert b.next_build(['release/x86/3', 'release/x86/9', 'release/x86/7'], 'x86') == 10
 
     def test_is_not_confused_by_ordering(self):
-        assert b.next_build(['release/100', 'release/2']) == 101
+        assert b.next_build(['release/x86/100', 'release/x86/2'], 'x86') == 101
 
     def test_handles_whitespace_from_git_output(self):
-        assert b.next_build(['  release/5  ', 'release/6\n']) == 7
+        assert b.next_build(['  release/x86/5  ', 'release/x86/6\n'], 'x86') == 7
 
     def test_never_returns_a_used_number(self):
-        used = ['release/%d' % n for n in range(1, 40)]
-        assert b.next_build(used) not in [int(t.split('/')[1]) for t in used]
+        used = ['release/x86/%d' % n for n in range(1, 40)]
+        assert b.next_build(used, 'x86') not in [int(t.split('/')[2]) for t in used]
 
     def test_survives_none(self):
-        assert b.next_build(None) == 1
+        assert b.next_build(None, 'x86') == 1
 
 
 class TestReleaseVersion:
@@ -155,7 +155,7 @@ class TestBuild:
 
     def test_counter_equals_the_build_number(self):
         """One source of truth, so version and counter cannot disagree."""
-        doc, build_no = b.build('1.9', ['release/47'], COMMIT, all_tags(),
+        doc, build_no = b.build('1.9', ['release/x86/47'], COMMIT, all_tags(),
                                 resolver, NOW)
         assert build_no == 48
         assert doc['release'] == '1.9.48'
@@ -216,7 +216,7 @@ class TestBuild:
             doc, n = b.build('1.9', list(tags), COMMIT, all_tags(), resolver, NOW)
             assert n not in seen
             seen.add(n)
-            tags.append('release/%d' % n)
+            tags.append('release/x86/%d' % n)
         assert sorted(seen) == [1, 2, 3, 4, 5]
 
 
@@ -225,7 +225,7 @@ class TestDiffSummary:
 
     def _two(self, second_tags):
         first, _ = b.build('1.9', [], COMMIT, all_tags(), resolver, NOW)
-        second, _ = b.build('1.9', ['release/1'], 'b' * 40, second_tags,
+        second, _ = b.build('1.9', ['release/x86/1'], 'b' * 40, second_tags,
                             resolver, NOW)
         return first, second
 
@@ -250,7 +250,7 @@ class TestDiffSummary:
 
     def test_a_new_feature_is_reported_as_added(self):
         first, _ = b.build('1.9', [], COMMIT, all_tags(), resolver, NOW)
-        second, _ = b.build('1.9', ['release/1'], COMMIT, all_tags(), resolver,
+        second, _ = b.build('1.9', ['release/x86/1'], COMMIT, all_tags(), resolver,
                             NOW, features={'eventor': '0.4.1'})
         summary = b.diff_summary(first, second)
         assert summary['added'] == ['eventor']
@@ -258,7 +258,7 @@ class TestDiffSummary:
     def test_a_dropped_feature_is_reported_as_removed(self):
         first, _ = b.build('1.9', [], COMMIT, all_tags(), resolver, NOW,
                            features={'eventor': '0.4.1'})
-        second, _ = b.build('1.9', ['release/1'], COMMIT, all_tags(), resolver, NOW)
+        second, _ = b.build('1.9', ['release/x86/1'], COMMIT, all_tags(), resolver, NOW)
         summary = b.diff_summary(first, second)
         assert summary['removed'] == ['eventor']
 
@@ -278,8 +278,8 @@ class TestGitHelpers:
 
     def test_release_tags_are_returned_as_a_list(self):
         run = MagicMock(return_value=MagicMock(
-            returncode=0, stdout='release/1\nrelease/2\n', stderr=''))
-        assert b.git_release_tags(run) == ['release/1', 'release/2']
+            returncode=0, stdout='release/x86/1\nrelease/x86/2\n', stderr=''))
+        assert b.git_release_tags(run) == ['release/x86/1', 'release/x86/2']
 
     def test_no_tags_is_not_an_error(self):
         run = MagicMock(return_value=MagicMock(returncode=0, stdout='', stderr=''))
@@ -313,3 +313,39 @@ class TestCli:
         """Two sources of truth for the component set is not a release."""
         with pytest.raises(SystemExit):
             b.main(['--components', 'x.json', '--from-stable'])
+
+
+class TestPerArchCounters:
+    """x86 and arm ship on their own cadence. A shared sequence would make an
+    arm device look behind because an x86 release consumed a number it will
+    never see."""
+
+    def test_each_arch_counts_independently(self):
+        tags = ['release/x86/1', 'release/x86/2', 'release/arm/1']
+        assert b.next_build(tags, 'x86') == 3
+        assert b.next_build(tags, 'arm') == 2
+
+    def test_another_arch_cannot_move_this_one(self):
+        assert b.next_build(['release/arm/99'], 'x86') == 1
+
+    def test_an_unknown_arch_starts_at_one(self):
+        assert b.next_build(['release/x86/7'], 'riscv') == 1
+
+    def test_the_old_flat_tag_format_is_ignored(self):
+        """release/<n> predates per-arch counters. Counting it would restart
+        x86 from a number that is not its own."""
+        assert b.next_build(['release/12'], 'x86') == 1
+
+    def test_an_arch_is_required(self):
+        with pytest.raises(b.BuildError, match='per architecture'):
+            b.next_build(['release/x86/1'], None)
+
+    def test_reserve_names_the_arch_in_the_tag(self):
+        calls = []
+
+        def run(argv):
+            calls.append(argv)
+            return MagicMock(returncode=0, stdout='', stderr='')
+
+        assert b.reserve_build(3, 'c' * 40, 'arm', run) == 'refs/tags/release/arm/3'
+        assert calls[-1] == ['git', 'push', 'origin', 'refs/tags/release/arm/3']

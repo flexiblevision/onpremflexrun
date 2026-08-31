@@ -38,8 +38,9 @@ def cf():
         import main
         import releases
         main.releases = releases
-        releases.RELEASES = {}
-        releases.CHANNELS = {'stable': None, 'beta': None}
+        releases.RELEASES = {'x86': {}, 'arm': {}}
+        releases.CHANNELS = {'x86': {'stable': None, 'beta': None},
+                             'arm': {'stable': None, 'beta': None}}
         yield main
     finally:
         for name in ('main', 'releases'):
@@ -49,9 +50,16 @@ def cf():
 
 
 class Request:
-    """Stands in for flask.Request - the function only calls get_json."""
+    """Stands in for flask.Request - the function only calls get_json.
 
-    def __init__(self, body=None):
+    arch is defaulted here, not in the endpoint: a device always knows its own
+    architecture, and guessing one server-side would hand an arm device x86
+    images. The endpoint requiring it is asserted separately.
+    """
+
+    def __init__(self, body=None, arch='x86'):
+        if isinstance(body, dict) and arch is not None and 'arch' not in body:
+            body = dict(body, arch=arch)
         self._body = body
 
     def get_json(self, silent=False):
@@ -74,14 +82,15 @@ def signed_manifest():
     return m.canonical_bytes(document)
 
 
-def publish(cf, counter=48, channel='stable', raw=None, signature='SIGBASE64=='):
+def publish(cf, counter=48, channel='stable', raw=None, signature='SIGBASE64==',
+            arch='x86'):
     raw = raw if raw is not None else signed_manifest()
-    cf.releases.RELEASES[counter] = {
+    cf.releases.RELEASES[arch][counter] = {
         'manifest_b64': base64.b64encode(raw).decode('ascii'),
         'signature': signature,
     }
     if channel:
-        cf.releases.CHANNELS[channel] = counter
+        cf.releases.CHANNELS[arch][channel] = counter
     return raw
 
 
@@ -152,9 +161,37 @@ class TestChannelLookup:
         publish(cf)
         assert status_of(cf.release_manifest(Request({}))) == 200
 
-    def test_no_body_at_all_still_serves_stable(self, cf):
+    def test_no_body_at_all_is_refused(self, cf):
+        """Used to serve stable. It cannot any more: arch is not guessable, and
+        defaulting to x86 would hand an arm device images that do not exist for
+        it, carrying a counter from a sequence it does not follow."""
         publish(cf)
-        assert status_of(cf.release_manifest(Request(None))) == 200
+        response = cf.release_manifest(Request(None, arch=None))
+        assert status_of(response) == 400
+        assert 'arch' in body_of(response)['error']
+
+    def test_an_unknown_arch_is_refused_and_lists_the_real_ones(self, cf):
+        publish(cf)
+        response = cf.release_manifest(Request({'arch': 'riscv'}, arch=None))
+        assert status_of(response) == 400
+        assert body_of(response)['arches'] == ['arm', 'x86']
+
+    def test_promoting_one_arch_leaves_the_other_alone(self, cf):
+        """The whole point of per-arch counters: an x86 release must not make an
+        arm device think anything happened."""
+        publish(cf, counter=48, arch='x86')
+        assert status_of(cf.release_manifest(Request({}, arch='x86'))) == 200
+        response = cf.release_manifest(Request({}, arch='arm'))
+        assert status_of(response) == 404
+
+    def test_the_same_counter_on_two_arches_is_two_releases(self, cf):
+        publish(cf, counter=1, arch='x86', signature='X86SIG==')
+        publish(cf, counter=1, arch='arm', signature='ARMSIG==')
+        x86 = body_of(cf.release_manifest(Request({}, arch='x86')))
+        arm = body_of(cf.release_manifest(Request({}, arch='arm')))
+        assert x86['counter'] == arm['counter'] == 1
+        assert x86['signature'] != arm['signature']
+        assert x86['arch'] == 'x86' and arm['arch'] == 'arm'
 
     def test_an_unpromoted_channel_is_a_404(self, cf):
         publish(cf, channel='stable')
@@ -177,9 +214,9 @@ class TestChannelLookup:
         """The whole promote/rollback mechanism."""
         publish(cf, counter=48, channel='stable')
         publish(cf, counter=49, channel=None)
-        cf.releases.CHANNELS['stable'] = 49
+        cf.releases.CHANNELS['x86']['stable'] = 49
         assert body_of(cf.release_manifest(Request({})))['counter'] == 49
-        cf.releases.CHANNELS['stable'] = 48
+        cf.releases.CHANNELS['x86']['stable'] = 48
         assert body_of(cf.release_manifest(Request({})))['counter'] == 48
 
 
@@ -218,27 +255,27 @@ class TestHalfPublishedRelease:
     """A promotion mistake should say so, not fail later as a bad signature."""
 
     def test_a_missing_signature_is_a_500_naming_the_field(self, cf):
-        cf.releases.RELEASES[48] = {
+        cf.releases.RELEASES['x86'][48] = {
             'manifest_b64': base64.b64encode(signed_manifest()).decode('ascii')}
-        cf.releases.CHANNELS['stable'] = 48
+        cf.releases.CHANNELS['x86']['stable'] = 48
         response = cf.release_manifest(Request({}))
         assert status_of(response) == 500
         assert 'signature' in body_of(response)['error']
 
     def test_a_missing_manifest_is_a_500_naming_the_field(self, cf):
-        cf.releases.RELEASES[48] = {'signature': 'SIG'}
-        cf.releases.CHANNELS['stable'] = 48
+        cf.releases.RELEASES['x86'][48] = {'signature': 'SIG'}
+        cf.releases.CHANNELS['x86']['stable'] = 48
         response = cf.release_manifest(Request({}))
         assert status_of(response) == 500
         assert 'manifest_b64' in body_of(response)['error']
 
     def test_an_empty_string_counts_as_missing(self, cf):
-        cf.releases.RELEASES[48] = {'manifest_b64': '', 'signature': 'SIG'}
-        cf.releases.CHANNELS['stable'] = 48
+        cf.releases.RELEASES['x86'][48] = {'manifest_b64': '', 'signature': 'SIG'}
+        cf.releases.CHANNELS['x86']['stable'] = 48
         assert status_of(cf.release_manifest(Request({}))) == 500
 
     def test_a_channel_pointing_at_nothing_is_a_404(self, cf):
-        cf.releases.CHANNELS['stable'] = 48   # never added to RELEASES
+        cf.releases.CHANNELS['x86']['stable'] = 48   # never added to RELEASES
         response = cf.release_manifest(Request({}))
         assert status_of(response) == 404
         assert '48' in body_of(response)['error']

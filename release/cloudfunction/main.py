@@ -42,10 +42,11 @@ def _json(payload, status=200):
     return (json.dumps(payload), status, _HEADERS)
 
 
-def _envelope(counter, channel=None):
-    entry = releases.RELEASES.get(counter)
+def _envelope(arch, counter, channel=None):
+    entry = (releases.RELEASES.get(arch) or {}).get(counter)
     if not entry:
-        return _json({'error': 'release {} is not published'.format(counter)}, 404)
+        return _json({'error': 'release {} is not published for {}'.format(
+            counter, arch)}, 404)
 
     # Anything missing here is a promotion mistake, and a half-envelope would
     # fail verification on the device with a confusing error. Say so instead.
@@ -55,6 +56,7 @@ def _envelope(counter, channel=None):
 
     return _json({
         'schema': ENVELOPE_SCHEMA,
+        'arch': arch,
         'channel': channel,
         'counter': counter,
         # Verbatim. See the note in releases.py.
@@ -66,23 +68,34 @@ def _envelope(counter, channel=None):
 def release_manifest(request):
     body = request.get_json(silent=True) or {}
 
+    # Required, never defaulted. Guessing x86 would hand an arm device a
+    # manifest full of images that do not exist for it, and the counter it
+    # carries would be from a sequence that device does not follow.
+    arch = body.get('arch')
+    if arch not in releases.CHANNELS:
+        return _json({
+            'error': "unknown or missing arch {!r}".format(arch),
+            'arches': sorted(releases.CHANNELS),
+        }, 400)
+
     counter = body.get('counter')
     if counter is not None:
         try:
             counter = int(counter)
         except (TypeError, ValueError):
             return _json({'error': 'counter must be an integer'}, 400)
-        return _envelope(counter)
+        return _envelope(arch, counter)
 
     channel = body.get('channel', 'stable')
-    if channel not in releases.CHANNELS:
+    if channel not in releases.CHANNELS[arch]:
         return _json({
             'error': "unknown channel '{}'".format(channel),
-            'channels': sorted(releases.CHANNELS),
+            'channels': sorted(releases.CHANNELS[arch]),
         }, 404)
 
-    promoted = releases.CHANNELS[channel]
+    promoted = releases.CHANNELS[arch][channel]
     if promoted is None:
-        return _json({'error': "no release promoted to channel '{}'".format(channel)}, 404)
+        return _json({'error': "no release promoted to '{}' for {}".format(
+            channel, arch)}, 404)
 
-    return _envelope(promoted, channel=channel)
+    return _envelope(arch, promoted, channel=channel)

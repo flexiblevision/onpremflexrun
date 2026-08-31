@@ -26,16 +26,21 @@ anything not newer than their own high-water mark, so a mistaken promote cannot
 downgrade a device that already moved past it.
 """
 
-# counter -> the signed release
+# arch -> counter -> the signed release. Counters are per architecture: x86 and
+# arm ship on their own cadence, so counter 7 on x86 has nothing to do with
+# counter 7 on arm, and promoting one must never move the other.
 RELEASES = {
-    # 48: {
-    #     'manifest_b64': 'eyJzY2hlbWEiOiJmbGV4cnVuLnJlbGVhc2UvdjIi...',
-    #     'signature':    'MEUCIQDf3n2K8pXm...==',
-    # },
+    'x86': {
+        # 48: {
+        #     'manifest_b64': 'eyJzY2hlbWEiOiJmbGV4cnVuLnJlbGVhc2UvdjIi...',
+        #     'signature':    'MEUCIQDf3n2K8pXm...==',
+        # },
+    },
+    'arm': {},
 }
 
-# channel -> counter. This is the only thing promotion changes.
+# arch -> channel -> counter. This is the only thing promotion changes.
 CHANNELS = {
-    'stable': None,
-    'beta': None,
+    'x86': {'stable': None, 'beta': None},
+    'arm': {'stable': None, 'beta': None},
 }
