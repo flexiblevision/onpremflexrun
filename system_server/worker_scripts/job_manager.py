@@ -366,3 +366,21 @@ def push_analytics_to_cloud(domain, access_token):
 def enable_ocr():
     install_file = f"{os.environ['HOME']}/flex-run/helpers/install_ocr.sh"
     os.system(f"sudo sh {install_file}")
+
+
+# Host side of the anomaly container's bind mount. The sync worker writes here
+# and the container reads it as /models, so the two must agree - see
+# retrieve_anomaly_models.ANOMALY_MODELS_DIR.
+ANOMALY_MODELS_DIR = '/anomaly/models'
+
+
+def enable_anomaly():
+    """
+    Deploy or restart the anomaly inference container.
+
+    The install script starts an existing container rather than recreating it,
+    so enabling a feature that was only stopped costs nothing and cannot lose
+    the container's flags.
+    """
+    install_file = f"{os.environ['HOME']}/flex-run/helpers/install_anomaly.sh"
+    os.system(f"sudo sh {install_file} {ANOMALY_MODELS_DIR}")

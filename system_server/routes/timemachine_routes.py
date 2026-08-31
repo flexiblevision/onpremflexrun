@@ -5,7 +5,7 @@ from flask_restx import Resource
 import auth
 from redis import Redis
 from rq import Queue, Retry
-from worker_scripts.job_manager import insert_job, enable_ocr
+from worker_scripts.job_manager import insert_job, enable_ocr, enable_anomaly
 from timemachine.installer import local_zip_push_install, cloud_install, validate_account
 from timemachine.cleanup import cleanup_timemachine_records
 
@@ -96,6 +96,33 @@ class OcrStatus(Resource):
             print(error)
             return False, 500
 
+class ManageAnomaly(Resource):
+    @auth.requires_auth
+    def put(self):
+        j = request.json
+        if 'state' not in j:
+            return 'state key not found', 404
+
+        if j['state']:
+            # Enqueued rather than run inline: on a fresh device this pulls a
+            # multi-GB image, and the job record is what makes that visible in
+            # the console instead of looking hung.
+            install_job = job_queue.enqueue(
+                            enable_anomaly,
+                            job_timeout=3600,
+                            result_ttl=3600,
+                            retry=Retry(max=5, interval=60),
+                        )
+            insert_job(install_job.id, 'installing and deploying anomaly service')
+            return 'enabling...', 200
+
+        # stop, not rm: the container keeps its mount, ports and env, so
+        # re-enabling is a start rather than a recreate with every flag
+        # re-supplied. Model packages under /anomaly/models are untouched.
+        os.system("docker stop anomaly-server")
+        return 'disabled', 200
+
+
 class AnomalyStatus(Resource):
     def get(self):
         # anomaly-server is deployed and runs under --restart unless-stopped, so
@@ -113,4 +140,5 @@ def register_routes(api):
     api.add_resource(CleanupTimemachine, '/cleanup_timemachine')
     api.add_resource(ManageOcr, '/manage_ocr')
     api.add_resource(OcrStatus, '/ocr_status')
+    api.add_resource(ManageAnomaly, '/manage_anomaly')
     api.add_resource(AnomalyStatus, '/anomaly_status')
