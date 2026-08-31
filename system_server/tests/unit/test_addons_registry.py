@@ -46,14 +46,15 @@ class TestShippedCatalog:
     @pytest.mark.unit
     def test_every_shipped_descriptor_is_valid(self):
         addons = registry.load()
-        assert set(addons) == {'anomaly_audio', 'assembly', 'client_mode',
-                               'ftp', 'ocr', 'timemachine'}
+        assert set(addons) == {'anomaly_audio', 'anomaly_visual', 'assembly',
+                               'client_mode', 'ftp', 'ocr', 'timemachine'}
 
     @pytest.mark.unit
     def test_the_release_components_are_the_container_addons(self):
         # This is what build_release.py should populate features= from.
         assert registry.components() == {
             'anomaly_audio': 'audio-anomaly',
+            'anomaly_visual': 'anomaly-server',
             'assembly': 'assembly-client',
             'ocr': 'ocr',
         }
@@ -67,10 +68,24 @@ class TestShippedCatalog:
 
     @pytest.mark.unit
     def test_the_anomaly_family_shares_a_group(self):
-        # Audio today, images later: siblings so each is licensed and pinned on
-        # its own, grouped so the UI still presents one product.
-        audio = registry.get('anomaly_audio')
-        assert audio['group'] == {'key': 'anomaly', 'label': 'Anomaly Detection'}
+        # Siblings so each is licensed and pinned on its own, grouped so the UI
+        # still presents one product.
+        group = {'key': 'anomaly', 'label': 'Anomaly Detection'}
+        assert registry.get('anomaly_audio')['group'] == group
+        assert registry.get('anomaly_visual')['group'] == group
+
+    @pytest.mark.unit
+    def test_the_anomaly_siblings_are_licensed_separately(self):
+        # One entitlement for both would sell audio to anyone buying images.
+        assert (registry.get('anomaly_audio')['entitlement']
+                != registry.get('anomaly_visual')['entitlement'])
+
+    @pytest.mark.unit
+    def test_visual_anomaly_is_not_offered_on_arm(self):
+        # build.sh publishes fvonprem/x86-anomaly-server only; offering the
+        # toggle on arm would enqueue an install that can never succeed.
+        assert 'anomaly_visual' in registry.for_arch('x86')
+        assert 'anomaly_visual' not in registry.for_arch('arm')
 
     @pytest.mark.unit
     def test_every_enterprise_addon_names_an_entitlement(self):

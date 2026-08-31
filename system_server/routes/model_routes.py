@@ -9,6 +9,7 @@ import auth
 from redis import Redis
 from rq import Queue, Retry
 from worker_scripts.retrieve_models import retrieve_models
+from worker_scripts.retrieve_anomaly_models import retrieve_anomaly_models
 from worker_scripts.retrieve_programs import retrieve_programs
 from worker_scripts.retrieve_masks import retrieve_masks
 from worker_scripts.model_upload_worker import upload_model
@@ -62,6 +63,18 @@ class DownloadModels(Resource):
     def post(self):
         data = request.json
         access_token = request.headers.get('Access-Token')
+
+        # A .fvmdl is one file delivered through the anomaly addon's bind mount,
+        # so it shares none of retrieve_models' zip/saved_model/docker cp work.
+        # Masks and programs are keyed to detection projects and do not apply.
+        if data.get('model_type') == 'anomaly':
+            j_anomaly = job_queue.enqueue(retrieve_anomaly_models, data, access_token,
+                                    job_timeout=1800,
+                                    result_ttl=3600,
+                                    retry=Retry(max=5, interval=60),
+                                )
+            if j_anomaly: insert_job(j_anomaly.id, 'Downloading anomaly models')
+            return True
 
         j_models = job_queue.enqueue(retrieve_models, data, access_token,
                                 job_timeout=1800,

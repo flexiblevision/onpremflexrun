@@ -1,0 +1,48 @@
+{
+  "schema": "flexrun.addon/v1",
+  "name": "anomaly_visual",
+  "label": "Visual Anomaly Detection",
+  "description": "Detects surface defects and missing content from good samples only.",
+  "group": {"key": "anomaly", "label": "Anomaly Detection"},
+  "tier": "enterprise",
+  "entitlement": "visual_anomaly",
+  "kind": "container",
+  "arches": ["x86"],
+  "component": "anomaly-server",
+  "source": "https://github.com/flexiblevision/anomaly_pipeline",
+  "container": {
+    "name": "anomaly-server",
+    "default_tag": "v1",
+    "restart": "unless-stopped",
+    "gpu": "optional",
+    "ports": [{"host": 5703, "container": 8080}],
+    "env": {
+      "SERVE_ONLY": "1",
+      "MODELS_DIR": "/models"
+    },
+    "volumes": [
+      {
+        "host": "/anomaly/models",
+        "container": "/models",
+        "create": true
+      }
+    ],
+    "log_opts": {"max-size": "50m", "max-file": "5"}
+  },
+  "health": {
+    "type": "http",
+    "host": "172.17.0.1",
+    "port": 5703,
+    "path": "/api/models",
+    "timeout": 2
+  },
+  "ui": {
+    "icon": "BlurOn",
+    "order": 31,
+    "manage": "toggle"
+  },
+  "legacy_routes": {
+    "manage": "/manage_anomaly",
+    "status": "/anomaly_status"
+  }
+}
