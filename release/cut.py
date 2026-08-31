@@ -20,6 +20,7 @@ import subprocess
 import sys
 
 from . import build_release as build_mod
+from . import candidates as candidates_mod
 from . import manifest as manifest_mod
 from . import prepare as prepare_mod
 from . import provenance as provenance_mod
@@ -451,6 +452,10 @@ def main(argv=None):
     parser.add_argument('--strict-provenance', action='store_true',
                         help='refuse images with no CI-recorded commit, rather '
                              'than warning (see release/provenance.py)')
+    parser.add_argument('--update-components', action='store_true',
+                        help='find the newest CI-built version of each '
+                             'component, write release/components.json, and '
+                             'show what changed. Commit that diff to promote.')
     parser.add_argument('--write-components', metavar='PATH',
                         help='write the resolved component set to PATH and stop, '
                              'without cutting anything')
@@ -473,6 +478,32 @@ def main(argv=None):
         return 1
     if args.preflight_only:
         sys.stderr.write('\npreflight only: stopping here.\n')
+        return 0
+
+    # Rewrite the component file from what CI has published, then stop. Nothing
+    # is signed and nothing is committed - reviewing and committing the diff is
+    # still the promote.
+    if args.update_components:
+        path = args.components or 'release/components.json'
+        try:
+            with open(path) as handle:
+                current, _ = build_mod.components_from_file(handle.read())
+        except OSError as exc:
+            sys.stderr.write('cannot read {}: {}\n'.format(path, exc))
+            return 1
+
+        resolver = registry_mod.DockerHubResolver(
+            use_docker_config=args.use_docker_login)
+        sys.stderr.write('\nasking the registry what CI has published '
+                         '(a few calls per component)...\n\n')
+        records = candidates_mod.survey(current, resolver.list_tags,
+                                        resolver.labels)
+        changed = candidates_mod.describe(records, sys.stderr)
+        if changed:
+            write_components(path, candidates_mod.apply(current, records))
+            sys.stderr.write(
+                '\n  git diff {}\n'
+                '  git commit -am "promote ..."\n'.format(path))
         return 0
 
     try:

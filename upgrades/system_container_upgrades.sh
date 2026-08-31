@@ -192,16 +192,15 @@ if [ "$PREDICT_UPTD" != 'True' ]; then
     if safe_pull "fvonprem/$SYSTEM_ARCH-prediction:$PREDICT_UPTD" && \
        retire_container localprediction; then
 
+        # Mirrors base_path() in worker_scripts/retrieve_models.py.
+        MODELS_DIR="$([ -d /xavier_ssd ] && echo /xavier_ssd/models || echo /models)"
+        mkdir -p "$MODELS_DIR"
+
         docker run -p 8500:8500 -p 8501:8501 --gpus device=0 --name localprediction  -d -e AWS_ACCESS_KEY_ID=imagerie -e AWS_SECRET_ACCESS_KEY=imagerie -e AWS_REGION=us-east-1 \
             --restart unless-stopped --network imagerie_nw  \
             --log-opt max-size=50m --log-opt max-file=5 \
+            -v "$MODELS_DIR:/models" \
             -t "fvonprem/$SYSTEM_ARCH-prediction:$PREDICT_UPTD"
-
-        DIR="$HOME/../models"
-        if [ -d "$DIR" ]; then
-            docker cp "$DIR" localprediction:/
-            docker restart localprediction
-        fi
 
         # After the model copy and restart, not before - restarting a container
         # that had already passed would leave a pass standing over a new start.
@@ -222,16 +221,16 @@ if [ "$PREDLITE_UPTD" != 'True' ]; then
     if safe_pull "fvonprem/$SYSTEM_ARCH-predictlite:$PREDLITE_UPTD" && \
        retire_container predictlite; then
 
+        # Mirrors base_path() in worker_scripts/retrieve_models.py.
+        LITE_MODELS_DIR="$([ -d /xavier_ssd ] && echo /xavier_ssd/lite_models || echo /lite_models)"
+        mkdir -p "$LITE_MODELS_DIR"
+
         docker run -p 8511:8511 --name predictlite  -d  \
             --restart unless-stopped --network imagerie_nw  \
             --runtime nvidia \
             --log-opt max-size=50m --log-opt max-file=5 \
+            -v "$LITE_MODELS_DIR:/data/lite_models" \
             -t "fvonprem/$SYSTEM_ARCH-predictlite:$PREDLITE_UPTD"
-
-        DIR="$HOME/../lite_models"
-        if [ -d "$DIR" ]; then
-            docker cp "$DIR" predictlite:/data/models
-        fi
 
         if smoke_running predictlite; then
             discard_previous predictlite

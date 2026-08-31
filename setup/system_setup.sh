@@ -221,18 +221,28 @@ start captureui -p "$CAPTUREUI_PORTS" --restart unless-stopped \
     --log-opt max-size=50m --log-opt max-file=5 -e REACT_APP_ARCH="$SYSTEM_ARCH" \
     "$IMAGE_CAPTUREUI"
 
+# Mirrors base_path() in system_server/worker_scripts/retrieve_models.py.
+MODELS_DIR="$([ -d /xavier_ssd ] && echo /xavier_ssd/models || echo /models)"
+mkdir -p "$MODELS_DIR"
+
 start localprediction -p 8500:8500 -p 8501:8501 --gpus device=0 \
     --name localprediction -d \
+    -v "$MODELS_DIR:/models" \
     -e AWS_ACCESS_KEY_ID=imagerie -e AWS_SECRET_ACCESS_KEY=imagerie \
     -e AWS_REGION=us-east-1 \
     --restart unless-stopped --network imagerie_nw \
     --log-opt max-size=50m --log-opt max-file=5 \
     -t "$IMAGE_PREDICTION"
 
+# Mirrors base_path() in system_server/worker_scripts/retrieve_models.py.
+LITE_MODELS_DIR="$([ -d /xavier_ssd ] && echo /xavier_ssd/lite_models || echo /lite_models)"
+mkdir -p "$LITE_MODELS_DIR"
+
 start predictlite -p 8511:8511 --name predictlite -d \
     --restart unless-stopped --network imagerie_nw \
     --runtime nvidia \
     --log-opt max-size=50m --log-opt max-file=5 \
+    -v "$LITE_MODELS_DIR:/data/lite_models" \
     -t "$IMAGE_PREDICTLITE"
 
 start vision -p 5555:5555 --name vision -d \

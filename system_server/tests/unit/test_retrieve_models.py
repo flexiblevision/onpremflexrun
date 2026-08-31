@@ -674,8 +674,12 @@ class TestDockerIntegration:
             docker_calls = [str(call) for call in mock_os_system.call_args_list
                            if 'docker' in str(call)]
 
-            # Should exec rm, cp, and restart localprediction
-            assert any('localprediction' in call for call in docker_calls)
-            assert any('docker exec' in call for call in docker_calls)
-            assert any('docker cp' in call for call in docker_calls)
-            assert any('docker restart' in call for call in docker_calls)
+            # localprediction bind-mounts the host models directory, so a sync
+            # must NOT copy into the container - and must NOT rm inside it,
+            # which would delete the host's models through the mount.
+            assert any('docker restart localprediction' in call
+                       for call in docker_calls)
+            assert not [c for c in docker_calls
+                        if 'docker cp' in c and 'localprediction' in c]
+            assert not [c for c in docker_calls
+                        if 'docker exec' in c and 'localprediction' in c]

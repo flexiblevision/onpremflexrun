@@ -13,6 +13,7 @@ import base64
 import binascii
 import json
 import os
+import re
 
 import requests
 
@@ -139,6 +140,31 @@ class DockerHubResolver:
                 'without it there is no authoritative digest to pin'
                 .format(repository, tag))
         return digest.strip()
+
+    def list_tags(self, repository):
+        """Every tag on a repository. Paginated; the registry caps page size."""
+        token = self._token(repository)
+        headers = {'Authorization': 'Bearer ' + token}
+        url = '{}/v2/{}/tags/list?n=1000'.format(REGISTRY_URL, repository)
+        tags = []
+
+        # Follow RFC 5988 Link headers rather than guessing page numbers - a
+        # repository with hundreds of commit tags will paginate.
+        while url:
+            response = self.session.get(url, headers=headers, timeout=TIMEOUT)
+            if response.status_code == 404:
+                raise RegistryError(
+                    '{} does not exist in the registry'.format(repository))
+            if response.status_code != 200:
+                raise RegistryError(
+                    'tag listing for {} returned HTTP {}'
+                    .format(repository, response.status_code))
+            tags.extend(response.json().get('tags') or [])
+
+            link = response.headers.get('Link', '')
+            match = re.search(r'<([^>]+)>;\s*rel="next"', link)
+            url = REGISTRY_URL + match.group(1) if match else None
+        return tags
 
     def labels(self, repository, tag):
         """OCI labels on an image, or {} if it carries none.
