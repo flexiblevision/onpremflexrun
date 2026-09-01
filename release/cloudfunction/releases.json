@@ -1,0 +1,16 @@
+{
+  "channels": {
+    "arm": {
+      "beta": null,
+      "stable": null
+    },
+    "x86": {
+      "beta": null,
+      "stable": null
+    }
+  },
+  "releases": {
+    "arm": {},
+    "x86": {}
+  }
+}

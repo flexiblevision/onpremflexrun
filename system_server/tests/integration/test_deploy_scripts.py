@@ -305,6 +305,18 @@ def setup_env(sh, tmp_path):
     shutil.copy(SYSTEM_SETUP, str(tree / 'setup' / 'system_setup.sh'))
     shutil.copy(LIB, str(tree / 'upgrades' / 'lib' / 'deploy_common.sh'))
 
+    # The real provisioning step and the real keys, not a stub: install now
+    # refuses to continue without a trust store, and that refusal is worth
+    # exercising here rather than mocking away.
+    shutil.copy(os.path.join(REPO, 'setup', 'provision_trust.sh'),
+                str(tree / 'setup' / 'provision_trust.sh'))
+    os.chmod(str(tree / 'setup' / 'provision_trust.sh'), 0o755)
+    shutil.copytree(os.path.join(REPO, 'release', 'keys'),
+                    str(tree / 'release' / 'keys'))
+    for name in ('__init__.py', 'trust.py'):
+        shutil.copy(os.path.join(REPO, 'release', name),
+                    str(tree / 'release' / name))
+
     state = tmp_path / 'state'
     state.mkdir()
     home = sh.tmp / 'home'
@@ -384,8 +396,13 @@ def setup_env(sh, tmp_path):
     # Real sleeps would add ~60s: smoke_settled waits per container.
     _write_stub(sh.stubs, 'sleep', 'exit 0\n')
 
+    trust_dir = tmp_path / 'trust'
+
     def run(args=SETUP_ARGS, **kwargs):
-        return sh('sh %s %s' % (tree / 'setup' / 'system_setup.sh', args), **kwargs)
+        env = dict(kwargs.pop('env', None) or {})
+        env.setdefault('FLEXRUN_TRUST_DIR', str(trust_dir))
+        return sh('sh %s %s' % (tree / 'setup' / 'system_setup.sh', args),
+                  env=env, **kwargs)
 
     run.state = state
     run.tree = tree

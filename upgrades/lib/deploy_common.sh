@@ -131,6 +131,75 @@ discard_previous() {
     fi
 }
 
+# The upgrade plan: one line per component, "<component> <version> <ref>".
+#
+# Replaces reading versions out of $1..$8. Positional slots meant a fixed set of
+# seven components in a fixed order, with the arch wedged into the middle by the
+# dispatcher - so a new foundational service could not be expressed at all, and
+# vernemq ended up upgraded by a hardcoded block outside the scheme. A named
+# plan makes adding a component a data change, and lets each arch carry a
+# different set without renumbering anything.
+#
+# Both readers fall back to the caller's positional value when there is no plan.
+# That is load-bearing during a rollout: upgrade_flex_run.sh replaces this tree
+# and the OLD runner then invokes the NEW scripts with positional arguments, so
+# the first upgrade after this change has no plan file and must still work.
+
+# plan_version <component> <fallback>
+# The version to move this component to, or True to leave it alone.
+plan_version() {
+    local component="$1"
+    local fallback="$2"
+
+    if [ -z "${FLEXRUN_PLAN:-}" ] || [ ! -r "${FLEXRUN_PLAN:-}" ]; then
+        echo "$fallback"
+        return 0
+    fi
+
+    local found
+    found="$(awk -v c="$component" '$1 == c { print $2; exit }' \
+             "$FLEXRUN_PLAN" 2>/dev/null)"
+    if [ -n "$found" ]; then echo "$found"; else echo "True"; fi
+}
+
+# plan_ref <component> <fallback_ref>
+# What to pull and run: the digest a signed release pinned, or the caller's tag.
+#
+# Pulling by tag is why digest pinning was decorative on the device: a manifest
+# recorded sha256:... and the device then fetched whatever the tag pointed at,
+# which is what a repointed tag exploits. Only a *@sha256:* value is accepted,
+# so a malformed plan cannot redirect a pull somewhere else.
+plan_ref() {
+    local component="$1"
+    local fallback="$2"
+
+    if [ -z "${FLEXRUN_PLAN:-}" ] || [ ! -r "${FLEXRUN_PLAN:-}" ]; then
+        echo "$fallback"
+        return 0
+    fi
+
+    local pinned
+    pinned="$(awk -v c="$component" '$1 == c { print $3; exit }' \
+              "$FLEXRUN_PLAN" 2>/dev/null)"
+
+    case "$pinned" in
+        *@sha256:*) echo "$pinned" ;;
+        *)          echo "$fallback" ;;
+    esac
+}
+
+# report_component <component> <outcome> <from> <to> <ref>
+# Record what actually happened to one container. The step log says
+# "updating X" then "X updated" regardless of outcome, so a rollback and a
+# clean upgrade are indistinguishable in it - this is what tells them apart.
+report_component() {
+    [ -n "${FLEXRUN_RUN_ID:-}" ] || return 0
+    [ -n "${FLEXRUN_RECORDER:-}" ] || return 0
+    python3 "$FLEXRUN_RECORDER" -i "$FLEXRUN_RUN_ID" \
+        --component "$1" --outcome "$2" \
+        --from "${3:-}" --to "${4:-}" --ref "${5:-}" >/dev/null 2>&1 || true
+}
+
 # safe_pull <image>
 # Pull, reporting the image that failed. Both the install and the upgrade path
 # pull, so this lives here rather than in either one.

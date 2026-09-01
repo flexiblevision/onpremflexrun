@@ -5,6 +5,9 @@
 #   ./release_cut.sh candidates         what CI has published, rewrites components.json
 #   ./release_cut.sh cut                the guided cut for x86
 #   ./release_cut.sh cut --arch arm     the same for arm
+#   ./release_cut.sh promote            ship the cut you just signed, and deploy
+#   ./release_cut.sh promote --channel beta   ship it to one device first
+#   ./release_cut.sh rollback --counter 3     put a channel back
 #
 # Anything after the verb is passed straight through to release.cut, so
 # --allow-dirty, --arch, --strict-provenance and the rest still work.
@@ -56,6 +59,19 @@ case "$verb" in
 
         # shellcheck disable=SC2086
         exec python3 -m release.cut $COMMON $VERIFY $PREV "$@"
+        ;;
+    promote)
+        # Deliberately separate from `cut`. Signing says "this is a genuine
+        # release"; promoting says "the fleet should run it". This does the
+        # three steps that used to be manual - write the release, point the
+        # channel, deploy - and then asks the proxy what it actually serves,
+        # because a deploy that succeeds but is unreachable is the failure that
+        # matters and gcloud does not report it.
+        exec python3 -m release.promote "$@"
+        ;;
+    rollback)
+        # Same machinery: point a channel at a release already published.
+        exec python3 -m release.promote "$@"
         ;;
     ''|-h|--help|help)
         usage 0

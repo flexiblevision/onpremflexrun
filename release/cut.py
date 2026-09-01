@@ -422,6 +422,10 @@ def publish_block(signable, signature, counter, stream=sys.stderr, arch='x86'):
     stream.write('        },\n\n')
     stream.write("Then point that arch's channel at it:  "
                  "CHANNELS['{}']['stable'] = {}\n".format(arch, counter))
+    stream.write('\nOr do all of that in one step:\n')
+    stream.write('    ./release_cut.sh promote\n')
+    stream.write('which writes the release, points the channel, deploys, and '
+                 'checks\nwhat the proxy actually serves.\n')
     stream.write('and redeploy the function. Devices refuse anything not newer\n'
                  'than their own high-water mark, so a mistaken promote cannot\n'
                  'downgrade a device that moved past it.\n')

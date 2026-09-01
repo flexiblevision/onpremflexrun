@@ -1,11 +1,11 @@
-CAP_UPTD=$1
-CAPUI_UPTD=$2
-PREDICT_UPTD=$3
+CAP_UPTD_ARG=$1
+CAPUI_UPTD_ARG=$2
+PREDICT_UPTD_ARG=$3
 SYSTEM_ARCH=$4
-PREDLITE_UPTD=$5
-VISION_UPTD=$6
-CREATOR_UPTD=$7
-VISIONTOOLS_UPTD=$8
+PREDLITE_UPTD_ARG=$5
+VISION_UPTD_ARG=$6
+CREATOR_UPTD_ARG=$7
+VISIONTOOLS_UPTD_ARG=$8
 
 REDIS_VERSION='5.0.6'
 MONGO_VERSION='4.2'
@@ -31,14 +31,10 @@ TZ="$(cat /etc/timezone)"
 # to the same upgrade. Standalone invocations still get their own id.
 uuid="${FLEXRUN_RUN_ID:-$(uuidgen)}"
 r_path="$HOME/flex-run/upgrades/upgrade_recorder.py"
-num_steps=-1
+FLEXRUN_RECORDER="$r_path"
+export FLEXRUN_RECORDER
+num_steps=0
 cur_step=0
-for var in "$@"
-do
-    if [ "$var" != 'True' ]; then
-        num_steps=$((num_steps+1))
-    fi
-done
 
 # Container state is staged here while a container is torn down and recreated.
 # Never in / — a crash between teardown and recreation orphans the only copy at
@@ -67,6 +63,29 @@ if [ -z "${_lib_loaded:-}" ]; then
     echo "ERROR: cannot find upgrades/lib/deploy_common.sh - deploy tree is incomplete" >&2
     exit 1
 fi
+
+# The plan is the source of truth when a signed release drove this run; the
+# positional arguments are the fallback for an older runner that has none.
+CAP_UPTD="$(plan_version backend "$CAP_UPTD_ARG")"
+CAPUI_UPTD="$(plan_version frontend "$CAPUI_UPTD_ARG")"
+PREDICT_UPTD="$(plan_version prediction "$PREDICT_UPTD_ARG")"
+PREDLITE_UPTD="$(plan_version predictlite "$PREDLITE_UPTD_ARG")"
+VISION_UPTD="$(plan_version vision "$VISION_UPTD_ARG")"
+CREATOR_UPTD="$(plan_version nodecreator "$CREATOR_UPTD_ARG")"
+VISIONTOOLS_UPTD="$(plan_version visiontools "$VISIONTOOLS_UPTD_ARG")"
+
+# vernemq had no positional slot at all - it was upgraded unconditionally with
+# $ENVIRON as its tag, which is a channel name and not a version. With a plan it
+# is an ordinary component; without one it keeps the old behaviour.
+VERNEMQ_UPTD="$(plan_version vernemq "$ENVIRON")"
+
+# Counted after resolution, not from $@: with a plan the versions do not come
+# from the argument list at all, and a step count taken from argv would leave
+# the progress bar reporting against the wrong total.
+for _v in "$CAP_UPTD" "$CAPUI_UPTD" "$PREDICT_UPTD" "$PREDLITE_UPTD" \
+          "$VISION_UPTD" "$CREATOR_UPTD" "$VISIONTOOLS_UPTD" "$VERNEMQ_UPTD"; do
+    [ "$_v" != 'True' ] && num_steps=$((num_steps+1))
+done
 
 # --- Helper Functions ---
 
@@ -155,7 +174,8 @@ if [ "$CAP_UPTD" != 'True' ]; then
 
     # The image is pulled BEFORE anything is torn down, so a bad network fails
     # the swap closed instead of half-way through it.
-    if safe_pull "fvonprem/$SYSTEM_ARCH-backend:$CAP_UPTD" && \
+    REF_BACKEND="$(plan_ref backend "fvonprem/$SYSTEM_ARCH-backend:$CAP_UPTD")"
+    if safe_pull "$REF_BACKEND" && \
        save_state capdev /fvbackend/cameras.json cameras.json && \
        retire_container capdev; then
 
@@ -168,16 +188,18 @@ if [ "$CAP_UPTD" != 'True' ]; then
             -e GCP_FUNCTIONS_DOMAIN="$GCP_FUNCTIONS_DOMAIN" -e CLOUD_DOMAIN="$CLOUD_DOMAIN" \
             -e ENVIRON="$ENVIRON" -e AUTH0_ALGORITHMS="$AUTH0_ALGORITHMS" -e JWT_SECRET="$JWT_SECRET" \
             --log-opt max-size=50m --log-opt max-file=5 \
-            -d "fvonprem/$SYSTEM_ARCH-backend:$CAP_UPTD"
+            -d "$REF_BACKEND"
 
         # Readiness, not liveness: the jwks endpoint is only served once the
         # backend is actually up, so this catches a container that started and
         # then could not reach Mongo.
         if smoke_http capdev "http://172.17.0.1:5000/api/capture/auth/jwks"; then
             restore_state capdev /fvbackend/ cameras.json
-            discard_previous capdev
+            report_component backend upgraded "" "$CAP_UPTD" "$REF_BACKEND"
+        discard_previous capdev
         else
-            rollback_container capdev
+            report_component backend rolled_back "" "$CAP_UPTD" "$REF_BACKEND"
+        rollback_container capdev
             restore_state capdev /fvbackend/ cameras.json
         fi
     fi
@@ -189,7 +211,8 @@ fi
 if [ "$PREDICT_UPTD" != 'True' ]; then
     python3 "$r_path" -i "$uuid" -t 'updating inference server' -c "$cur_step"
 
-    if safe_pull "fvonprem/$SYSTEM_ARCH-prediction:$PREDICT_UPTD" && \
+    REF_PREDICTION="$(plan_ref prediction "fvonprem/$SYSTEM_ARCH-prediction:$PREDICT_UPTD")"
+    if safe_pull "$REF_PREDICTION" && \
        retire_container localprediction; then
 
         # Mirrors base_path() in worker_scripts/retrieve_models.py.
@@ -200,14 +223,16 @@ if [ "$PREDICT_UPTD" != 'True' ]; then
             --restart unless-stopped --network imagerie_nw  \
             --log-opt max-size=50m --log-opt max-file=5 \
             -v "$MODELS_DIR:/models" \
-            -t "fvonprem/$SYSTEM_ARCH-prediction:$PREDICT_UPTD"
+            -t "$REF_PREDICTION"
 
         # After the model copy and restart, not before - restarting a container
         # that had already passed would leave a pass standing over a new start.
         if smoke_running localprediction; then
-            discard_previous localprediction
+            report_component prediction upgraded "" "$PREDICT_UPTD" "$REF_PREDICTION"
+        discard_previous localprediction
         else
-            rollback_container localprediction
+            report_component prediction rolled_back "" "$PREDICT_UPTD" "$REF_PREDICTION"
+        rollback_container localprediction
         fi
     fi
 
@@ -218,7 +243,8 @@ fi
 if [ "$PREDLITE_UPTD" != 'True' ]; then
     python3 "$r_path" -i "$uuid" -t 'updating inference lite server' -c "$cur_step"
 
-    if safe_pull "fvonprem/$SYSTEM_ARCH-predictlite:$PREDLITE_UPTD" && \
+    REF_PREDICTLITE="$(plan_ref predictlite "fvonprem/$SYSTEM_ARCH-predictlite:$PREDLITE_UPTD")"
+    if safe_pull "$REF_PREDICTLITE" && \
        retire_container predictlite; then
 
         # Mirrors base_path() in worker_scripts/retrieve_models.py.
@@ -230,12 +256,14 @@ if [ "$PREDLITE_UPTD" != 'True' ]; then
             --runtime nvidia \
             --log-opt max-size=50m --log-opt max-file=5 \
             -v "$LITE_MODELS_DIR:/data/lite_models" \
-            -t "fvonprem/$SYSTEM_ARCH-predictlite:$PREDLITE_UPTD"
+            -t "$REF_PREDICTLITE"
 
         if smoke_running predictlite; then
-            discard_previous predictlite
+            report_component predictlite upgraded "" "$PREDLITE_UPTD" "$REF_PREDICTLITE"
+        discard_previous predictlite
         else
-            rollback_container predictlite
+            report_component predictlite rolled_back "" "$PREDLITE_UPTD" "$REF_PREDICTLITE"
+        rollback_container predictlite
         fi
     fi
 
@@ -246,7 +274,8 @@ fi
 if [ "$VISION_UPTD" != 'True' ]; then
     python3 "$r_path" -i "$uuid" -t 'updating vision server' -c "$cur_step"
 
-    if safe_pull "fvonprem/$SYSTEM_ARCH-vision:$VISION_UPTD" && \
+    REF_VISION="$(plan_ref vision "fvonprem/$SYSTEM_ARCH-vision:$VISION_UPTD")"
+    if safe_pull "$REF_VISION" && \
        save_state vision /fvbackend/camera_configs camera_configs && \
        retire_container vision; then
 
@@ -257,13 +286,15 @@ if [ "$VISION_UPTD" != 'True' ]; then
             -e AUTH0_DOMAIN="$AUTH0_DOMAIN" -e AUTH0_CID="$AUTH0_CID" \
             -e REDIS_URL="$REDIS_URL" -e REDIS_SERVER="$REDIS_SERVER" -e REDIS_PORT="$REDIS_PORT" \
             -e DB_NAME="$DB_NAME" -e MONGO_SERVER="$MONGO_SERVER" -e MONGO_PORT="$MONGO_PORT" \
-            -t "fvonprem/$SYSTEM_ARCH-vision:$VISION_UPTD"
+            -t "$REF_VISION"
 
         if smoke_running vision; then
             restore_state vision /fvbackend/ camera_configs
-            discard_previous vision
+            report_component vision upgraded "" "$VISION_UPTD" "$REF_VISION"
+        discard_previous vision
         else
-            rollback_container vision
+            report_component vision rolled_back "" "$VISION_UPTD" "$REF_VISION"
+        rollback_container vision
             restore_state vision /fvbackend/ camera_configs
         fi
     fi
@@ -275,7 +306,8 @@ fi
 if [ "$CREATOR_UPTD"  != 'True' ]; then
     python3 "$r_path" -i "$uuid" -t 'updating nodecreator server' -c "$cur_step"
 
-    if safe_pull "fvonprem/$SYSTEM_ARCH-nodecreator:$CREATOR_UPTD" && \
+    REF_NODECREATOR="$(plan_ref nodecreator "fvonprem/$SYSTEM_ARCH-nodecreator:$CREATOR_UPTD")"
+    if safe_pull "$REF_NODECREATOR" && \
        save_state nodecreator /root/.node-red/flows.json flows.json && \
        retire_container nodecreator; then
 
@@ -283,13 +315,15 @@ if [ "$CREATOR_UPTD"  != 'True' ]; then
         --restart unless-stopped --privileged -v /dev:/dev -v /sys:/sys \
         --log-opt max-size=50m --log-opt max-file=5 \
         -v /home/visioncell/Documents:/Documents \
-        --network host -d "fvonprem/$SYSTEM_ARCH-nodecreator:$CREATOR_UPTD"
+        --network host -d "$REF_NODECREATOR"
 
         if smoke_running nodecreator; then
             restore_state nodecreator /root/.node-red/ flows.json
-            discard_previous nodecreator
+            report_component nodecreator upgraded "" "$CREATOR_UPTD" "$REF_NODECREATOR"
+        discard_previous nodecreator
         else
-            rollback_container nodecreator
+            report_component nodecreator rolled_back "" "$CREATOR_UPTD" "$REF_NODECREATOR"
+        rollback_container nodecreator
             restore_state nodecreator /root/.node-red/ flows.json
         fi
     fi
@@ -301,19 +335,22 @@ fi
 if [ "$VISIONTOOLS_UPTD" != 'True' ]; then
     python3 "$r_path" -i "$uuid" -t 'updating visiontools server' -c "$cur_step"
 
-    if safe_pull "fvonprem/$SYSTEM_ARCH-visiontools:$VISIONTOOLS_UPTD" && \
+    REF_VISIONTOOLS="$(plan_ref visiontools "fvonprem/$SYSTEM_ARCH-visiontools:$VISIONTOOLS_UPTD")"
+    if safe_pull "$REF_VISIONTOOLS" && \
        retire_container visiontools; then
 
         docker run -d --name=visiontools -p 0.0.0.0:5021:5021 --restart unless-stopped \
             --network imagerie_nw --gpus device=0 -e MONGODB_URL="$MONGODB_URL" \
             -e DB_NAME="$DB_NAME" -e MONGO_SERVER="$MONGO_SERVER" -e MONGO_PORT="$MONGO_PORT" \
             -e REMBG_MODEL="$REMBG_MODEL" -e PYTHONUNBUFFERED=1 \
-            -d "fvonprem/$SYSTEM_ARCH-visiontools:$VISIONTOOLS_UPTD"
+            -d "$REF_VISIONTOOLS"
 
         if smoke_running visiontools; then
-            discard_previous visiontools
+            report_component visiontools upgraded "" "$VISIONTOOLS_UPTD" "$REF_VISIONTOOLS"
+        discard_previous visiontools
         else
-            rollback_container visiontools
+            report_component visiontools rolled_back "" "$VISIONTOOLS_UPTD" "$REF_VISIONTOOLS"
+        rollback_container visiontools
         fi
     fi
 
@@ -324,25 +361,28 @@ fi
 if [ "$CAPUI_UPTD" != 'True' ]; then
     python3 "$r_path" -i "$uuid" -t 'updating frontend server' -c "$cur_step"
 
-    if safe_pull "fvonprem/$SYSTEM_ARCH-frontend:$CAPUI_UPTD" && \
+    REF_FRONTEND="$(plan_ref frontend "fvonprem/$SYSTEM_ARCH-frontend:$CAPUI_UPTD")"
+    if safe_pull "$REF_FRONTEND" && \
        retire_container captureui; then
 
         if [ "$ENVIRON" = "local" ]; then
             docker run -p 0.0.0.0:3000:3000 --restart unless-stopped \
                 --name captureui -e CAPTURE_SERVER=http://172.17.0.1:5000 -e PROCESS_SERVER=http://172.17.0.1 --network imagerie_nw \
                 --log-opt max-size=50m --log-opt max-file=5 -e REACT_APP_ARCH="$SYSTEM_ARCH" \
-                -d "fvonprem/$SYSTEM_ARCH-frontend:$CAPUI_UPTD"
+                -d "$REF_FRONTEND"
         else
             docker run -p 0.0.0.0:80:3000 --restart unless-stopped \
                 --name captureui -e CAPTURE_SERVER=http://172.17.0.1:5000 -e PROCESS_SERVER=http://172.17.0.1 --network imagerie_nw \
                 --log-opt max-size=50m --log-opt max-file=5 -e REACT_APP_ARCH="$SYSTEM_ARCH" \
-                -d "fvonprem/$SYSTEM_ARCH-frontend:$CAPUI_UPTD"
+                -d "$REF_FRONTEND"
         fi
 
         if smoke_running captureui; then
-            discard_previous captureui
+            report_component frontend upgraded "" "$CAPUI_UPTD" "$REF_FRONTEND"
+        discard_previous captureui
         else
-            rollback_container captureui
+            report_component frontend rolled_back "" "$CAPUI_UPTD" "$REF_FRONTEND"
+        rollback_container captureui
         fi
     fi
 
@@ -355,7 +395,10 @@ fi
 # VerneMQ MQTT broker - always pull latest for environ
 python3 "$r_path" -i "$uuid" -t 'updating vernemq broker' -c "$cur_step"
 
-if safe_pull "fvonprem/$SYSTEM_ARCH-vernemq:$ENVIRON" && \
+REF_VERNEMQ="$(plan_ref vernemq "fvonprem/$SYSTEM_ARCH-vernemq:$VERNEMQ_UPTD")"
+if [ "$VERNEMQ_UPTD" = 'True' ]; then
+    echo "vernemq already at the released version - skipping"
+elif safe_pull "$REF_VERNEMQ" && \
    retire_container vernemq; then
 
     SCRIPT_DIR="$HOME/flex-run/setup/mqtt"
@@ -367,7 +410,7 @@ if safe_pull "fvonprem/$SYSTEM_ARCH-vernemq:$ENVIRON" && \
             --network host \
             --log-opt max-size=50m \
             --log-opt max-file=5 \
-            "fvonprem/$SYSTEM_ARCH-vernemq:$ENVIRON"
+            "$REF_VERNEMQ"
     fi
 
     if smoke_running vernemq; then

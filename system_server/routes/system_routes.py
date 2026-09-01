@@ -140,9 +140,6 @@ class Upgrade(Resource):
             return {'error': 'An upgrade is already running on this device',
                     'pid': holder}, 409
 
-        versions = [is_container_uptodate(name)[1]
-                    for name in upgrade_runner.VERSION_ARGS]
-
         try:
             import requests
             requests.get('http://172.17.0.1:5555/api/vision/releaseAll', timeout=10)
@@ -163,8 +160,13 @@ class Upgrade(Resource):
         except IOError:
             handle, log = subprocess.DEVNULL, None
 
+        # --release prefers a signed manifest and falls back to the version
+        # endpoint when none can be obtained, so a device is never stranded by
+        # an unreachable release service. No versions are passed: the runner
+        # computes them for the fallback, so it upgrades to what is current
+        # when the upgrade runs rather than when the request arrived.
         try:
-            subprocess.Popen([sys.executable, runner, run_id] + versions,
+            subprocess.Popen([sys.executable, runner, '--release', run_id],
                              stdout=handle, stderr=subprocess.STDOUT,
                              stdin=subprocess.DEVNULL,
                              start_new_session=True,
@@ -290,11 +292,34 @@ class Rollback(Resource):
             return {'error': 'release {} has never run on this device'.format(target),
                     'available': sorted(known)}, 400
 
-        # The apply path itself is Phase 3 work; refusing loudly is better than
-        # reporting a rollback that did not happen.
-        return {'error': 'rollback is not wired to the apply path yet',
-                'target': target,
-                'detail': 'the device does not yet apply signed manifests'}, 501
+        # Detached for the same reason /upgrade is: a rollback swaps every
+        # container and restarts this server, so nothing is left to answer the
+        # request it came in on.
+        home = os.environ['HOME']
+        runner = os.path.join(home, 'flex-run', 'system_server',
+                              'upgrade_runner.py')
+        run_id = str(uuid.uuid4())
+        log = upgrade_runner.log_path(run_id)
+        try:
+            handle = open(log, 'ab', 0) if log else subprocess.DEVNULL
+        except IOError:
+            handle, log = subprocess.DEVNULL, None
+
+        try:
+            subprocess.Popen([sys.executable, runner, '--rollback', run_id,
+                              str(target)],
+                             stdout=handle, stderr=subprocess.STDOUT,
+                             stdin=subprocess.DEVNULL,
+                             start_new_session=True, close_fds=True)
+        except Exception as e:
+            return {'error': 'Could not start the rollback',
+                    'detail': str(e)}, 500
+        finally:
+            if handle is not subprocess.DEVNULL:
+                handle.close()
+
+        return {'started': True, 'run_id': run_id, 'target': target,
+                'log': log}, 202
 
 
 class SystemIsUptodate(Resource):

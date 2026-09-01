@@ -168,6 +168,14 @@ else
     log "updated to $COMMIT (branch tip of '$BRANCH', unpinned)"
 fi
 
+# Devices installed before release signing existed have no trust store, and
+# they can only get one through this path. Not fatal: an older device that
+# cannot verify a manifest still runs, it just cannot take a signed release.
+if [ -x "$LIVE_TREE/setup/provision_trust.sh" ]; then
+    "$LIVE_TREE/setup/provision_trust.sh" \
+        || log "WARNING: could not provision release signing keys"
+fi
+
 # Let filesystem writes settle before the caller executes the scripts we just
 # replaced.
 sleep 3

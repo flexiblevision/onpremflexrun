@@ -25,22 +25,26 @@ redeploy. To roll the fleet back: change the integer back. Devices still refuse
 anything not newer than their own high-water mark, so a mistaken promote cannot
 downgrade a device that already moved past it.
 """
+import json
+import os
 
-# arch -> counter -> the signed release. Counters are per architecture: x86 and
-# arm ship on their own cadence, so counter 7 on x86 has nothing to do with
-# counter 7 on arm, and promoting one must never move the other.
-RELEASES = {
-    'x86': {
-        # 48: {
-        #     'manifest_b64': 'eyJzY2hlbWEiOiJmbGV4cnVuLnJlbGVhc2UvdjIi...',
-        #     'signature':    'MEUCIQDf3n2K8pXm...==',
-        # },
-    },
-    'arm': {},
-}
+# The data lives in releases.json beside this file, not in this source.
+#
+# It used to be dicts here, edited by hand during a release. That put a Python
+# syntax error one keystroke away from the storage layer at exactly the moment
+# nobody has time for it, and made promoting something a script could not do
+# safely - so it was done by hand, and the deploy that has to follow it was
+# forgettable. A data file is equally reviewable in a diff and can be written
+# by release_cut.sh promote.
+#
+# Same two rules as before: RELEASES is append-only, and manifest_b64 and
+# signature are opaque - base64 in, base64 out, character for character.
+_DATA = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'releases.json')
 
-# arch -> channel -> counter. This is the only thing promotion changes.
-CHANNELS = {
-    'x86': {'stable': None, 'beta': None},
-    'arm': {'stable': None, 'beta': None},
-}
+with open(_DATA) as _handle:
+    _loaded = json.load(_handle)
+
+# JSON object keys are strings; the counters devices send are integers.
+RELEASES = {arch: {int(counter): entry for counter, entry in entries.items()}
+            for arch, entries in _loaded['releases'].items()}
+CHANNELS = _loaded['channels']

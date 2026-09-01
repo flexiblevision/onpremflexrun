@@ -36,6 +36,9 @@ release_notes/
 # was committed in 2022 and is still in origin/master.
 *.key
 *.pem
+# Public release-signing keys are the deliberate exception: a device
+# cannot verify a manifest without them, so they ship in the tree.
+!release/keys/*.pem
 *.crt
 *.p12
 *.pfx

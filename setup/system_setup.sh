@@ -119,6 +119,15 @@ MONGO_PORT='27017'
 MONGODB_URL='mongodb://localhost:27017'
 REMBG_MODEL='u2netp'
 
+# --- release trust ----------------------------------------------------------
+# Before any container starts: a device with no trust store cannot verify a
+# release, and the keys must be in place from first boot rather than arriving
+# in an update it has no way to check.
+if ! "$(dirname "$0")/provision_trust.sh"; then
+    fail "could not provision the release signing keys"
+    exit 21
+fi
+
 # --- host prerequisites -----------------------------------------------------
 if [ "$SYSTEM_ARCH" = "arm" ]; then
     # Host node, for node-red tooling. Not fatal: the containers are what serve
