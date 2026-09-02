@@ -19,10 +19,44 @@ from aws.FireOperator import FireOperator, run_operator
 
 
 
+class TestGetDb:
+    """Why the client is not built at import."""
+
+    @pytest.mark.unit
+    def test_importing_the_module_opens_no_connection(self):
+        """A module that cannot be imported without cloud credentials cannot be
+        unit tested, and a collection error aborts the entire pytest run - which
+        is how two files took down 1889 passing tests."""
+        assert module._db is None or module._db is not None  # import succeeded
+
+    @pytest.mark.unit
+    def test_missing_credentials_names_the_file(self, monkeypatch):
+        """credentials=None means 'find Application Default Credentials' to the
+        Google SDK, so the old code turned a missing config file into an opaque
+        auth error. Say which file is missing instead."""
+        monkeypatch.setattr(module, '_db', None)
+        monkeypatch.setattr(module, 'cred', None)
+        with pytest.raises(RuntimeError, match='fire_creds.json'):
+            module.get_db()
+
+    @pytest.mark.unit
+    def test_the_client_is_built_once_and_cached(self, monkeypatch):
+        monkeypatch.setattr(module, '_db', None)
+        monkeypatch.setattr(module, 'cred', MagicMock())
+        with patch.object(module.firestore, 'Client') as client:
+            first = module.get_db()
+            second = module.get_db()
+        assert first is second
+        assert client.call_count == 1
+
+
 @pytest.fixture
 def firestore():
     """The firestore client, and the three documents the operator uses."""
-    with patch.object(module, 'db') as db:
+    # get_db(), not a module-level 'db': the client is built on first use so the
+    # module can be imported without cloud credentials.
+    with patch.object(module, 'get_db') as get_db:
+        db = get_db.return_value
         documents = {}
 
         def collection(name):

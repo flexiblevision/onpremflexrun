@@ -25,7 +25,33 @@ if 'fire_operator' in settings.config:
     document     = settings.config['fire_operator']['document'] #(warehouse_zone)
     trigger_dest = settings.config['fire_operator']['trigger_dest']
 
-db = firestore.Client(project="testingprivateapis", credentials=cred, database=db_name) 
+_db = None
+
+
+def get_db():
+    """
+    The Firestore handle, built on first use rather than at import.
+
+    Constructing it at module scope made this module impossible to import
+    without cloud credentials, which is why every test that touches it - and so
+    the whole pytest run, since a collection error aborts everything - failed on
+    any machine and in CI.
+
+    It also produced the wrong error on a device. credentials=None does not mean
+    "no credentials" to the Google SDK; it means "go and find Application
+    Default Credentials". So a device with no fire_creds.json died on an opaque
+    DefaultCredentialsError instead of being told which file was missing.
+    """
+    global _db
+    if _db is None:
+        if cred is None:
+            raise RuntimeError(
+                'FireOperator needs credentials at {}. Refusing to fall back to '
+                'Application Default Credentials, which is what turned a missing '
+                'config file into an unreadable auth error.'.format(FIRESTORE_CREDS))
+        _db = firestore.Client(project="testingprivateapis",
+                               credentials=cred, database=db_name)
+    return _db
 
 client   = MongoClient("172.17.0.1")
 util_ref = client["fvonprem"]["utils"]
@@ -39,6 +65,7 @@ class FireOperator:
     WATCHDOG_INTERVAL_S  = 30
 
     def __init__(self):
+        db                 = get_db()
         self.db            = db
         self.collection    = collection
         self.document      = document
