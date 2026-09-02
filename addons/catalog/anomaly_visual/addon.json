@@ -12,7 +12,7 @@
   "source": "https://github.com/flexiblevision/anomaly_pipeline",
   "container": {
     "name": "anomaly-server",
-    "default_tag": "v1",
+    "default_tag": "1",
     "restart": "unless-stopped",
     "gpu": "optional",
     "ports": [{"host": 5703, "container": 8080}],
@@ -37,7 +37,7 @@
     "timeout": 2
   },
   "ui": {
-    "icon": "BlurOn",
+    "icon": "Troubleshoot",
     "order": 31,
     "manage": "toggle"
   },

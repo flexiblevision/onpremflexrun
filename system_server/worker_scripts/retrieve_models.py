@@ -250,12 +250,12 @@ def save_models_versions(models_versions, model_type):
             print(error)
 
 def assign_preset_to_latest_version(model, versions, model_type):
-    type_map = {'versions': 'high_accuracy', 'high_speed': 'high_speed'}
+    type_map = {'versions': 'high_accuracy', 'high_speed': 'high_speed', 'anomaly': 'anomaly'}
     versions.sort()
     latest_version = versions[-1]
     presets = presets_collection.find({'modelName': model, 'modelType': type_map[model_type]})
     for preset in presets:
-        presets_collection.update({'presetId': preset['presetId']}, {'$set': {'modelVersion': latest_version}})
+        presets_collection.update_one({'presetId': preset['presetId']}, {'$set': {'modelVersion': latest_version}})
 
 def format_filename(s):
     valid_chars = "-_.() %s%s" % (string.ascii_letters, string.digits)

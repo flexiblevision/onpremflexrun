@@ -25,6 +25,11 @@ import datetime
 from pymongo import MongoClient
 from rq import get_current_job
 
+# Spec step 7: the existing save_models_versions semantics carry over, so the
+# fvonprem.models write and the preset version bump are the same code every
+# other model type uses. type_map there now carries 'anomaly'.
+from worker_scripts.retrieve_models import save_models_versions
+
 settings_path = os.environ['HOME']+'/flex-run'
 sys.path.append(settings_path)
 import settings
@@ -230,33 +235,26 @@ def prune_packages(models_dir, keep_filenames):
     return removed
 
 
-def assign_preset_to_latest_version(model_name, versions):
-    versions = sorted(versions)
-    presets_collection.update_many(
-        {'modelName': model_name, 'modelType': MODEL_TYPE},
-        {'$set': {'modelVersion': versions[-1]}})
-
-
 def save_anomaly_versions(synced):
     """
     Record what landed, for two readers.
 
-    Only the 'anomaly' key is touched. save_models_versions() zeroes every model
-    type's list across every document and deletes any document left with all
-    lists empty, so reusing it would let an anomaly sync evict an object
-    detection record that happens to have no versions - which is exactly what
-    happened to UniversalPodInspection on a test device.
-    """
-    for model_name, record in synced.items():
-        models_collection.update_one(
-            {'type': model_name},
-            {'$set': {'anomaly': record['versions']}},
-            upsert=True)
-        try:
-            assign_preset_to_latest_version(model_name, record['versions'])
-        except Exception as error:
-            print('could not bump presets for', model_name, error)
+    fvonprem.models goes through save_models_versions() so an anomaly sync
+    behaves like every other type - including its empty-list pruning and the
+    preset bump via assign_preset_to_latest_version().
 
+    NOTE: that pruning deletes any model document left with all version lists
+    empty. On a device carrying both object detection and anomaly models that
+    can evict an unrelated record (it removed UniversalPodInspection on a test
+    device here). Kept because the spec calls for these semantics to carry over;
+    the fix belongs in save_models_versions, not in a per-type workaround.
+    """
+    models_versions = [{'type': name, MODEL_TYPE: record['versions']}
+                       for name, record in synced.items()]
+    if models_versions:
+        save_models_versions(models_versions, MODEL_TYPE)
+
+    for model_name, record in synced.items():
         for version, detail in record['packages'].items():
             manifest = detail['manifest']
             anomaly_collection.update_one(
