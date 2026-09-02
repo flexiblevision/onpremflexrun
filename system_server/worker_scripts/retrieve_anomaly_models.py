@@ -33,9 +33,7 @@ client             = MongoClient("172.17.0.1")
 job_collection     = client["fvonprem"]["jobs"]
 models_collection  = client["fvonprem"]["models"]
 presets_collection = client["fvonprem"]["io_presets"]
-# Not 'anomaly_models': that collection already exists with a different
-# schema (model_id/file_path/config) from an earlier experiment.
-anomaly_collection = client["fvonprem"]["anomaly_packages"]
+anomaly_collection = client["fvonprem"]["anomaly_models"]
 
 CLOUD_DOMAIN = settings.config['cloud_domain'] if 'cloud_domain' in settings.config else "https://clouddeploy.api.flexiblevision.com"
 
@@ -246,7 +244,8 @@ def save_anomaly_versions(synced):
     Only the 'anomaly' key is touched. save_models_versions() zeroes every model
     type's list across every document and deletes any document left with all
     lists empty, so reusing it would let an anomaly sync evict an object
-    detection record that happens to have no versions.
+    detection record that happens to have no versions - which is exactly what
+    happened to UniversalPodInspection on a test device.
     """
     for model_name, record in synced.items():
         models_collection.update_one(
