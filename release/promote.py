@@ -138,6 +138,26 @@ def confirm_live(arch, channel, counter, fetcher=None):
     return True, 'proxy serves {} on {}/{}'.format(counter, arch, channel)
 
 
+def promoted_manifest(arch, channel='stable', path=DATA):
+    """The manifest a channel currently points at, as bytes, or None.
+
+    This is what a new release should be diffed against - not the last cut. A
+    cut that was never promoted was never run by any device, so reporting
+    changes relative to it describes a transition nobody made.
+    """
+    try:
+        data = load(path)
+    except (OSError, ValueError):
+        return None
+    counter = (data.get('channels', {}).get(arch) or {}).get(channel)
+    if counter is None:
+        return None
+    entry = (data.get('releases', {}).get(arch) or {}).get(str(counter))
+    if not entry or not entry.get('manifest_b64'):
+        return None
+    return base64.b64decode(entry['manifest_b64'])
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(
         description='Promote a signed release and deploy it.')

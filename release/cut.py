@@ -458,6 +458,11 @@ def main(argv=None):
                              'DOCKERHUB_USERNAME/DOCKERHUB_TOKEN')
     parser.add_argument('--allow-dirty', action='store_true')
     parser.add_argument('--preflight-only', action='store_true')
+    parser.add_argument('--channel',
+                        help='promote to this channel after signing, and '
+                             'deploy. Asked for separately - signing says the '
+                             'release is genuine, promoting says the fleet '
+                             'should run it')
     parser.add_argument('--strict-provenance', action='store_true',
                         help='refuse images with no CI-recorded commit, rather '
                              'than warning (see release/provenance.py)')
@@ -580,9 +585,20 @@ def main(argv=None):
             '\nskipped local verify (pass --public-key to check the signature '
             'before publishing)\n')
 
-    publish_block(signable, signature, document['counter'], arch=args.arch)
     sys.stderr.write('\nartifacts in {}\n'.format(args.work_dir))
-    return 0
+
+    if not args.channel:
+        publish_block(signable, signature, document['counter'], arch=args.arch)
+        return 0
+
+    # Signed, and now asked about separately. A single confirmation covering
+    # both would mean one keystroke moves a channel the whole fleet follows.
+    from . import promote as promote_mod
+    sys.stderr.write('\n--- promote ---\n')
+    return promote_mod.main([
+        '--arch', args.arch, '--channel', args.channel,
+        '--work-dir', args.work_dir,
+    ])
 
 
 if __name__ == '__main__':

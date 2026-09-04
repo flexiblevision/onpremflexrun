@@ -3,8 +3,10 @@
 #
 #   ./release_cut.sh check              what is set up, writes nothing
 #   ./release_cut.sh candidates         what CI has published, rewrites components.json
-#   ./release_cut.sh cut                the guided cut for x86
-#   ./release_cut.sh cut --arch arm     the same for arm
+#   ./release_cut.sh cut                        the guided cut for x86
+#   ./release_cut.sh cut --arch arm             the same for arm
+#   ./release_cut.sh cut --channel beta         cut, then offer to put it on beta
+#   ./release_cut.sh cut --channel stable       cut, then offer to ship it
 #   ./release_cut.sh promote            ship the cut you just signed, and deploy
 #   ./release_cut.sh promote --channel beta   ship it to one device first
 #   ./release_cut.sh rollback --counter 3     put a channel back
@@ -52,10 +54,22 @@ case "$verb" in
         VERIFY=""
         [ -e "$TRUST" ] && VERIFY="--public-key $TRUST"
 
-        # The previously promoted manifest, if the last cut left one behind.
-        # It is what produces the CHANGED markers on the signing screen.
+        # The manifest the channel currently points at - NOT the last cut.
+        # A cut that was never promoted was never run by any device, so
+        # diffing against it reports a transition nobody made: a baseline
+        # release read as six downgrades from an unpromoted test release.
         PREV=""
-        [ -f .release-work/manifest.json ] && PREV="--previous .release-work/manifest.json"
+        PREV_FILE="$(mktemp)"
+        if python3 -c "
+import sys
+from release.promote import promoted_manifest
+raw = promoted_manifest('${ARCH:-x86}')
+sys.exit(0 if raw and open('$PREV_FILE','wb').write(raw) else 1)
+" 2>/dev/null; then
+            PREV="--previous $PREV_FILE"
+        else
+            rm -f "$PREV_FILE"
+        fi
 
         # shellcheck disable=SC2086
         exec python3 -m release.cut $COMMON $VERIFY $PREV "$@"
