@@ -27,20 +27,25 @@ def all_tags(version='1.9.2'):
 
 
 class TestParseVersionFile:
+    """"<major> <first-counter>": the major series, and the counter whose
+    release is .0 in it. Two numbers because the counter must stay monotonic
+    for anti-rollback and cannot restart at 0 for a new series."""
 
     @pytest.mark.parametrize('text,expected', [
-        ('1.9', (1, 9)), ('1.9\n', (1, 9)), ('  2.0  \n', (2, 0)),
-        ('10.24', (10, 24)), ('0.1', (0, 1)),
+        ('1 1', (1, 1)), ('1 4\n', (1, 4)), ('  2 14  \n', (2, 14)),
+        ('10 250', (10, 250)), ('0 1', (0, 1)),
     ])
-    def test_accepts_major_minor(self, text, expected):
+    def test_accepts_major_and_first_counter(self, text, expected):
         assert b.parse_version_file(text) == expected
 
     @pytest.mark.parametrize('bad', [
-        '1.9.3', 'v1.9', '1', '', None, 'abc', '1.9-rc1', '1,9', 'latest',
+        '1.9', '1.9.3', 'v1.9', '1', '', None, 'abc', '1,9', 'latest', '1 4 5',
     ])
     def test_refuses_anything_else(self, bad):
-        """The build number is CI's to own; a patch digit here would collide."""
-        with pytest.raises(b.BuildError, match='MAJOR.MINOR'):
+        """'1.9' is refused deliberately - it was the previous valid form, and
+        reading its 9 as a first-counter would derive a minor from a number
+        that meant something entirely different."""
+        with pytest.raises(b.BuildError, match='first-counter'):
             b.parse_version_file(bad)
 
 
@@ -79,14 +84,40 @@ class TestNextBuild:
 
 
 class TestReleaseVersion:
+    """MAJOR.MINOR, minor derived from the counter so it cannot be forgotten
+    or reused. Two digits, not three: the counter is what a device compares,
+    and the version string is for people."""
 
-    def test_joins_the_three_parts(self):
-        assert b.release_version(1, 9, 48) == '1.9.48'
+    def test_the_first_counter_of_a_series_is_dot_zero(self):
+        assert b.release_version(1, 4, 4) == '1.0'
 
-    def test_build_number_does_not_reset_on_a_minor_bump(self):
-        """1.9.48 -> 1.10.49: the build keeps counting, so the counter stays
-        monotonic across a minor bump."""
-        assert b.release_version(1, 10, 49) == '1.10.49'
+    def test_the_minor_increments_once_per_release(self):
+        assert [b.release_version(1, 4, c) for c in (4, 5, 6)] == \
+            ['1.0', '1.1', '1.2']
+
+    def test_the_series_runs_to_nine(self):
+        assert b.release_version(1, 4, 13) == '1.9'
+
+    def test_past_nine_it_refuses_and_says_what_to_write(self):
+        """1.10 would sort below 1.9 in every string comparison a human or a
+        script makes, so rolling over is not an option - the next release is a
+        new major series, which is a decision rather than a carry."""
+        with pytest.raises(b.BuildError, match='exhausted'):
+            b.release_version(1, 4, 14)
+        try:
+            b.release_version(1, 4, 14)
+        except b.BuildError as exc:
+            assert '"2 14"' in str(exc)
+
+    def test_a_new_series_starts_at_zero_without_resetting_the_counter(self):
+        """The counter keeps climbing across a major bump - it has to, or a
+        device would refuse the new release as a rollback."""
+        assert b.release_version(2, 14, 14) == '2.0'
+        assert b.release_version(2, 14, 15) == '2.1'
+
+    def test_a_counter_below_the_series_start_is_refused(self):
+        with pytest.raises(b.BuildError, match='below the first counter'):
+            b.release_version(2, 14, 13)
 
 
 class TestComponentsFromFile:
@@ -153,31 +184,32 @@ class TestComponentsFromStable:
 
 class TestBuild:
 
-    def test_counter_equals_the_build_number(self):
-        """One source of truth, so version and counter cannot disagree."""
-        doc, build_no = b.build('1.9', ['release/x86/47'], COMMIT, all_tags(),
+    def test_the_counter_and_the_version_come_from_one_source(self):
+        """The minor is derived from the counter, so they cannot disagree -
+        counter 48 in the series starting at 44 is 1.4."""
+        doc, build_no = b.build('1 44', ['release/x86/47'], COMMIT, all_tags(),
                                 resolver, NOW)
         assert build_no == 48
-        assert doc['release'] == '1.9.48'
+        assert doc['release'] == '1.4'
         assert doc['counter'] == 48
 
     def test_first_release_is_counter_one(self):
-        doc, build_no = b.build('1.9', [], COMMIT, all_tags(), resolver, NOW)
+        doc, build_no = b.build('1 1', [], COMMIT, all_tags(), resolver, NOW)
         assert build_no == 1
         assert doc['counter'] == 1
-        assert doc['release'] == '1.9.1'
+        assert doc['release'] == '1.0'
 
     def test_pins_the_flexrun_commit(self):
-        doc, _ = b.build('1.9', [], COMMIT, all_tags(), resolver, NOW)
+        doc, _ = b.build('1 1', [], COMMIT, all_tags(), resolver, NOW)
         assert doc['flexrun']['commit'] == COMMIT
 
     def test_carries_features_through(self):
-        doc, _ = b.build('1.9', [], COMMIT, all_tags(), resolver, NOW,
+        doc, _ = b.build('1 1', [], COMMIT, all_tags(), resolver, NOW,
                          features={'eventor': '0.4.1'})
         assert 'eventor' in m.features_for(doc, 'x86')
 
     def test_notes_are_carried(self):
-        doc, _ = b.build('1.9', [], COMMIT, all_tags(), resolver, NOW,
+        doc, _ = b.build('1 1', [], COMMIT, all_tags(), resolver, NOW,
                          notes={'summary': 'backend patch',
                                 'impact': 'restarts once'})
         assert doc['notes']['summary'] == 'backend patch'
@@ -187,16 +219,16 @@ class TestBuild:
         """Schema v2 keeps summary, impact and security separate; accepting a
         string would silently drop impact and security."""
         with pytest.raises(m.ManifestError, match='must be an object'):
-            b.build('1.9', [], COMMIT, all_tags(), resolver, NOW,
+            b.build('1 1', [], COMMIT, all_tags(), resolver, NOW,
                     notes='backend patch')
 
     def test_a_candidate_with_no_notes_is_not_signable(self):
         """CI cuts it; the gate is at signing, not here."""
-        doc, _ = b.build('1.9', [], COMMIT, all_tags(), resolver, NOW)
+        doc, _ = b.build('1 1', [], COMMIT, all_tags(), resolver, NOW)
         assert m.notes_shortfall(doc)
 
     def test_valid_days_sets_notafter(self):
-        doc, _ = b.build('1.9', [], COMMIT, all_tags(), resolver, NOW, valid_days=30)
+        doc, _ = b.build('1 1', [], COMMIT, all_tags(), resolver, NOW, valid_days=30)
         assert doc['notAfter'] == '2026-09-25T23:00:00Z'
 
     def test_a_bad_version_file_stops_the_release(self):
@@ -207,13 +239,13 @@ class TestBuild:
         partial = all_tags()
         del partial['vision']
         with pytest.raises(m.ManifestError, match='no tag given for'):
-            b.build('1.9', [], COMMIT, partial, resolver, NOW)
+            b.build('1 1', [], COMMIT, partial, resolver, NOW)
 
     def test_consecutive_releases_never_repeat_a_counter(self):
         seen = set()
         tags = []
         for _ in range(5):
-            doc, n = b.build('1.9', list(tags), COMMIT, all_tags(), resolver, NOW)
+            doc, n = b.build('1 1', list(tags), COMMIT, all_tags(), resolver, NOW)
             assert n not in seen
             seen.add(n)
             tags.append('release/x86/%d' % n)
@@ -224,8 +256,8 @@ class TestDiffSummary:
     """Release notes are derived from the manifests, not written by hand."""
 
     def _two(self, second_tags):
-        first, _ = b.build('1.9', [], COMMIT, all_tags(), resolver, NOW)
-        second, _ = b.build('1.9', ['release/x86/1'], 'b' * 40, second_tags,
+        first, _ = b.build('1 1', [], COMMIT, all_tags(), resolver, NOW)
+        second, _ = b.build('1 1', ['release/x86/1'], 'b' * 40, second_tags,
                             resolver, NOW)
         return first, second
 
@@ -249,21 +281,21 @@ class TestDiffSummary:
             sorted(m.FOUNDATIONAL)
 
     def test_a_new_feature_is_reported_as_added(self):
-        first, _ = b.build('1.9', [], COMMIT, all_tags(), resolver, NOW)
-        second, _ = b.build('1.9', ['release/x86/1'], COMMIT, all_tags(), resolver,
+        first, _ = b.build('1 1', [], COMMIT, all_tags(), resolver, NOW)
+        second, _ = b.build('1 1', ['release/x86/1'], COMMIT, all_tags(), resolver,
                             NOW, features={'eventor': '0.4.1'})
         summary = b.diff_summary(first, second)
         assert summary['added'] == ['eventor']
 
     def test_a_dropped_feature_is_reported_as_removed(self):
-        first, _ = b.build('1.9', [], COMMIT, all_tags(), resolver, NOW,
+        first, _ = b.build('1 1', [], COMMIT, all_tags(), resolver, NOW,
                            features={'eventor': '0.4.1'})
-        second, _ = b.build('1.9', ['release/x86/1'], COMMIT, all_tags(), resolver, NOW)
+        second, _ = b.build('1 1', ['release/x86/1'], COMMIT, all_tags(), resolver, NOW)
         summary = b.diff_summary(first, second)
         assert summary['removed'] == ['eventor']
 
     def test_no_previous_release_reports_everything_as_changed(self):
-        first, _ = b.build('1.9', [], COMMIT, all_tags(), resolver, NOW)
+        first, _ = b.build('1 1', [], COMMIT, all_tags(), resolver, NOW)
         summary = b.diff_summary(None, first)
         assert sorted(summary['changed']) == sorted(m.FOUNDATIONAL)
         assert summary['unchanged'] == []

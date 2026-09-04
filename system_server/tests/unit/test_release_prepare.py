@@ -23,7 +23,7 @@ def all_tags(version='1.9.2'):
 
 
 def cut(existing_tags=(), tags=None, features=None, commit=COMMIT):
-    document, _ = b.build('1.9', list(existing_tags), commit,
+    document, _ = b.build('1 1', list(existing_tags), commit,
                           tags or all_tags(), resolver, NOW, features=features)
     return document
 
@@ -114,7 +114,7 @@ class TestRenderTemplate:
 
     def test_names_the_release_and_counter(self):
         text = self._template()
-        assert '1.9.1' in text
+        assert '1.0' in text
         assert 'counter 1' in text
 
     def test_shows_what_changed_for_reference(self):

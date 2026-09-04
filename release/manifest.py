@@ -179,7 +179,10 @@ def notes_shortfall(manifest):
 
 
 _DIGEST_RE = re.compile(r'^sha256:[0-9a-f]{64}$')
-_RELEASE_RE = re.compile(r'^[0-9]+\.[0-9]+\.[0-9]+$')
+# MAJOR.MINOR ('1.0'), or MAJOR.MINOR.BUILD for releases cut before the
+# version scheme moved to two parts. Both are accepted so an older
+# manifest a device still has in its history stays parseable.
+_RELEASE_RE = re.compile(r'^\d+\.\d+(\.\d+)?$')
 _COMMIT_RE = re.compile(r'^[0-9a-f]{40}$')
 
 
@@ -266,7 +269,7 @@ def build_manifest(release, counter, tags, flexrun_commit, resolver,
     """
     if not _RELEASE_RE.match(str(release)):
         raise ManifestError(
-            'release must look like 1.2.3, got {!r}'.format(release))
+            'release must look like 1.0 or 1.0.3, got {!r}'.format(release))
 
     if not isinstance(counter, int) or isinstance(counter, bool) or counter < 1:
         raise ManifestError(

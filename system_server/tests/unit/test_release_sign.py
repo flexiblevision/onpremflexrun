@@ -21,7 +21,7 @@ def resolver(repo, tag):
 
 def signable(notes=None, features=None, existing_tags=()):
     """A manifest that passes every gate, as canonical bytes."""
-    document, _ = b.build('1.9', list(existing_tags), COMMIT,
+    document, _ = b.build('1 1', list(existing_tags), COMMIT,
                           {c: '1.9.2' for c in m.FOUNDATIONAL},
                           resolver, NOW, features=features)
     filled = m.blank_notes()
@@ -63,7 +63,7 @@ class TestCheckSignable:
 
     def test_a_prepared_manifest_passes(self):
         parsed = s.check_signable(signable())
-        assert parsed['release'] == '1.9.1'
+        assert parsed['release'] == '1.0'
 
     def test_accepts_text_as_well_as_bytes(self):
         assert s.check_signable(signable().decode('utf-8'))['counter'] == 1
@@ -101,7 +101,7 @@ class TestCheckSignable:
 
     def test_a_hand_edited_manifest_cannot_slip_past_prepare(self):
         """prepare.py is the convenient gate; this one holds regardless."""
-        document, _ = b.build('1.9', [], COMMIT,
+        document, _ = b.build('1 1', [], COMMIT,
                               {c: '1.9.2' for c in m.FOUNDATIONAL},
                               resolver, NOW)
         with pytest.raises(s.SignError, match='incomplete notes'):
@@ -120,7 +120,7 @@ class TestConfirmationText:
 
     def test_shows_the_release_and_counter(self):
         text = s.confirmation_text(json.loads(signable().decode('utf-8')))
-        assert '1.9.1' in text
+        assert '1.0' in text
         assert 'counter 1' in text
 
     def test_shows_every_component_digest(self):
@@ -142,7 +142,7 @@ class TestConfirmationText:
 
     def test_marks_which_components_changed(self):
         raw = signable(notes={'changed': [{'component': 'backend',
-                                           'from': '1.9.1', 'to': '1.9.2'}]})
+                                           'from': '1.0', 'to': '1.9.2'}]})
         text = s.confirmation_text(json.loads(raw.decode('utf-8')))
         backend_line = [line for line in text.splitlines()
                         if line.strip().startswith('backend')][0]
@@ -229,7 +229,7 @@ class TestSign:
 
         s.sign(signable(), 'm.json', 'key.pem', confirm=confirm,
                signer=Spy())
-        assert seen['release'] == '1.9.1'
+        assert seen['release'] == '1.0'
 
     def test_the_key_reference_is_passed_through_untouched(self):
         """A pkcs11 URI for a hardware token must not be mangled into a path."""

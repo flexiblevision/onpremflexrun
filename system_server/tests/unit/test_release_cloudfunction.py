@@ -72,7 +72,7 @@ def resolver(repo, tag):
 
 def signed_manifest():
     """Canonical bytes of a complete, notes-filled manifest."""
-    document, _ = b.build('1.9', [], COMMIT,
+    document, _ = b.build('1 1', [], COMMIT,
                           {c: '1.9.2' for c in m.FOUNDATIONAL},
                           resolver, NOW)
     notes = m.blank_notes()
@@ -306,7 +306,7 @@ class TestEndToEndAgainstVerify:
         publish(cf)
         returned = body_of(cf.release_manifest(Request({})))
         parsed = m.loads(base64.b64decode(returned['manifest_b64']))
-        assert parsed['release'] == '1.9.1'
+        assert parsed['release'] == '1.0'
         m.validate(parsed)
 
     def test_the_served_manifest_is_still_canonical(self, cf):

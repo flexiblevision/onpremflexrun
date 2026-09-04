@@ -81,7 +81,7 @@ class TestBuild:
 
 class TestBuildRefusals:
 
-    @pytest.mark.parametrize('bad', ['1.9', 'v1.9.3', '1.9.3-rc1', '', 'latest', None])
+    @pytest.mark.parametrize('bad', ['1 1', 'v1.9.3', '1.9.3-rc1', '', 'latest', None])
     def test_release_must_be_a_dotted_version(self, bad):
         with pytest.raises(m.ManifestError, match='release must look like'):
             build(release=bad)

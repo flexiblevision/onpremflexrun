@@ -148,11 +148,19 @@ def preflight(key_path, version_text, allow_dirty=False, need_credentials=True,
         fatal=need_credentials))
 
     try:
-        major, minor = build_mod.parse_version_file(version_text)
-        checks.append(Check('release/VERSION', True, '{}.{}'.format(major, minor)))
+        major, first = build_mod.parse_version_file(version_text)
+        detail = 'major {} from counter {}'.format(major, first)
+        try:
+            remote = build_mod.remote_release_tags(run=run)
+            nxt = build_mod.next_build(remote, arch)
+            detail += ' -> next release is {}'.format(
+                build_mod.release_version(major, first, nxt))
+        except build_mod.BuildError as exc:
+            detail += ' -> {}'.format(exc)
+        checks.append(Check('release/VERSION', True, detail))
     except build_mod.BuildError as exc:
-        checks.append(Check('release/VERSION', False, str(exc),
-                            'write MAJOR.MINOR only - CI owns the build number'))
+        checks.append(Check('release/VERSION', False, str(exc).splitlines()[0],
+                            'write "<major> <first-counter>", e.g. "1 4"'))
 
     head = _git(['rev-parse', 'HEAD'], run)
     checks.append(Check(

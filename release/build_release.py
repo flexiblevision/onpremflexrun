@@ -3,10 +3,14 @@
 Everything the release is stamped with is derived, so cutting a release takes no
 decisions at the moment it happens:
 
-  version   MAJOR.MINOR is checked in (release/VERSION); BUILD is one more than
-            the highest existing release tag and never resets.
-  counter   == BUILD. One source of truth, so version and counter cannot
-            disagree, and the device only ever compares integers.
+  version   MAJOR.MINOR, e.g. 1.0 ... 1.9. The major and the counter that
+            starts the series are checked in (release/VERSION); the minor is
+            counter - first, so it increments once per release and cannot be
+            forgotten or reused. Past .9 the tool refuses and asks for a new
+            major series, because 1.10 sorts below 1.9 everywhere.
+  counter   the per-arch monotonic integer, one more than the highest release
+            tag. This is what a device compares - the version string is for
+            people.
   digests   resolved from the registry, so this does not care where or how any
             image was built.
   notAfter  created + a window. Reported by the device, not enforced - see
@@ -43,7 +47,15 @@ from . import registry as registry_mod
 # because an x86 release consumed a number it will never see.
 RELEASE_TAG_RE = re.compile(r'^release/([a-z0-9]+)/(\d+)$')
 REMOTE_TAG_RE = re.compile(r'^[0-9a-f]{40}\s+refs/tags/(release/[a-z0-9]+/\d+)$')
-VERSION_RE = re.compile(r'^(\d+)\.(\d+)$')
+# "<major> <first-counter>": the major series, and the counter whose release is
+# .0 in it. The minor is then counter - first, so it increments once per release
+# without anyone editing a file per cut.
+#
+# Two numbers rather than one because the counter must stay monotonic for
+# anti-rollback and cannot restart at 0 for a new major series. Moving to 2.0 is
+# writing "2 <the next counter>".
+VERSION_RE = re.compile(r'^(\d+)\s+(\d+)$')
+MAX_MINOR = 9
 
 DEFAULT_REMOTE = 'origin'
 
@@ -57,12 +69,14 @@ class BuildError(Exception):
 # --- derivations (pure, so they are testable without git or a network) -------
 
 def parse_version_file(text):
-    """'1.9' -> (1, 9). The two digits a human actually chooses."""
+    """'1 4' -> (1, 4): major series 1, whose .0 release is counter 4."""
     stripped = (text or '').strip()
     match = VERSION_RE.match(stripped)
     if not match:
         raise BuildError(
-            "expected MAJOR.MINOR in the version file, got {!r}".format(stripped))
+            'expected "<major> <first-counter>" in the version file, got {!r}. '
+            'The old MAJOR.MINOR form is gone: the minor is now derived from '
+            'the counter so it cannot be forgotten or reused.'.format(stripped))
     return int(match.group(1)), int(match.group(2))
 
 
@@ -83,8 +97,25 @@ def next_build(existing_tags, arch):
     return highest + 1
 
 
-def release_version(major, minor, build):
-    return '{}.{}.{}'.format(major, minor, build)
+def release_version(major, first_counter, build):
+    """'1.0', '1.1' ... '1.9'. Refuses to go past .9.
+
+    Past nine the next release is a new major series, which is a decision to
+    make rather than a number to roll over - '1.10' would sort below '1.9' in
+    every string comparison a human or a script makes.
+    """
+    minor = build - first_counter
+    if minor < 0:
+        raise BuildError(
+            'counter {} is below the first counter {} of major series {} - '
+            'the version file names a series that has not started yet'
+            .format(build, first_counter, major))
+    if minor > MAX_MINOR:
+        raise BuildError(
+            'major series {} is exhausted: counter {} would be {}.{}. Start the '
+            'next series by writing "{} {}" to release/VERSION.'
+            .format(major, build, major, minor, major + 1, build))
+    return '{}.{}'.format(major, minor)
 
 
 def git_release_tags(run=None):

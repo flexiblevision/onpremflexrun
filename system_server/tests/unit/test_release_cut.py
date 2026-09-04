@@ -57,7 +57,7 @@ def env(user='fv', token='tok'):
 
 
 def checks(**kwargs):
-    defaults = dict(key_path=__file__, version_text='1.9',
+    defaults = dict(key_path=__file__, version_text='1 1',
                     which=lambda n: '/usr/local/bin/' + n,
                     environ=env(), run=git_stub())
     defaults.update(kwargs)
@@ -134,14 +134,18 @@ class TestPreflight:
                     'Docker Hub credentials')
         assert not chk.ok and not chk.fatal
 
-    @pytest.mark.parametrize('bad', ['1.9.3', 'v1.9', '', 'latest'])
+    @pytest.mark.parametrize('bad', ['1.9.3', 'v1.9', '', 'latest', '1.9'])
     def test_a_bad_version_file_is_fatal(self, bad):
+        """'1.9' is in here deliberately: it was the old valid form, and
+        accepting it silently would derive a minor from a number that meant
+        something else."""
         chk = named(checks(version_text=bad), 'release/VERSION')
         assert not chk.ok
-        assert 'MAJOR.MINOR' in chk.fix
+        assert 'first-counter' in chk.fix
 
-    def test_the_version_is_echoed_back(self):
-        assert named(checks(version_text='2.0\n'), 'release/VERSION').detail == '2.0'
+    def test_the_version_and_the_next_release_are_shown(self):
+        detail = named(checks(version_text='2 14\n'), 'release/VERSION').detail
+        assert 'major 2 from counter 14' in detail
 
     def test_an_unresolvable_head_is_fatal(self):
         assert not named(checks(run=git_stub(fail=True)), 'git HEAD').ok
@@ -246,18 +250,18 @@ class TestCut:
 
     def test_it_produces_a_signable_manifest_and_signature(self, tmp_path):
         signable, signature = c.cut(
-            tags=self._tags(), version_text='1.9', work_dir=str(tmp_path),
+            tags=self._tags(), version_text='1 1', work_dir=str(tmp_path),
             key_path='k.pem', resolver=resolver, now=NOW,
             editor=self._editor, confirm=lambda text, rel: True,
             signer=lambda path, key: b'SIG\n',
             existing_tags=[], head=HEAD, reserve=FAKE_RESERVE)
         assert signature == b'SIG\n'
         document = json.loads(signable.decode('utf-8'))
-        assert document['release'] == '1.9.1'
+        assert document['release'] == '1.0'
         assert not m.notes_shortfall(document)
 
     def test_it_writes_the_artifacts(self, tmp_path):
-        c.cut(tags=self._tags(), version_text='1.9', work_dir=str(tmp_path),
+        c.cut(tags=self._tags(), version_text='1 1', work_dir=str(tmp_path),
               key_path='k.pem', resolver=resolver, now=NOW,
               editor=self._editor, confirm=lambda t, r: True,
               signer=lambda p, k: b'SIG\n', existing_tags=[], head=HEAD, reserve=FAKE_RESERVE)
@@ -266,7 +270,7 @@ class TestCut:
 
     def test_the_signed_bytes_are_what_was_written(self, tmp_path):
         signable, _ = c.cut(
-            tags=self._tags(), version_text='1.9', work_dir=str(tmp_path),
+            tags=self._tags(), version_text='1 1', work_dir=str(tmp_path),
             key_path='k.pem', resolver=resolver, now=NOW,
             editor=self._editor, confirm=lambda t, r: True,
             signer=lambda p, k: b'SIG\n', existing_tags=[], head=HEAD, reserve=FAKE_RESERVE)
@@ -274,7 +278,7 @@ class TestCut:
 
     def test_the_counter_follows_existing_tags(self, tmp_path):
         signable, _ = c.cut(
-            tags=self._tags(), version_text='1.9', work_dir=str(tmp_path),
+            tags=self._tags(), version_text='1 48', work_dir=str(tmp_path),
             key_path='k.pem', resolver=resolver, now=NOW,
             editor=self._editor, confirm=lambda t, r: True,
             signer=lambda p, k: b'SIG\n',
@@ -283,7 +287,7 @@ class TestCut:
 
     def test_declining_to_sign_stops_it(self, tmp_path):
         with pytest.raises(sign_mod.SignError, match='aborted'):
-            c.cut(tags=self._tags(), version_text='1.9', work_dir=str(tmp_path),
+            c.cut(tags=self._tags(), version_text='1 1', work_dir=str(tmp_path),
                   key_path='k.pem', resolver=resolver, now=NOW,
                   editor=self._editor, confirm=lambda t, r: False,
                   signer=lambda p, k: b'SIG\n', existing_tags=[], head=HEAD, reserve=FAKE_RESERVE)
@@ -291,7 +295,7 @@ class TestCut:
     def test_empty_notes_stop_it_before_signing(self, tmp_path):
         signed = []
         with pytest.raises(prepare_mod.PrepareError, match='notes are incomplete'):
-            c.cut(tags=self._tags(), version_text='1.9', work_dir=str(tmp_path),
+            c.cut(tags=self._tags(), version_text='1 1', work_dir=str(tmp_path),
                   key_path='k.pem', resolver=resolver, now=NOW,
                   editor=lambda template: template,
                   confirm=lambda t, r: True,
@@ -303,7 +307,7 @@ class TestCut:
         tags = self._tags()
         tags['arm']['visiontools'] = '0.43'
         with pytest.raises(m.ManifestError, match='not built for arm'):
-            c.cut(tags=tags, version_text='1.9', work_dir=str(tmp_path),
+            c.cut(tags=tags, version_text='1 1', work_dir=str(tmp_path),
                   key_path='k.pem', resolver=resolver, now=NOW, arch='arm',
                   editor=self._editor, confirm=lambda t, r: True,
                   signer=lambda p, k: b'SIG\n', existing_tags=[], head=HEAD, reserve=FAKE_RESERVE)
@@ -314,7 +318,7 @@ class TestCut:
         tags = self._tags()
         tags['arm']['visiontools'] = '0.43'
         signable, _ = c.cut(
-            tags=tags, version_text='1.9', work_dir=str(tmp_path),
+            tags=tags, version_text='1 1', work_dir=str(tmp_path),
             key_path='k.pem', resolver=resolver, now=NOW, arch='x86',
             editor=self._editor, confirm=lambda t, r: True,
             signer=lambda p, k: b'SIG\n', existing_tags=[], head=HEAD,
@@ -342,7 +346,9 @@ class TestCounterIsReserved:
             return 'refs/tags/release/{}'.format(build_no)
 
         return c.cut(
-            tags=self._tags(), version_text='1.9', work_dir=str(tmp_path),
+            tags=self._tags(),
+            version_text=kwargs.pop('version_text', '1 1'),
+            work_dir=str(tmp_path),
             key_path='k.pem', resolver=resolver, now=NOW,
             editor=kwargs.pop('editor', self._editor),
             confirm=kwargs.pop('confirm', lambda t, r: True),
@@ -360,7 +366,7 @@ class TestCounterIsReserved:
         signable, _ = self._cut(
             tmp_path, [],
             reserve=lambda n, commit, arch='x86', message=None: seen.append(n) or 'refs/tags/release/%d' % n,
-            existing_tags=['release/x86/47'])
+            existing_tags=['release/x86/47'], version_text='1 48')
         assert seen == [48]
         assert json.loads(signable.decode('utf-8'))['counter'] == 48
 
@@ -520,7 +526,7 @@ class TestCli:
 
     def test_preflight_failure_returns_nonzero_and_does_nothing(self, tmp_path, capsys):
         version = tmp_path / 'VERSION'
-        version.write_text('1.9')
+        version.write_text('1 1')
         code = c.main(['--from-stable', '--version-file', str(version),
                        '--key', '/nope/cosign.key'])
         assert code == 1
