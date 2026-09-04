@@ -124,6 +124,12 @@ wizard() {
         *) echo 'nothing was done' >&2; exit 1 ;;
     esac
     printf '\n' >&2
+
+    # exec, not return: `set --` inside a function rebinds that function's
+    # positional parameters, so returning would drop every choice just made
+    # and leave the caller with no arguments at all. Re-invoking also makes the
+    # line printed above literally the command that runs.
+    exec "$0" "$@"
 }
 
 if [ $# -eq 0 ]; then
