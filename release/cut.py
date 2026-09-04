@@ -263,7 +263,7 @@ def cut(tags, version_text, work_dir, key_path, previous_raw=None,
         resolver=None, now=None, editor=None, confirm=None,
         signer=None, arch='x86', existing_tags=None, head=None,
         use_docker_login=False, reserve=None, fetch_labels=None,
-        strict_provenance=None):
+        strict_provenance=None, major_override=None):
     """Resolve digests, reserve the counter, take notes, sign.
 
     Returns (manifest bytes, signature).
@@ -286,7 +286,8 @@ def cut(tags, version_text, work_dir, key_path, previous_raw=None,
     sys.stderr.write('\nresolving digests (one registry call per image)...\n')
     document, build_no = build_mod.build(
         version_text=version_text, existing_tags=existing_tags,
-        flexrun_commit=head, tags=tags, resolver=resolver, now=now, arch=arch)
+        flexrun_commit=head, tags=tags, resolver=resolver, now=now, arch=arch,
+        major_override=major_override)
 
     previous = manifest_mod.loads(previous_raw) if previous_raw else None
     summary = build_mod.diff_summary(previous, document, arch=arch)
@@ -466,6 +467,11 @@ def main(argv=None):
                              'DOCKERHUB_USERNAME/DOCKERHUB_TOKEN')
     parser.add_argument('--allow-dirty', action='store_true')
     parser.add_argument('--preflight-only', action='store_true')
+    parser.add_argument('--major', type=int,
+                        help='start a new major series at this release, so it '
+                             'becomes <N>.0. Set here rather than at promote '
+                             'time because the version string is inside the '
+                             'signed bytes')
     parser.add_argument('--channel',
                         help='promote to this channel after signing, and '
                              'deploy. Asked for separately - signing says the '
@@ -569,7 +575,8 @@ def main(argv=None):
             tags=tags, version_text=version_text, work_dir=args.work_dir,
             key_path=args.key, previous_raw=previous_raw, arch=args.arch,
             use_docker_login=args.use_docker_login,
-            strict_provenance=args.strict_provenance or None)
+            strict_provenance=args.strict_provenance or None,
+            major_override=args.major)
     except (CutError, build_mod.BuildError, manifest_mod.ManifestError,
             prepare_mod.PrepareError, sign_mod.SignError,
             registry_mod.RegistryError) as exc:
@@ -592,6 +599,17 @@ def main(argv=None):
         sys.stderr.write(
             '\nskipped local verify (pass --public-key to check the signature '
             'before publishing)\n')
+
+    if args.major is not None:
+        # Written so the next release continues the new series instead of
+        # falling back to the old one. Uncommitted state here would mean the
+        # following cut silently reverted to 1.x.
+        with open(args.version_file, 'w') as handle:
+            handle.write('{} {}\n'.format(args.major, document['counter']))
+        sys.stderr.write(
+            '\n{} now reads "{} {}" - commit it, or the next release falls '
+            'back to the previous series.\n'.format(
+                args.version_file, args.major, document['counter']))
 
     sys.stderr.write('\nartifacts in {}\n'.format(args.work_dir))
 

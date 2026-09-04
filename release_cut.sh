@@ -26,11 +26,109 @@ cd "$(dirname "$0")"
 COMMON="--use-docker-login --key $KEY"
 
 usage() {
-    sed -n '2,10p' "$0" | sed 's/^# \{0,1\}//'
+    sed -n '2,12p' "$0" | sed 's/^# \{0,1\}//'
     echo
+    echo "Run with no arguments for a guided walkthrough."
     echo "KEY=<gcpkms://...>   sign with a different key"
     exit "${1:-0}"
 }
+
+# --- the wizard -------------------------------------------------------------
+# Every step of a release is a decision, and the flags that express them are
+# only discoverable if you already know them. Bare invocation asks instead.
+# Flags still work unchanged, so scripts and CI are unaffected.
+
+ask() {
+    # ask <prompt> <default>; answer on stdout, prompts on stderr so the
+    # caller can capture the value.
+    printf '%s [%s]: ' "$1" "$2" >&2
+    read -r _reply
+    [ -n "$_reply" ] && printf '%s' "$_reply" || printf '%s' "$2"
+}
+
+choose() {
+    # choose <prompt> <value:label> ...  -> chosen value on stdout
+    _prompt="$1"; shift
+    printf '\n%s\n' "$_prompt" >&2
+    _i=0
+    for _opt in "$@"; do
+        _i=$((_i + 1))
+        printf '  %d) %s\n' "$_i" "${_opt#*:}" >&2
+    done
+    while :; do
+        printf 'choice [1]: ' >&2
+        read -r _n
+        [ -z "$_n" ] && _n=1
+        _i=0
+        for _opt in "$@"; do
+            _i=$((_i + 1))
+            if [ "$_i" = "$_n" ]; then
+                printf '%s' "${_opt%%:*}"
+                return 0
+            fi
+        done
+        printf 'not a choice\n' >&2
+    done
+}
+
+wizard() {
+    # A wizard that hangs is worse than one that never runs: without a
+    # terminal there is nobody to answer, so say what to type instead.
+    if [ ! -t 0 ]; then
+        echo "no terminal - pass a command instead of running the wizard" >&2
+        usage 2
+    fi
+
+    echo "flexrun release" >&2
+    action="$(choose 'What do you want to do?' \
+        'cut:Cut a new release' \
+        'candidates:See what CI has published, and update components.json' \
+        'check:Check everything is set up (writes nothing)' \
+        'promote:Promote a release that is already signed' \
+        'rollback:Point a channel back at an earlier release')"
+
+    case "$action" in
+        check|candidates)
+            set -- "$action"
+            ;;
+        promote|rollback)
+            channel="$(choose 'Which channel?' 'stable:stable' 'beta:beta')"
+            counter="$(ask 'Which counter? (blank = the release just cut)' '')"
+            set -- promote --channel "$channel"
+            [ -n "$counter" ] && set -- "$@" --counter "$counter"
+            ;;
+        cut)
+            arch="$(choose 'Which architecture?' 'x86:x86' 'arm:arm')"
+            source="$(choose 'Which component versions?' \
+                'file:release/components.json - what you have chosen to ship' \
+                'stable:the live latest_stable_version endpoint - what the fleet runs now')"
+            major="$(ask 'Start a new major series? (number, or blank to continue)' '')"
+            after="$(choose 'Promote it after signing?' \
+                'none:No - sign only, decide later' \
+                'beta:Yes, to beta - try it on one device first' \
+                'stable:Yes, to stable - the whole fleet follows this')"
+
+            set -- cut --arch "$arch"
+            [ "$source" = stable ] && set -- "$@" --from-stable
+            [ -n "$major" ] && set -- "$@" --major "$major"
+            [ "$after" != none ] && set -- "$@" --channel "$after"
+            ;;
+    esac
+
+    # Printed so the wizard teaches the flags rather than hiding them - the
+    # next release can skip it.
+    printf '\n  ./release_cut.sh %s\n\n' "$*" >&2
+    confirm="$(ask 'Run this? (yes/no)' 'yes')"
+    case "$confirm" in
+        y|yes|Y|YES) ;;
+        *) echo 'nothing was done' >&2; exit 1 ;;
+    esac
+    printf '\n' >&2
+}
+
+if [ $# -eq 0 ]; then
+    wizard
+fi
 
 verb="${1:-}"
 [ $# -gt 0 ] && shift || true
@@ -87,7 +185,7 @@ sys.exit(0 if raw and open('$PREV_FILE','wb').write(raw) else 1)
         # Same machinery: point a channel at a release already published.
         exec python3 -m release.promote "$@"
         ;;
-    ''|-h|--help|help)
+    -h|--help|help)
         usage 0
         ;;
     *)

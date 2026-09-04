@@ -55,7 +55,11 @@ REMOTE_TAG_RE = re.compile(r'^[0-9a-f]{40}\s+refs/tags/(release/[a-z0-9]+/\d+)$'
 # anti-rollback and cannot restart at 0 for a new major series. Moving to 2.0 is
 # writing "2 <the next counter>".
 VERSION_RE = re.compile(r'^(\d+)\s+(\d+)$')
-MAX_MINOR = 9
+# Ten was too few once beta and stable share one counter: three beta
+# iterations before each stable release exhausts a series in a handful of
+# releases, and you end up starting 2.0 for reasons unrelated to the software.
+# Two digits is enough that the series ends when someone decides it should.
+MAX_MINOR = 99
 
 DEFAULT_REMOTE = 'origin'
 
@@ -98,11 +102,10 @@ def next_build(existing_tags, arch):
 
 
 def release_version(major, first_counter, build):
-    """'1.0', '1.1' ... '1.9'. Refuses to go past .9.
+    """'1.0', '1.1' ... '1.99'. Refuses to go past MAX_MINOR.
 
-    Past nine the next release is a new major series, which is a decision to
-    make rather than a number to roll over - '1.10' would sort below '1.9' in
-    every string comparison a human or a script makes.
+    Past MAX_MINOR the next release is a new major series, which is a decision
+    to make rather than a number to roll over.
     """
     minor = build - first_counter
     if minor < 0:
@@ -275,10 +278,26 @@ def components_from_stable(fetch, components=manifest_mod.FOUNDATIONAL, arch='x8
 # --- assembly ---------------------------------------------------------------
 
 def build(version_text, existing_tags, flexrun_commit, tags, resolver, now,
-          arch='x86', features=None, valid_days=DEFAULT_VALID_DAYS, notes=None):
-    major, minor = parse_version_file(version_text)
+          arch='x86', features=None, valid_days=DEFAULT_VALID_DAYS, notes=None,
+          major_override=None):
+    """major_override starts a new series at this release: it becomes <N>.0.
+
+    Decided here, at the cut, because the version string is inside the bytes
+    that get signed. Renaming a release at promote time would mean re-signing
+    it, and then the thing shipped to stable would not be the thing tested on
+    beta - which is the property promoting exists to preserve.
+    """
+    major, first = parse_version_file(version_text)
     build_no = next_build(existing_tags, arch)
-    version = release_version(major, minor, build_no)
+
+    if major_override is not None:
+        if major_override <= major:
+            raise BuildError(
+                'major {} is not ahead of the current series {} - a major jump '
+                'goes forwards'.format(major_override, major))
+        major, first = major_override, build_no
+
+    version = release_version(major, first, build_no)
 
     document = manifest_mod.build_manifest(
         release=version,

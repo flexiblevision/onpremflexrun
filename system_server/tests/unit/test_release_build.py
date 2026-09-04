@@ -95,19 +95,20 @@ class TestReleaseVersion:
         assert [b.release_version(1, 4, c) for c in (4, 5, 6)] == \
             ['1.0', '1.1', '1.2']
 
-    def test_the_series_runs_to_nine(self):
-        assert b.release_version(1, 4, 13) == '1.9'
+    def test_double_digit_minors_are_fine(self):
+        """Beta and stable share one counter, so a series has to survive
+        several beta iterations per stable release."""
+        assert b.release_version(1, 4, 14) == '1.10'
 
-    def test_past_nine_it_refuses_and_says_what_to_write(self):
-        """1.10 would sort below 1.9 in every string comparison a human or a
-        script makes, so rolling over is not an option - the next release is a
-        new major series, which is a decision rather than a carry."""
+    def test_past_the_ceiling_it_refuses_and_says_what_to_write(self):
+        """The next release is a new major series - a decision rather than a
+        carry - and the error names the exact line to write."""
         with pytest.raises(b.BuildError, match='exhausted'):
-            b.release_version(1, 4, 14)
+            b.release_version(1, 4, 104)
         try:
-            b.release_version(1, 4, 14)
+            b.release_version(1, 4, 104)
         except b.BuildError as exc:
-            assert '"2 14"' in str(exc)
+            assert '"2 104"' in str(exc)
 
     def test_a_new_series_starts_at_zero_without_resetting_the_counter(self):
         """The counter keeps climbing across a major bump - it has to, or a
@@ -381,3 +382,59 @@ class TestPerArchCounters:
 
         assert b.reserve_build(3, 'c' * 40, 'arm', run) == 'refs/tags/release/arm/3'
         assert calls[-1] == ['git', 'push', 'origin', 'refs/tags/release/arm/3']
+
+
+class TestMajorJump:
+    """Starting a new series, e.g. calling the next release 2.0.
+
+    Decided at the cut, not at promote: the version string is inside the signed
+    bytes, so renaming at promote time means re-signing - and then stable would
+    not be shipping the manifest beta tested."""
+
+    def test_it_starts_the_new_series_at_zero(self):
+        doc, n = b.build('1 4', ['release/x86/9'], COMMIT, all_tags(),
+                         resolver, NOW, major_override=2)
+        assert doc['release'] == '2.0'
+        assert n == 10
+
+    def test_the_counter_keeps_climbing_across_the_jump(self):
+        """It has to. A counter that restarted would be refused by every device
+        that had already passed it."""
+        doc, n = b.build('1 4', ['release/x86/9'], COMMIT, all_tags(),
+                         resolver, NOW, major_override=2)
+        assert doc['counter'] == 10 > 9
+
+    def test_without_the_override_the_series_continues(self):
+        doc, _ = b.build('1 4', ['release/x86/9'], COMMIT, all_tags(),
+                         resolver, NOW)
+        assert doc['release'] == '1.6'
+
+    def test_jumping_backwards_is_refused(self):
+        """'2 -> 1' would produce release strings that go backwards while the
+        counter goes forwards, which is the most confusing possible pair."""
+        with pytest.raises(b.BuildError, match='goes forwards'):
+            b.build('2 4', [], COMMIT, all_tags(), resolver, NOW,
+                    major_override=1)
+
+    def test_jumping_to_the_same_major_is_refused(self):
+        with pytest.raises(b.BuildError, match='not ahead'):
+            b.build('2 4', [], COMMIT, all_tags(), resolver, NOW,
+                    major_override=2)
+
+    def test_a_later_release_continues_the_new_series(self):
+        """After the jump, VERSION is rewritten to "2 <counter>", so the next
+        release is 2.1 rather than falling back to 1.x."""
+        doc, _ = b.build('2 10', ['release/x86/10'], COMMIT, all_tags(),
+                         resolver, NOW)
+        assert doc['release'] == '2.1'
+
+
+class TestMinorCeiling:
+
+    def test_the_series_runs_to_ninety_nine(self):
+        assert b.MAX_MINOR == 99
+        assert b.release_version(1, 4, 103) == '1.99'
+
+    def test_past_the_ceiling_it_asks_for_a_new_series(self):
+        with pytest.raises(b.BuildError, match='exhausted'):
+            b.release_version(1, 4, 104)
