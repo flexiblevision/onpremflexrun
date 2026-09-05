@@ -141,29 +141,63 @@ class TestTheSurveyIsOfferedInTheQuestions:
         assert not any('--update-components' in c for c in calls)
 
 
-class TestAChangedFileStopsForACommit:
+class TestAChangedFileAsksAboutTheCommit:
     """The commit IS the decision to ship these versions, and the only record
-    of who made it. Carrying on would also just fail - the cut's own preflight
-    refuses a dirty tree, because the manifest pins HEAD."""
+    of who made it - so it stays an explicit answer. But it is asked here, not
+    sent away to a second run: the cut refuses a dirty tree anyway, so leaving
+    means answering every question again for nothing."""
 
-    def test_it_stops_before_cutting(self, wizard):
-        code, out, calls = wizard(CUT + X86 + FROM_SURVEY, GIT_DIFF_EXIT=1)
+    def test_declining_stops_without_cutting(self, wizard):
+        code, out, calls = wizard(CUT + X86 + FROM_SURVEY + ['no'],
+                                  GIT_DIFF_EXIT=1)
 
         assert code == 0
         assert not [c for c in calls if '-m release.cut' in c
                     and '--update-components' not in c]
 
-    def test_it_says_what_to_do_next(self, wizard):
-        _, out, _ = wizard(CUT + X86 + FROM_SURVEY, GIT_DIFF_EXIT=1)
+    def test_declining_is_the_default(self, wizard):
+        """A bare Enter must not commit on someone's behalf."""
+        code, _, calls = wizard(CUT + X86 + FROM_SURVEY + [''], GIT_DIFF_EXIT=1)
 
-        assert 'git commit' in out
+        assert code == 0
+        assert not any(c.startswith('git commit') for c in calls)
+
+    def test_declining_says_what_to_do_next(self, wizard):
+        _, out, _ = wizard(CUT + X86 + FROM_SURVEY + ['no'], GIT_DIFF_EXIT=1)
+
         assert './release_cut.sh' in out
+        assert 'uncommitted' in out
 
-    def test_it_does_not_commit_anything_itself(self, wizard):
-        _, _, calls = wizard(CUT + X86 + FROM_SURVEY, GIT_DIFF_EXIT=1)
+    def test_accepting_commits_and_carries_on_to_the_cut(self, wizard):
+        _, _, calls = wizard(
+            CUT + X86 + FROM_SURVEY + ['yes', 'promote backend'] + NO_MAJOR
+            + NO_PROMOTE + CONFIRM,
+            GIT_DIFF_EXIT=1)
 
-        assert not any(c.startswith('git commit') or c.startswith('git add')
-                       for c in calls)
+        assert any(c.startswith('git commit') for c in calls)
+        assert execed(calls)
+
+    def test_the_commit_message_is_the_one_typed(self, wizard):
+        _, _, calls = wizard(
+            CUT + X86 + FROM_SURVEY + ['yes', 'promote backend to 1.1000']
+            + NO_MAJOR + NO_PROMOTE + CONFIRM,
+            GIT_DIFF_EXIT=1)
+
+        commit = [c for c in calls if c.startswith('git commit')][0]
+        assert 'promote backend to 1.1000' in commit
+
+    def test_only_the_component_file_is_committed(self, wizard):
+        """Never `commit -a`. Whatever else is in the tree is not part of this
+        decision, and sweeping it into the release commit would misrepresent
+        what the manifest pins."""
+        _, _, calls = wizard(
+            CUT + X86 + FROM_SURVEY + ['yes', 'msg'] + NO_MAJOR + NO_PROMOTE
+            + CONFIRM,
+            GIT_DIFF_EXIT=1)
+
+        commit = [c for c in calls if c.startswith('git commit')][0]
+        assert 'release/components.json' in commit
+        assert ' -a' not in commit
 
 
 class TestAFailedSurvey:

@@ -368,6 +368,17 @@ def verify_as_a_device_would(manifest_path, signature_path, public_key_path):
         return False, str(exc)
 
 
+def driven_by_wizard():
+    """release_cut.sh sets this while it drives the survey itself.
+
+    The "now go and commit it" advice is right for the standalone verb and
+    wrong inside the wizard, which asks about the commit and then carries on.
+    Printing both left the operator reading two contradictory sets of
+    instructions at the one moment they need to be sure what happens next.
+    """
+    return os.environ.get('FLEXRUN_WIZARD') == '1'
+
+
 def write_components(path, tags, stream=sys.stderr):
     """Write a per-arch component file.
 
@@ -389,8 +400,9 @@ def write_components(path, tags, stream=sys.stderr):
     stream.write('wrote {}\n'.format(path))
     for arch in sorted(tags):
         stream.write('  {}: {} component(s)\n'.format(arch, len(tags[arch])))
-    stream.write('\nCommit it. Editing this file is how you choose what the next\n'
-                 'release pins; --from-stable only reports what is deployed now.\n')
+    if not driven_by_wizard():
+        stream.write('\nCommit it. Editing this file is how you choose what the next\n'
+                     'release pins; --from-stable only reports what is deployed now.\n')
     return path
 
 
@@ -529,9 +541,10 @@ def main(argv=None):
         changed = candidates_mod.describe(records, sys.stderr)
         if changed:
             write_components(path, candidates_mod.apply(current, records))
-            sys.stderr.write(
-                '\n  git diff {}\n'
-                '  git commit -am "promote ..."\n'.format(path))
+            if not driven_by_wizard():
+                sys.stderr.write(
+                    '\n  git diff {}\n'
+                    '  git commit -am "promote ..."\n'.format(path))
         return 0
 
     try:

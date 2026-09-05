@@ -110,27 +110,36 @@ wizard() {
             # the same operation at the moment it is relevant.
             if [ "$source" = survey ]; then
                 echo >&2
-                if "$0" candidates; then
+                if FLEXRUN_WIZARD=1 "$0" candidates; then
                     if git diff --quiet -- release/components.json; then
                         echo >&2
                         echo "  nothing to change - carrying on with the file as it stands" >&2
                         source='file'
                     else
-                        # Stop here, deliberately. The commit IS the decision to
-                        # ship these versions, and it is the only record of who
-                        # made it. Carrying on would also fail: the cut's own
-                        # preflight refuses a dirty tree, because the manifest
-                        # pins HEAD and a dirty tree means the pinned commit is
-                        # not what was tested.
+                        # The commit IS the decision to ship these versions, and
+                        # the only record of who made it - so it stays an
+                        # explicit answer, with the moves above already on
+                        # screen. But it is asked here rather than sent away to
+                        # a second run: the cut cannot proceed over a dirty tree
+                        # anyway (the manifest pins HEAD), so leaving now means
+                        # answering every question again for nothing.
                         echo >&2
-                        echo "  release/components.json has changed. Review and commit it," >&2
-                        echo "  then run this again to cut:" >&2
-                        echo >&2
-                        echo "    git diff release/components.json" >&2
-                        echo "    git commit -am 'promote ...'" >&2
-                        echo "    ./release_cut.sh" >&2
-                        echo >&2
-                        exit 0
+                        go="$(ask 'Commit release/components.json and carry on with the cut? (yes/no)' 'no')"
+                        case "$go" in
+                            y|yes|Y|YES)
+                                msg="$(ask 'Commit message' 'promote component versions')"
+                                git commit -q -m "$msg" -- release/components.json
+                                echo "  committed." >&2
+                                source='file'
+                                ;;
+                            *)
+                                echo >&2
+                                echo "  left uncommitted - nothing was cut." >&2
+                                echo "  commit it yourself, then run ./release_cut.sh again." >&2
+                                echo >&2
+                                exit 0
+                                ;;
+                        esac
                     fi
                 else
                     echo >&2
