@@ -328,3 +328,76 @@ class TestEndToEndAgainstVerify:
         assert returned['counter'] == 48
         assert parsed['counter'] == 1
         assert returned['counter'] != parsed['counter']
+
+
+class TestLatestStableVersionDev:
+    """The dev track's version endpoint - the legacy shape, beta's answers.
+
+    A dev device sets latest_stable_ref to this. It must never answer with the
+    fleet's stable version: that would silently put a device back on the track
+    it was deliberately taken off, and nothing in the install would say so.
+    """
+
+    def test_it_answers_with_the_beta_tag(self, cf):
+        publish(cf, counter=48, channel='beta')
+        response = cf.latest_stable_version_dev(
+            Request({'image': 'backend'}))
+        assert status_of(response) == 200
+        assert response[0] == '1.9.2'
+
+    def test_the_body_is_plain_text_not_json(self, cf):
+        """version_check.py reads res.text and compares it to a docker tag."""
+        publish(cf, counter=48, channel='beta')
+        response = cf.latest_stable_version_dev(Request({'image': 'backend'}))
+        assert headers_of(response)['Content-Type'] == 'text/plain'
+        with pytest.raises(ValueError):
+            json.loads(response[0])
+
+    def test_it_does_not_fall_back_to_stable(self, cf):
+        publish(cf, counter=48, channel='stable')
+        response = cf.latest_stable_version_dev(Request({'image': 'backend'}))
+        assert status_of(response) == 404
+        assert 'beta' in body_of(response)['error']
+
+    def test_it_reads_beta_even_when_stable_is_newer(self, cf):
+        publish(cf, counter=48, channel='beta')
+        publish(cf, counter=90, channel='stable')
+        response = cf.latest_stable_version_dev(Request({'image': 'backend'}))
+        assert status_of(response) == 200
+
+    def test_an_unknown_component_is_a_404(self, cf):
+        publish(cf, counter=48, channel='beta')
+        response = cf.latest_stable_version_dev(Request({'image': 'nosuch'}))
+        assert status_of(response) == 404
+
+    def test_a_missing_image_is_refused(self, cf):
+        publish(cf, counter=48, channel='beta')
+        assert status_of(cf.latest_stable_version_dev(Request({}))) == 400
+
+    def test_an_unknown_arch_is_refused(self, cf):
+        response = cf.latest_stable_version_dev(
+            Request({'image': 'backend', 'arch': 'riscv'}, arch=None))
+        assert status_of(response) == 400
+
+    def test_beta_pointing_at_an_unpublished_release_is_a_404(self, cf):
+        cf.releases.CHANNELS['x86']['beta'] = 99
+        response = cf.latest_stable_version_dev(Request({'image': 'backend'}))
+        assert status_of(response) == 404
+
+    def test_an_unreadable_manifest_is_a_404_not_a_crash(self, cf):
+        cf.releases.RELEASES['x86'][48] = {
+            'manifest_b64': 'bm90IGpzb24=', 'signature': 'x'}
+        cf.releases.CHANNELS['x86']['beta'] = 48
+        response = cf.latest_stable_version_dev(Request({'image': 'backend'}))
+        assert status_of(response) == 404
+
+    def test_arm_beta_does_not_answer_from_x86(self, cf):
+        publish(cf, counter=48, channel='beta', arch='x86')
+        response = cf.latest_stable_version_dev(
+            Request({'image': 'backend', 'arch': 'arm'}, arch=None))
+        assert status_of(response) == 404
+
+    def test_it_never_returns_the_signature(self, cf):
+        publish(cf, counter=48, channel='beta', signature='SECRETLOOKING==')
+        response = cf.latest_stable_version_dev(Request({'image': 'backend'}))
+        assert 'SECRETLOOKING' not in response[0]

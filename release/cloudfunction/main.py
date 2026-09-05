@@ -23,7 +23,17 @@ only property this endpoint provides.
 
 Request:   {"channel": "stable"}        or {"counter": 44} for recovery
 Response:  {"schema", "channel", "counter", "manifest_b64", "signature"}
+
+This source also carries latest_stable_version_dev - the same shape as the
+legacy latest_stable_version endpoint, but answering from the beta channel.
+Deploy it from here too:
+
+    gcloud functions deploy latest_stable_version_dev \\
+      --gen2 --runtime python312 --trigger-http --allow-unauthenticated \\
+      --entry-point latest_stable_version_dev --region us-central1 \\
+      --source release/cloudfunction
 """
+import base64
 import json
 
 import releases
@@ -99,3 +109,57 @@ def release_manifest(request):
             channel, arch)}, 404)
 
     return _envelope(arch, promoted, channel=channel)
+
+
+# --- latest_stable_version_dev ---------------------------------------------
+# A device on the dev track sets latest_stable_ref to latest_stable_version_dev
+# and follows beta. This answers in the legacy endpoint's shape - a bare version
+# string as text/plain - so version_check.py needs no dev-specific code, and a
+# dev device that has not yet moved to the signed-manifest path still gets beta
+# versions rather than the fleet's.
+#
+# This is the one place a manifest is decoded, and it is read-only: the
+# signature-covered bytes in releases.json are never rewritten from what is
+# parsed here.
+_TEXT_HEADERS = {'Content-Type': 'text/plain', 'Cache-Control': 'no-store'}
+
+
+def _beta_images(arch):
+    counter = (releases.CHANNELS.get(arch) or {}).get('beta')
+    if counter is None:
+        return None, 'nothing is promoted to beta for {}'.format(arch)
+    entry = (releases.RELEASES.get(arch) or {}).get(counter)
+    if not entry or not entry.get('manifest_b64'):
+        return None, 'beta points at release {}, which is not published'.format(
+            counter)
+    try:
+        manifest = json.loads(base64.b64decode(entry['manifest_b64']))
+    except (ValueError, TypeError):
+        return None, 'release {} has an unreadable manifest'.format(counter)
+    return manifest.get('images', {}).get(arch, {}), None
+
+
+def latest_stable_version_dev(request):
+    body = request.get_json(silent=True) or {}
+    arch = body.get('arch')
+    image = body.get('image')
+
+    if arch not in releases.CHANNELS:
+        return _json({'error': 'unknown or missing arch {!r}'.format(arch),
+                      'arches': sorted(releases.CHANNELS)}, 400)
+    if not image:
+        return _json({'error': 'missing image'}, 400)
+
+    images, problem = _beta_images(arch)
+    if problem:
+        # 404, not a fallback to stable: a dev device asked what beta is, and
+        # answering with the fleet's version would silently put it back on the
+        # track it was deliberately taken off.
+        return _json({'error': problem}, 404)
+
+    component = images.get(image)
+    if not component or not component.get('tag'):
+        return _json({'error': "beta has no version for '{}' on {}".format(
+            image, arch)}, 404)
+
+    return (component['tag'], 200, _TEXT_HEADERS)

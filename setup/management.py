@@ -39,10 +39,36 @@ LOCAL = {
     "use_mqtt": False
 }
 
-def generate_environment_config(environment='cloud', override=False):
-    config = CLOUD
+# Which cloud a device talks to, and which release channel it follows.
+#
+# dev points at clouddeploy and follows the beta channel, so a device under
+# test takes a release before the fleet does. prod is the default because an
+# unattended install must not opt itself into pre-release software.
+RELEASE_TRACKS = {
+    'prod': {
+        'latest_stable_ref': 'latest_stable_version',
+        'release_channel': 'stable',
+    },
+    'dev': {
+        'cloud_domain': 'https://clouddeploy.api.flexiblevision.com',
+        'latest_stable_ref': 'latest_stable_version_dev',
+        'release_channel': 'beta',
+    },
+}
+
+
+def generate_environment_config(environment='cloud', override=False,
+                                release_track='prod'):
+    config = dict(CLOUD)
     if environment == 'local':
-        config = LOCAL
+        config = dict(LOCAL)
+
+    if release_track not in RELEASE_TRACKS:
+        raise ValueError(
+            'unknown release track {!r} - expected one of {}'.format(
+                release_track, ', '.join(sorted(RELEASE_TRACKS))))
+    config.update(RELEASE_TRACKS[release_track])
+    config['release_track'] = release_track
 
     PATH = os.environ['HOME']+'/fvconfig.json'
     if os.path.exists(PATH) and not override:

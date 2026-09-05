@@ -19,29 +19,39 @@ class TestClearTextColor:
         assert '\033[0m' in capsys.readouterr().out
 
 
-class TestStaticIpReferences:
-    """Both readers fall through to their defaults on this build."""
+class TestNetworkConfig:
+    """Both readers used to open an undefined `path_ref` inside a bare except,
+    so the default was always returned and the file was never read - and both
+    read the same path, so the interface name would have been an IP."""
 
     @pytest.mark.unit
-    def test_static_ip_falls_back_to_the_documented_default(self):
-        # path_ref is never defined at module scope, so the `open(path_ref)`
-        # raises NameError, the bare `except` swallows it and the default is
-        # returned. Pinned so that defining path_ref later is a deliberate
-        # change with a visible test diff, not a silent behaviour swap.
-        assert deploy.get_static_ip_ref() == '192.168.10.35'
+    def test_the_defaults_are_used_when_there_is_no_file(self, monkeypatch):
+        monkeypatch.setattr(deploy, 'NET_CONFIG', '/nonexistent/flexrun/network')
+        assert deploy._net_config() == ('enp0s31f6', '192.168.10.35')
 
     @pytest.mark.unit
-    def test_interface_name_falls_back_to_the_documented_default(self):
-        assert deploy.get_interface_name_ref() == 'enp0s31f6'
+    def test_the_file_is_read_now(self, tmp_path, monkeypatch):
+        target = tmp_path / 'network'
+        target.write_text('eth0\n10.0.0.9\n')
+        monkeypatch.setattr(deploy, 'NET_CONFIG', str(target))
+        assert deploy._net_config() == ('eth0', '10.0.0.9')
 
     @pytest.mark.unit
-    def test_a_defined_path_ref_would_be_read(self, tmp_path, monkeypatch):
-        ref = tmp_path / 'ip'
-        ref.write_text('10.0.0.9\n')
-        monkeypatch.setattr(deploy, 'path_ref', str(ref), raising=False)
+    def test_interface_and_address_are_separate_values(self, tmp_path, monkeypatch):
+        """The old pair returned the same file contents for both."""
+        target = tmp_path / 'network'
+        target.write_text('eth0\n10.0.0.9\n')
+        monkeypatch.setattr(deploy, 'NET_CONFIG', str(target))
+        interface, address = deploy._net_config()
+        assert interface != address
 
-        assert deploy.get_static_ip_ref() == '10.0.0.9'
-        assert deploy.get_interface_name_ref() == '10.0.0.9'
+    @pytest.mark.unit
+    def test_a_half_written_file_falls_back_for_the_missing_half(self, tmp_path,
+                                                                 monkeypatch):
+        target = tmp_path / 'network'
+        target.write_text('eth0\n')
+        monkeypatch.setattr(deploy, 'NET_CONFIG', str(target))
+        assert deploy._net_config() == ('eth0', '192.168.10.35')
 
 
 class TestSetStaticIp:
@@ -50,8 +60,7 @@ class TestSetStaticIp:
         opener = mock_open()
         with patch('os.system') as system, \
              patch('builtins.open', opener), \
-             patch.object(deploy, 'get_static_ip_ref', return_value='192.168.10.35'), \
-             patch.object(deploy, 'get_interface_name_ref', return_value='eth0'):
+             patch.object(deploy, '_net_config', return_value=('eth0', '192.168.10.35')):
             deploy.set_static_ip()
 
         assert system.call_args_list == [
@@ -64,8 +73,7 @@ class TestSetStaticIp:
     def test_netplan_yaml_names_the_interface_and_address(self):
         opener = mock_open()
         with patch('os.system'), patch('builtins.open', opener), \
-             patch.object(deploy, 'get_static_ip_ref', return_value='192.168.10.35'), \
-             patch.object(deploy, 'get_interface_name_ref', return_value='eth0'):
+             patch.object(deploy, '_net_config', return_value=('eth0', '192.168.10.35')):
             deploy.set_static_ip()
 
         written = ''.join(c.args[0] for c in opener().write.call_args_list)
@@ -76,45 +84,68 @@ class TestSetStaticIp:
         assert 'addresses: [192.168.10.35/24]' in written
 
 
-class TestContainersRunning:
+class TestContainerState:
+    """`docker inspect` on a container that does not exist writes nothing and
+    exits non-zero. json.loads('') on that used to raise inside step_3, so the
+    branch that reports a failed install was itself what crashed - which is
+    exactly what happened on a real device."""
+
     @pytest.mark.unit
-    def test_all_three_running_is_true(self):
-        proc = MagicMock()
-        proc.stdout.read.return_value = b'true\n'
-        with patch('subprocess.Popen', return_value=proc):
+    def test_a_missing_container_is_none_not_an_exception(self):
+        with patch('subprocess.run',
+                   return_value=MagicMock(returncode=1, stdout='\n')):
+            assert deploy.container_state('capdev') is None
+
+    @pytest.mark.unit
+    def test_a_running_container_is_true(self):
+        with patch('subprocess.run',
+                   return_value=MagicMock(returncode=0, stdout='true\n')):
+            assert deploy.container_state('capdev') is True
+
+    @pytest.mark.unit
+    def test_a_stopped_container_is_false(self):
+        with patch('subprocess.run',
+                   return_value=MagicMock(returncode=0, stdout='false\n')):
+            assert deploy.container_state('capdev') is False
+
+    @pytest.mark.unit
+    def test_docker_missing_entirely_is_none(self):
+        with patch('subprocess.run', side_effect=OSError('no docker')):
+            assert deploy.container_state('capdev') is None
+
+    @pytest.mark.unit
+    def test_unexpected_output_is_not_read_as_running(self):
+        with patch('subprocess.run',
+                   return_value=MagicMock(returncode=0, stdout='maybe')):
+            assert deploy.container_state('capdev') is not True
+
+
+class TestContainersRunning:
+
+    @pytest.mark.unit
+    def test_all_running_is_true(self):
+        with patch.object(deploy, 'container_state', return_value=True):
             assert deploy.containers_running() is True
 
     @pytest.mark.unit
     def test_one_stopped_container_is_false(self):
-        procs = []
-        for state in (b'true\n', b'false\n', b'true\n'):
-            p = MagicMock()
-            p.stdout.read.return_value = state
-            procs.append(p)
-
-        with patch('subprocess.Popen', side_effect=procs):
+        with patch.object(deploy, 'container_state',
+                          side_effect=lambda n: n != 'vision'):
             assert deploy.containers_running() is False
 
     @pytest.mark.unit
-    def test_inspects_the_three_application_containers(self):
-        proc = MagicMock()
-        proc.stdout.read.return_value = b'true\n'
-        with patch('subprocess.Popen', return_value=proc) as popen:
-            deploy.containers_running()
-
-        inspected = [c[0][0][-1] for c in popen.call_args_list]
-        assert inspected == ['capdev', 'localprediction', 'captureui']
+    def test_it_names_what_is_broken(self):
+        with patch.object(deploy, 'container_state',
+                          side_effect=lambda n: n != 'vision'):
+            assert deploy.not_running() == ['vision']
 
     @pytest.mark.unit
-    def test_a_missing_container_raises(self):
-        # docker inspect prints nothing for an unknown container, and
-        # json.loads('') is a decode error rather than a False.
-        import json
-        proc = MagicMock()
-        proc.stdout.read.return_value = b''
-        with patch('subprocess.Popen', return_value=proc):
-            with pytest.raises(json.JSONDecodeError):
-                deploy.containers_running()
+    def test_it_covers_everything_system_setup_verifies(self):
+        """The old list was capdev, localprediction and captureui only, so
+        setup could report success with vision, nodecreator and predictlite
+        all dead."""
+        expected = set(deploy.EXPECTED_CONTAINERS)
+        assert {'vision', 'nodecreator', 'predictlite', 'mongo'} <= expected
 
 
 class TestQueryYesNo:
@@ -162,26 +193,96 @@ class TestQueryYesNo:
             deploy.query_yes_no('go?', default='perhaps')
 
 
-class TestChooseEnvironment:
+class TestChooseReleaseTrack:
+    """Which cloud, and which release channel the device then follows.
+
+    prod is the answer to a bare Enter and to option 1. A device that lands on
+    dev by accident takes beta releases before the fleet does, and on a factory
+    floor that is discovered by the line going down - so the default has to be
+    the safe one, not the one being tested this week.
+    """
+
     @pytest.mark.unit
-    def test_option_one_is_the_cloud(self):
-        with patch('builtins.input', return_value='1'), \
-             patch.object(deploy, 'generate_environment_config') as generate:
-            deploy.choose_environment()
-
-        generate.assert_called_once_with('cloud', True)
+    def test_option_one_is_prod(self):
+        with patch('builtins.input', return_value='1'):
+            assert deploy.choose_release_track() == 'prod'
 
     @pytest.mark.unit
-    def test_option_two_is_a_local_cluster(self):
-        with patch('builtins.input', return_value='2'), \
-             patch.object(deploy, 'generate_environment_config') as generate:
-            deploy.choose_environment()
+    def test_a_bare_enter_is_prod(self):
+        with patch('builtins.input', return_value=''):
+            assert deploy.choose_release_track() == 'prod'
 
-        generate.assert_called_once_with('local', True)
+    @pytest.mark.unit
+    def test_whitespace_is_a_bare_enter(self):
+        with patch('builtins.input', return_value='  '):
+            assert deploy.choose_release_track() == 'prod'
+
+    @pytest.mark.unit
+    def test_option_two_is_dev(self):
+        with patch('builtins.input', return_value='2'):
+            assert deploy.choose_release_track() == 'dev'
+
+    @pytest.mark.unit
+    def test_dev_says_what_it_means(self, capsys):
+        with patch('builtins.input', return_value='2'):
+            deploy.choose_release_track()
+
+        assert 'beta' in capsys.readouterr().out
 
     @pytest.mark.unit
     def test_reprompts_on_anything_else(self, capsys):
-        with patch('builtins.input', side_effect=['3', 'x', '1']), \
+        with patch('builtins.input', side_effect=['9', 'dev', '2']):
+            assert deploy.choose_release_track() == 'dev'
+
+        assert capsys.readouterr().out.count("Please respond with '1' or '2'") == 2
+
+
+class TestChooseEnvironment:
+    @pytest.mark.unit
+    def test_option_one_is_the_cloud(self):
+        with patch('builtins.input', side_effect=['1', '1']), \
+             patch.object(deploy, 'generate_environment_config') as generate:
+            deploy.choose_environment()
+
+        generate.assert_called_once_with('cloud', True, release_track='prod')
+
+    @pytest.mark.unit
+    def test_option_two_is_a_local_cluster(self):
+        with patch('builtins.input', side_effect=['2', '1']), \
+             patch.object(deploy, 'generate_environment_config') as generate:
+            deploy.choose_environment()
+
+        generate.assert_called_once_with('local', True, release_track='prod')
+
+    @pytest.mark.unit
+    def test_the_track_reaches_the_config(self):
+        with patch('builtins.input', side_effect=['1', '2']), \
+             patch.object(deploy, 'generate_environment_config') as generate:
+            assert deploy.choose_environment() == ('cloud', 'dev')
+
+        generate.assert_called_once_with('cloud', True, release_track='dev')
+
+    @pytest.mark.unit
+    def test_the_environment_and_the_track_are_independent(self):
+        """A local cluster on the dev track is a real combination - the two
+        questions must not collapse into one."""
+        with patch('builtins.input', side_effect=['2', '2']), \
+             patch.object(deploy, 'generate_environment_config') as generate:
+            assert deploy.choose_environment() == ('local', 'dev')
+
+        generate.assert_called_once_with('local', True, release_track='dev')
+
+    @pytest.mark.unit
+    def test_the_config_is_written_once(self):
+        with patch('builtins.input', side_effect=['1', '9', '2']), \
+             patch.object(deploy, 'generate_environment_config') as generate:
+            deploy.choose_environment()
+
+        assert generate.call_count == 1
+
+    @pytest.mark.unit
+    def test_reprompts_on_anything_else(self, capsys):
+        with patch('builtins.input', side_effect=['3', 'x', '1', '1']), \
              patch.object(deploy, 'generate_environment_config'):
             deploy.choose_environment()
 
@@ -189,17 +290,33 @@ class TestChooseEnvironment:
 
 
 class TestCheckConnection:
-    @pytest.mark.unit
-    def test_successful_ping_is_online(self):
-        with patch('subprocess.check_output', return_value=b'4 received') as ping:
-            assert deploy.check_connection() is True
-        assert ping.call_args[0][0] == ['ping', '-c', '4', 'google.com']
+    """Isolated factory networks are the normal case. Pinging google.com told a
+    device with a working route to the registry that it had no network, and
+    stopped setup."""
 
     @pytest.mark.unit
-    def test_failed_ping_is_offline(self):
-        with patch('subprocess.check_output',
-                   side_effect=subprocess.CalledProcessError(1, 'ping')):
+    def test_a_reachable_target_is_online(self):
+        with patch('subprocess.run', return_value=MagicMock(returncode=0)):
+            assert deploy.check_connection() is True
+
+    @pytest.mark.unit
+    def test_an_http_error_still_counts_as_reachable(self):
+        """The registry answers 401 without credentials - curl exit 22. That
+        is a reachable registry, not a broken network."""
+        with patch('subprocess.run', return_value=MagicMock(returncode=22)):
+            assert deploy.check_connection() is True
+
+    @pytest.mark.unit
+    def test_nothing_reachable_is_offline(self):
+        with patch('subprocess.run', return_value=MagicMock(returncode=6)):
             assert deploy.check_connection() is False
+
+    @pytest.mark.unit
+    def test_it_checks_what_setup_actually_needs(self):
+        targets = ' '.join(deploy.REACHABILITY_TARGETS)
+        assert 'registry-1.docker.io' in targets
+        assert 'functions-proxy.flexiblevision.com' in targets
+        assert 'google.com' not in targets
 
 
 class TestDisplayConnectionResults:
@@ -219,14 +336,43 @@ class TestDisplayConnectionResults:
 class TestConnectWifi:
     @pytest.mark.unit
     def test_invokes_nmcli_with_the_credentials(self):
-        with patch('os.system') as system, patch('time.sleep', new=thread_aware_sleep_mock()):
+        with patch('subprocess.run',
+                   return_value=MagicMock(returncode=0, stdout='', stderr='')) as run, \
+             patch('time.sleep', new=thread_aware_sleep_mock()):
             deploy.connect_wifi('shopfloor', 'hunter2')
 
-        system.assert_called_once_with('nmcli dev wifi connect shopfloor password hunter2')
+        run.assert_called_once()
+        assert run.call_args[0][0] == ['nmcli', 'dev', 'wifi', 'connect',
+                                       'shopfloor', 'password', 'hunter2']
+
+    @pytest.mark.unit
+    def test_the_password_never_reaches_a_shell(self):
+        """os.system with a concatenated password: a space broke the command,
+        and ; or $(...) executed."""
+        with patch('subprocess.run',
+                   return_value=MagicMock(returncode=0, stdout='', stderr='')) as run, \
+             patch('time.sleep', new=thread_aware_sleep_mock()):
+            deploy.connect_wifi('my network', 'p; rm -rf /')
+
+        argv = run.call_args[0][0]
+        assert isinstance(argv, list)
+        assert 'my network' in argv and 'p; rm -rf /' in argv
+
+    @pytest.mark.unit
+    def test_a_failure_is_reported_not_silent(self, capsys):
+        with patch('subprocess.run',
+                   return_value=MagicMock(returncode=10,
+                                          stdout='Secrets were required',
+                                          stderr='')), \
+             patch('time.sleep', new=thread_aware_sleep_mock()):
+            deploy.connect_wifi('shopfloor', 'hunter2')
+        assert 'Could not connect' in capsys.readouterr().out
 
     @pytest.mark.unit
     def test_settles_before_returning(self):
-        with patch('os.system'), patch('time.sleep', new=thread_aware_sleep_mock()) as sleep:
+        with patch('subprocess.run',
+                   return_value=MagicMock(returncode=0, stdout='', stderr='')), \
+             patch('time.sleep', new=thread_aware_sleep_mock()) as sleep:
             deploy.connect_wifi('shopfloor', 'hunter2')
         sleep.assert_called_once_with(3)
 
@@ -261,7 +407,8 @@ class TestSetupWifi:
     def test_prompts_for_credentials_and_connects(self):
         with patch('os.system'), patch('time.sleep', new=thread_aware_sleep_mock()), \
              patch.object(deploy, 'check_connection', side_effect=[False, True]), \
-             patch('builtins.input', side_effect=['shopfloor', 'hunter2']), \
+             patch('builtins.input', return_value='shopfloor'), \
+             patch('getpass.getpass', return_value='hunter2'), \
              patch.object(deploy, 'connect_wifi') as connect, \
              patch.object(deploy, 'display_connection_results'):
             deploy.setup_wifi()
@@ -274,6 +421,7 @@ class TestSetupWifi:
              patch.object(deploy, 'check_connection', return_value=False), \
              patch.object(deploy, 'retry_prompt', side_effect=[True, True, False]), \
              patch('builtins.input', side_effect=['a', 'b', 'c', 'd']), \
+             patch('getpass.getpass', side_effect=['w', 'x', 'y', 'z']), \
              patch.object(deploy, 'connect_wifi') as connect, \
              patch.object(deploy, 'display_connection_results'):
             deploy.setup_wifi()
@@ -363,18 +511,36 @@ class TestStep2:
 class TestStep3:
     @pytest.mark.unit
     def test_running_containers_report_the_launch_url(self, capsys):
-        with patch.object(deploy, 'containers_running', return_value=True):
-            deploy.step_3()
+        with patch.object(deploy, 'container_state', return_value=True):
+            assert deploy.step_3() == 0
         assert 'Launch - http://<host ip>' in capsys.readouterr().out
 
     @pytest.mark.unit
     def test_stopped_containers_tell_the_operator_to_retry(self, capsys):
-        with patch.object(deploy, 'containers_running', return_value=False):
-            deploy.step_3()
+        with patch.object(deploy, 'container_state', return_value=False):
+            assert deploy.step_3() == 24
 
         out = capsys.readouterr().out
         assert 'Step 2 did not complete' in out
         assert 'Launch' not in out
+
+    @pytest.mark.unit
+    def test_it_names_the_containers_that_are_down(self, capsys):
+        """"Please retry setup" alone gives a technician on the floor nothing
+        to act on."""
+        with patch.object(deploy, 'container_state',
+                          side_effect=lambda n: n != 'vision'):
+            deploy.step_3()
+        out = capsys.readouterr().out
+        assert 'vision' in out
+
+    @pytest.mark.unit
+    def test_a_missing_container_does_not_crash(self, capsys):
+        """The regression hit on a real device: 'No such object: capdev'
+        followed by a JSONDecodeError traceback out of this very branch."""
+        with patch.object(deploy, 'container_state', return_value=None):
+            assert deploy.step_3() == 24
+        assert 'not created' in capsys.readouterr().out
 
 
 class TestMain:
@@ -382,30 +548,59 @@ class TestMain:
     def test_runs_all_three_steps_on_linux(self):
         with patch('platform.system', return_value='Linux'), \
              patch('time.sleep', new=thread_aware_sleep_mock()), \
+             patch.object(deploy, 'preflight', return_value=[]), \
              patch.object(deploy, 'step_1') as s1, \
-             patch.object(deploy, 'step_2') as s2, \
-             patch.object(deploy, 'step_3') as s3, \
+             patch.object(deploy, 'step_2', return_value=0) as s2, \
+             patch.object(deploy, 'step_3', return_value=0) as s3, \
              patch.object(deploy, 'check_connection', return_value=True):
-            deploy.main()
+            assert deploy.main() == 0
 
         s1.assert_called_once()
         s2.assert_called_once()
         s3.assert_called_once()
 
     @pytest.mark.unit
+    def test_a_failed_install_does_not_reach_step_3(self):
+        """The exit code used to be discarded, so a failed install fell
+        through and was reported - at best - as containers not running."""
+        with patch('platform.system', return_value='Linux'), \
+             patch('time.sleep', new=thread_aware_sleep_mock()), \
+             patch.object(deploy, 'preflight', return_value=[]), \
+             patch.object(deploy, 'step_1'), \
+             patch.object(deploy, 'step_2', return_value=22), \
+             patch.object(deploy, 'step_3') as s3, \
+             patch.object(deploy, 'check_connection', return_value=True):
+            assert deploy.main() == 22
+        s3.assert_not_called()
+
+    @pytest.mark.unit
+    def test_unmet_preconditions_stop_before_anything_is_installed(self, capsys):
+        """No docker, no sudo or no disk each used to surface part-way
+        through as a confusing failure with a half-built device behind it."""
+        with patch('platform.system', return_value='Linux'), \
+             patch('time.sleep', new=thread_aware_sleep_mock()), \
+             patch.object(deploy, 'preflight',
+                          return_value=['docker is not installed']), \
+             patch.object(deploy, 'step_1') as s1:
+            assert deploy.main() == 21
+        s1.assert_not_called()
+        assert 'docker is not installed' in capsys.readouterr().out
+
+    @pytest.mark.unit
     def test_a_machine_still_offline_after_step_1_does_not_install(self, capsys):
         # Pulling images without a network would leave a broken half-install.
         with patch('platform.system', return_value='Linux'), \
              patch('time.sleep', new=thread_aware_sleep_mock()), \
+             patch.object(deploy, 'preflight', return_value=[]), \
              patch.object(deploy, 'step_1'), \
              patch.object(deploy, 'step_2') as s2, \
              patch.object(deploy, 'step_3') as s3, \
              patch.object(deploy, 'check_connection', return_value=False):
-            deploy.main()
+            assert deploy.main() != 0
 
         s2.assert_not_called()
         s3.assert_not_called()
-        assert 'Wi-Fi not connected' in capsys.readouterr().out
+        assert 'No route to the image registry' in capsys.readouterr().out
 
     @pytest.mark.unit
     @pytest.mark.parametrize('os_name', ['Darwin', 'Windows'])
@@ -413,7 +608,7 @@ class TestMain:
         with patch('platform.system', return_value=os_name), \
              patch('time.sleep', new=thread_aware_sleep_mock()), \
              patch.object(deploy, 'step_1') as s1:
-            deploy.main()
+            assert deploy.main() != 0
 
         s1.assert_not_called()
         assert 'must be running linux' in capsys.readouterr().out

@@ -261,6 +261,63 @@ class TestPreferManifestWithFallback:
         assert calls == [('release', None)]
 
 
+class TestDeviceChannel:
+    """Which channel a device follows comes from its own fvconfig, written at
+    install time by deploy.py. Before this, every device read stable and a dev
+    device had no way to follow beta at all."""
+
+    def _settings(self, monkeypatch, config):
+        import sys
+        import types
+        module = types.ModuleType('settings')
+        module.config = config
+        monkeypatch.setitem(sys.modules, 'settings', module)
+
+    def test_a_dev_config_follows_beta(self, monkeypatch):
+        self._settings(monkeypatch, {'release_channel': 'beta'})
+        assert upgrade_runner._device_channel() == 'beta'
+
+    def test_a_prod_config_follows_stable(self, monkeypatch):
+        self._settings(monkeypatch, {'release_channel': 'stable'})
+        assert upgrade_runner._device_channel() == 'stable'
+
+    def test_a_config_without_the_key_is_stable(self, monkeypatch):
+        """Every device commissioned before the dev track existed."""
+        self._settings(monkeypatch, {'cloud_domain': 'x'})
+        assert upgrade_runner._device_channel() == 'stable'
+
+    def test_an_unrecognised_channel_is_stable(self, monkeypatch):
+        self._settings(monkeypatch, {'release_channel': 'nightly'})
+        assert upgrade_runner._device_channel() == 'stable'
+
+    def test_an_unreadable_config_is_stable_not_a_crash(self, monkeypatch):
+        import sys
+        import types
+        module = types.ModuleType('settings')
+        monkeypatch.setitem(sys.modules, 'settings', module)
+        assert upgrade_runner._device_channel() == 'stable'
+
+    def test_the_release_path_reads_it(self, monkeypatch):
+        seen = []
+        monkeypatch.setattr(upgrade_runner, '_device_arch', lambda: 'x86')
+        monkeypatch.setattr(upgrade_runner, '_device_channel', lambda: 'beta')
+        monkeypatch.setattr(upgrade_runner, 'run_release',
+                            lambda *a, **k: seen.append(k.get('channel')) or 0)
+        upgrade_runner._release_or_legacy('r1')
+        assert seen == ['beta']
+
+    def test_an_explicit_channel_still_wins(self, monkeypatch):
+        """A support engineer pointing one device at beta by hand must not be
+        overruled by what its config says."""
+        seen = []
+        monkeypatch.setattr(upgrade_runner, '_device_arch', lambda: 'x86')
+        monkeypatch.setattr(upgrade_runner, '_device_channel', lambda: 'stable')
+        monkeypatch.setattr(upgrade_runner, 'run_release',
+                            lambda *a, **k: seen.append(k.get('channel')) or 0)
+        upgrade_runner._release_or_legacy('r1', 'beta')
+        assert seen == ['beta']
+
+
 class TestUnchangedContainersAreLeftAlone:
     """A release pinning what a device already runs must be a no-op, not a
     full restart. This is the case for a baseline release seeded from

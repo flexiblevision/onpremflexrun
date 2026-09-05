@@ -339,12 +339,31 @@ def run_release(run_id, arch, channel='stable', counter=None,
 USAGE = (
     'usage: upgrade_runner.py <run-id> <7 version args>\n'
     '       upgrade_runner.py --release  <run-id> [channel]\n'
+    '                         (channel defaults to the device fvconfig)\n'
     '       upgrade_runner.py --rollback <run-id> <counter>\n')
 
 
 def _device_arch():
     from utils.device_utils import system_arch
     return system_arch()
+
+
+DEFAULT_CHANNEL = 'stable'
+
+
+def _device_channel():
+    """Which release channel this device follows, from its own fvconfig.
+
+    Set at install time by deploy.py. Anything unreadable or unrecognised is
+    stable: a device must never end up on beta because its config was
+    malformed.
+    """
+    try:
+        import settings
+        channel = settings.config.get('release_channel')
+    except Exception:
+        return DEFAULT_CHANNEL
+    return channel if channel in ('stable', 'beta') else DEFAULT_CHANNEL
 
 
 def _legacy_versions():
@@ -354,7 +373,7 @@ def _legacy_versions():
     return [is_container_uptodate(name)[1] for name in VERSION_ARGS]
 
 
-def _release_or_legacy(run_id, channel='stable'):
+def _release_or_legacy(run_id, channel=None):
     """Prefer the signed manifest; fall back to the old version endpoint.
 
     The fallback is only for a release that cannot be OBTAINED - the endpoint
@@ -364,6 +383,9 @@ def _release_or_legacy(run_id, channel='stable'):
     it must never be.
     """
     from release import fetch as fetch_mod
+
+    if channel is None:
+        channel = _device_channel()
 
     try:
         return run_release(run_id, _device_arch(), channel=channel)
@@ -404,7 +426,7 @@ def main(argv):
                 return 2
             return run_release(run_id, _device_arch(), counter=int(rest[1]))
         if mode == '--release':
-            channel = rest[1] if len(rest) > 1 else 'stable'
+            channel = rest[1] if len(rest) > 1 else None
             return _release_or_legacy(run_id, channel)
         return run(run_id, argv[1:])
     except Exception as exc:

@@ -101,7 +101,48 @@ wizard() {
             arch="$(choose 'Which architecture?' 'x86:x86' 'arm:arm')"
             source="$(choose 'Which component versions?' \
                 'file:release/components.json - what you have chosen to ship' \
+                'survey:Ask the registry what CI has published, and update that file first' \
                 'stable:the live latest_stable_version endpoint - what the fleet runs now')"
+
+            # The survey was its own verb, which meant you only ran it if you
+            # already knew it existed - so components.json went stale and
+            # releases pinned whatever was last edited by hand. Asking here is
+            # the same operation at the moment it is relevant.
+            if [ "$source" = survey ]; then
+                echo >&2
+                if "$0" candidates; then
+                    if git diff --quiet -- release/components.json; then
+                        echo >&2
+                        echo "  nothing to change - carrying on with the file as it stands" >&2
+                        source='file'
+                    else
+                        # Stop here, deliberately. The commit IS the decision to
+                        # ship these versions, and it is the only record of who
+                        # made it. Carrying on would also fail: the cut's own
+                        # preflight refuses a dirty tree, because the manifest
+                        # pins HEAD and a dirty tree means the pinned commit is
+                        # not what was tested.
+                        echo >&2
+                        echo "  release/components.json has changed. Review and commit it," >&2
+                        echo "  then run this again to cut:" >&2
+                        echo >&2
+                        echo "    git diff release/components.json" >&2
+                        echo "    git commit -am 'promote ...'" >&2
+                        echo "    ./release_cut.sh" >&2
+                        echo >&2
+                        exit 0
+                    fi
+                else
+                    echo >&2
+                    echo "  the survey failed - the registry may be unreachable, or" >&2
+                    echo "  'docker login' may have expired." >&2
+                    keep="$(ask 'Cut from release/components.json as it stands? (yes/no)' 'no')"
+                    case "$keep" in
+                        y|yes|Y|YES) source='file' ;;
+                        *) echo 'nothing was done' >&2; exit 1 ;;
+                    esac
+                fi
+            fi
             # Read the series we are on so the prompt can say what "blank"
             # means. "1.0" is the natural answer to a bare "number?", and it
             # used to sail past the wizard and fail in argparse at the very

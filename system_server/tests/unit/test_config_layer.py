@@ -131,6 +131,80 @@ class TestGenerateEnvironmentConfig:
 
         assert json.loads((home / 'fvconfig.json').read_text())['environ'] == 'cloud'
 
+    @pytest.mark.unit
+    def test_prod_is_the_default_track(self, home):
+        """settings.py calls this with no arguments on every import. A device
+        must never end up on beta because nobody passed a track."""
+        self._management()
+        config = json.loads((home / 'fvconfig.json').read_text())
+
+        assert config['release_track'] == 'prod'
+        assert config['release_channel'] == 'stable'
+        assert config['latest_stable_ref'] == 'latest_stable_version'
+
+    @pytest.mark.unit
+    def test_dev_points_at_clouddeploy_and_beta(self, home):
+        management = self._management()
+        (home / 'fvconfig.json').unlink()
+
+        management.generate_environment_config('cloud', release_track='dev')
+
+        config = json.loads((home / 'fvconfig.json').read_text())
+        assert config['cloud_domain'] == 'https://clouddeploy.api.flexiblevision.com'
+        assert config['latest_stable_ref'] == 'latest_stable_version_dev'
+        assert config['release_channel'] == 'beta'
+        assert config['release_track'] == 'dev'
+
+    @pytest.mark.unit
+    def test_dev_leaves_the_rest_of_the_profile_alone(self, home):
+        management = self._management()
+        (home / 'fvconfig.json').unlink()
+
+        management.generate_environment_config('cloud', release_track='dev')
+
+        config = json.loads((home / 'fvconfig.json').read_text())
+        assert config['auth0_domain'] == 'auth.flexiblevision.com'
+        assert config['environ'] == 'cloud'
+
+    @pytest.mark.unit
+    def test_an_unknown_track_is_refused_not_silently_prod(self, home):
+        """Silently falling back would put a device meant for testing onto the
+        fleet's channel with nothing in the install saying so."""
+        management = self._management()
+        (home / 'fvconfig.json').unlink()
+
+        with pytest.raises(ValueError):
+            management.generate_environment_config('cloud', release_track='beta')
+
+        assert not (home / 'fvconfig.json').exists()
+
+    @pytest.mark.unit
+    def test_a_dev_config_does_not_leak_into_the_next_prod_one(self, home):
+        """The profiles are module-level dicts. Mutating one in place made the
+        next install inherit whatever the previous one chose."""
+        management = self._management()
+        (home / 'fvconfig.json').unlink()
+        management.generate_environment_config('cloud', release_track='dev')
+        (home / 'fvconfig.json').unlink()
+
+        management.generate_environment_config('cloud', release_track='prod')
+
+        config = json.loads((home / 'fvconfig.json').read_text())
+        assert config['cloud_domain'] == 'https://v1.cloud.flexiblevision.com'
+        assert config['latest_stable_ref'] == 'latest_stable_version'
+        assert config['release_channel'] == 'stable'
+
+    @pytest.mark.unit
+    def test_the_local_profile_takes_a_track_too(self, home):
+        management = self._management()
+        (home / 'fvconfig.json').unlink()
+
+        management.generate_environment_config('local', release_track='dev')
+
+        config = json.loads((home / 'fvconfig.json').read_text())
+        assert config['environ'] == 'local'
+        assert config['release_channel'] == 'beta'
+
 
 class TestManagementUpdateConfig:
     @pytest.mark.unit
