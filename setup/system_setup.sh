@@ -148,19 +148,40 @@ if [ "$SYSTEM_ARCH" = "arm" ]; then
         log "WARNING: nvidia-container install failed - GPU containers may not start"
 fi
 
+# GPU support, never fatal - same rule as the arm branch above. The containers
+# are what serve the line, and a device that runs on CPU is worth more than one
+# that failed to install.
+#
+# install_dependencies.sh holds every nvidia package, which is right for the
+# driver stack and also catches the container toolkit. Installing over a held
+# toolkit asks apt for a version whose siblings it may not move, which fails as
+# "held broken packages" and used to abort the whole install.
+setup_nvidia_x86() {
+    if dpkg -s nvidia-container-toolkit >/dev/null 2>&1; then
+        log "nvidia-container-toolkit $(dpkg-query -W -f='${Version}' nvidia-container-toolkit 2>/dev/null) already installed - leaving it alone"
+    else
+        curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey \
+            | gpg --dearmor --yes -o /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg \
+            || { log "WARNING: could not fetch the nvidia keyring"; return 1; }
+
+        curl -s -L https://nvidia.github.io/libnvidia-container/stable/deb/nvidia-container-toolkit.list \
+            | sed 's#deb https://#deb [signed-by=/usr/share/keyrings/nvidia-container-toolkit-keyring.gpg] https://#g' \
+            | tee /etc/apt/sources.list.d/nvidia-container-toolkit.list >/dev/null \
+            || { log "WARNING: could not write the nvidia apt source"; return 1; }
+
+        apt-get update || log "WARNING: apt-get update failed"
+        apt-get install -y nvidia-container-toolkit \
+            || { log "WARNING: nvidia-container-toolkit install failed - GPU containers will run on CPU"; return 1; }
+    fi
+
+    nvidia-ctk runtime configure --runtime=docker \
+        || { log "WARNING: nvidia-ctk could not configure the docker runtime"; return 1; }
+    systemctl restart docker \
+        || { log "WARNING: docker did not restart after the runtime change"; return 1; }
+}
+
 if [ "$SYSTEM_ARCH" = "x86" ]; then
-    curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey | \
-        gpg --dearmor -o /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg
-
-    curl -s -L https://nvidia.github.io/libnvidia-container/stable/deb/nvidia-container-toolkit.list | \
-        sed 's#deb https://#deb [signed-by=/usr/share/keyrings/nvidia-container-toolkit-keyring.gpg] https://#g' | \
-        tee /etc/apt/sources.list.d/nvidia-container-toolkit.list
-
-    apt-get update
-    apt-get install -y nvidia-container-toolkit
-
-    nvidia-ctk runtime configure --runtime=docker
-    systemctl restart docker
+    setup_nvidia_x86 || log "WARNING: GPU runtime not configured - continuing without it"
 fi
 
 # --- pull everything before starting anything -------------------------------
@@ -239,8 +260,15 @@ start captureui -p "$CAPTUREUI_PORTS" --restart unless-stopped \
     "$IMAGE_CAPTUREUI"
 
 # Mirrors base_path() in system_server/worker_scripts/retrieve_models.py.
-MODELS_DIR="$([ -d /xavier_ssd ] && echo /xavier_ssd/models || echo /models)"
-mkdir -p "$MODELS_DIR"
+# FLEXRUN_MODELS_ROOT prefixes both model directories. Empty on a device, where
+# these are absolute paths the containers bind-mount; a test sets it so the
+# script does not write to the real filesystem.
+MODELS_ROOT="${FLEXRUN_MODELS_ROOT:-}"
+MODELS_DIR="$MODELS_ROOT$([ -d /xavier_ssd ] && echo /xavier_ssd/models || echo /models)"
+if ! mkdir -p "$MODELS_DIR"; then
+    fail "could not create $MODELS_DIR - localprediction has nowhere to keep models"
+    exit 21
+fi
 
 start localprediction -p 8500:8500 -p 8501:8501 --gpus device=0 \
     --name localprediction -d \
@@ -252,8 +280,11 @@ start localprediction -p 8500:8500 -p 8501:8501 --gpus device=0 \
     -t "$IMAGE_PREDICTION"
 
 # Mirrors base_path() in system_server/worker_scripts/retrieve_models.py.
-LITE_MODELS_DIR="$([ -d /xavier_ssd ] && echo /xavier_ssd/lite_models || echo /lite_models)"
-mkdir -p "$LITE_MODELS_DIR"
+LITE_MODELS_DIR="$MODELS_ROOT$([ -d /xavier_ssd ] && echo /xavier_ssd/lite_models || echo /lite_models)"
+if ! mkdir -p "$LITE_MODELS_DIR"; then
+    fail "could not create $LITE_MODELS_DIR - predictlite has nowhere to keep models"
+    exit 21
+fi
 
 start predictlite -p 8511:8511 --name predictlite -d \
     --restart unless-stopped --network imagerie_nw \

@@ -293,7 +293,7 @@ SETUP_ARGS = '1.9.2 1.9.2 1.9.2 x86 1.9.2 1.9.2 1.9.2 1.9.2'
 
 
 @pytest.fixture
-def setup_env(sh, tmp_path):
+def setup_env(sh, tmp_path, tmp_path_factory):
     """Runs the real script and the real library, with a stubbed mqtt step.
 
     The script is copied into a controlled tree because it resolves both the
@@ -389,18 +389,56 @@ def setup_env(sh, tmp_path):
         exit 0
         """ % state)
 
-    for name in ('apt-get', 'gpg', 'tee', 'nvidia-ctk', 'wget'):
+    for name in ('gpg', 'tee', 'wget'):
         _write_stub(sh.stubs, name, 'exit 0\n')
+
+    # dpkg and systemctl are real commands with real consequences - without
+    # these stubs the GPU step restarts the host's docker daemon during a test.
+    _write_stub(sh.stubs, 'apt-get', """
+        STATE=%s
+        echo "apt-get $*" >> "$STATE/apt_calls"
+        for a in "$@"; do
+            grep -qxF "$a" "$STATE/apt_fail" 2>/dev/null && exit 100
+        done
+        exit 0
+        """ % state)
+    _write_stub(sh.stubs, 'dpkg', """
+        STATE=%s
+        echo "dpkg $*" >> "$STATE/apt_calls"
+        case "$*" in
+          *-s*nvidia-container-toolkit*)
+            test -f "$STATE/toolkit_installed" ;;
+          *) exit 0 ;;
+        esac
+        """ % state)
+    _write_stub(sh.stubs, 'dpkg-query', 'echo 1.13.5-1\n')
+    _write_stub(sh.stubs, 'nvidia-ctk', """
+        STATE=%s
+        echo "nvidia-ctk $*" >> "$STATE/apt_calls"
+        test ! -f "$STATE/nvidia_ctk_fail"
+        """ % state)
+    _write_stub(sh.stubs, 'systemctl', """
+        STATE=%s
+        echo "systemctl $*" >> "$STATE/apt_calls"
+        exit 0
+        """ % state)
     # tar must actually produce the tree, or the arm node step is not exercised.
     _write_stub(sh.stubs, 'tar', 'mkdir -p node-v10.16.1-linux-arm64/bin\nexit 0\n')
     # Real sleeps would add ~60s: smoke_settled waits per container.
     _write_stub(sh.stubs, 'sleep', 'exit 0\n')
 
     trust_dir = tmp_path / 'trust'
+    models_root = tmp_path_factory.mktemp('models')
 
     def run(args=SETUP_ARGS, **kwargs):
         env = dict(kwargs.pop('env', None) or {})
         env.setdefault('FLEXRUN_TRUST_DIR', str(trust_dir))
+        # Without this the script does mkdir -p /models on the host running
+        # the tests, which is a no-op on a dev box that has one and a
+        # permission error anywhere else. Deliberately NOT under tmp_path:
+        # that embeds the test's own name, and a test named for a component
+        # then finds it in the -v mount path of every docker run line.
+        env.setdefault('FLEXRUN_MODELS_ROOT', str(models_root))
         return sh('sh %s %s' % (tree / 'setup' / 'system_setup.sh', args),
                   env=env, **kwargs)
 
@@ -562,6 +600,114 @@ class TestSystemSetupArchCoverage:
         setup_env('1.9.2 1.9.2 1.9.2 arm 1.9.2 1.9.2 1.9.2 1.9.2')
         assert not any('visiontools' in l for l in setup_env.calls()
                        if l.startswith('docker inspect'))
+
+
+class TestSystemSetupWritesNothingOutsideItsRoot:
+    """The script creates the model directories the containers bind-mount.
+    Hardcoded, that is `mkdir -p /models` on whatever host runs the tests - a
+    silent no-op on a dev box that already has one, and a permission error in
+    CI."""
+
+    def test_the_models_root_is_honoured(self, setup_env, tmp_path):
+        root = tmp_path / 'elsewhere'
+        setup_env(env={'FLEXRUN_MODELS_ROOT': str(root)})
+
+        assert (root / 'models').is_dir()
+        assert (root / 'lite_models').is_dir()
+
+    def test_the_real_paths_are_never_touched(self, setup_env, tmp_path):
+        root = tmp_path / 'elsewhere'
+        setup_env(env={'FLEXRUN_MODELS_ROOT': str(root)})
+
+        mounts = [l for l in setup_env.calls() if l.startswith('docker run')]
+        assert mounts
+        for line in mounts:
+            assert ' /models:' not in line
+            assert ' /lite_models:' not in line
+
+    def test_an_uncreatable_models_dir_is_named_not_a_bare_mkdir_error(
+            self, setup_env, tmp_path):
+        blocked = tmp_path / 'blocked'
+        blocked.mkdir()
+        blocked.chmod(0o500)
+        try:
+            result = setup_env(env={'FLEXRUN_MODELS_ROOT': str(blocked / 'x')})
+        finally:
+            blocked.chmod(0o700)
+
+        assert result.returncode == 21, result.stdout + result.stderr
+        assert 'nowhere to keep models' in result.stdout + result.stderr
+
+    def test_an_empty_root_still_means_the_absolute_paths(self, setup_env):
+        """Production behaviour: the containers bind-mount /models, so an unset
+        variable must not change where a device puts them."""
+        source = open(os.path.join(REPO, 'setup', 'system_setup.sh')).read()
+
+        assert 'MODELS_ROOT="${FLEXRUN_MODELS_ROOT:-}"' in source
+        assert 'echo /models' in source
+
+
+class TestSystemSetupGpuIsNeverFatal:
+    """A device that runs on CPU is worth more than one that failed to install.
+    The arm branch already said so; the x86 branch aborted the whole install
+    because it ran under set -e."""
+
+    def _apt(self, setup_env):
+        path = os.path.join(str(setup_env.state), 'apt_calls')
+        if not os.path.exists(path):
+            return []
+        return [l for l in open(path).read().splitlines() if l]
+
+    def test_a_held_toolkit_does_not_abort_the_install(self, setup_env):
+        """The real failure: install_dependencies.sh holds every nvidia
+        package, so apt refuses the toolkit with "held broken packages" and
+        exits 100."""
+        open(os.path.join(str(setup_env.state), 'apt_fail'), 'w').write(
+            'nvidia-container-toolkit\n')
+
+        result = setup_env()
+
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert 'WARNING' in result.stdout
+
+    def test_the_containers_are_still_installed_without_the_gpu(self, setup_env):
+        open(os.path.join(str(setup_env.state), 'apt_fail'), 'w').write(
+            'nvidia-container-toolkit\n')
+
+        setup_env()
+
+        started = [l for l in setup_env.calls() if l.startswith('docker run')]
+        assert len(started) == 8
+
+    def test_an_installed_toolkit_is_left_alone(self, setup_env):
+        """It is held at a version that works. Installing over it asks apt for
+        a version whose siblings it may not move."""
+        open(os.path.join(str(setup_env.state), 'toolkit_installed'), 'w').close()
+
+        result = setup_env()
+
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert not any('install' in l and 'nvidia-container-toolkit' in l
+                       for l in self._apt(setup_env))
+        assert 'already installed' in result.stdout
+
+    def test_a_missing_toolkit_is_installed(self, setup_env):
+        setup_env()
+
+        assert any('nvidia-container-toolkit' in l and 'install' in l
+                   for l in self._apt(setup_env))
+
+    def test_a_failed_runtime_configure_does_not_abort(self, setup_env):
+        open(os.path.join(str(setup_env.state), 'nvidia_ctk_fail'), 'w').close()
+
+        result = setup_env()
+
+        assert result.returncode == 0, result.stdout + result.stderr
+
+    def test_arm_never_touches_the_x86_gpu_path(self, setup_env):
+        setup_env('1.9.2 1.9.2 1.9.2 arm 1.9.2 1.9.2 1.9.2 1.9.2')
+
+        assert not any('nvidia-ctk' in l for l in self._apt(setup_env))
 
 
 class TestSystemSetupFailures:
