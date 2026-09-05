@@ -102,7 +102,35 @@ wizard() {
             source="$(choose 'Which component versions?' \
                 'file:release/components.json - what you have chosen to ship' \
                 'stable:the live latest_stable_version endpoint - what the fleet runs now')"
-            major="$(ask 'Start a new major series? (number, or blank to continue)' '')"
+            # Read the series we are on so the prompt can say what "blank"
+            # means. "1.0" is the natural answer to a bare "number?", and it
+            # used to sail past the wizard and fail in argparse at the very
+            # end - after every other question had been answered.
+            cur_major="$(python3 -c "
+from release.build_release import parse_version_file
+try:
+    print(parse_version_file(open('release/VERSION').read())[0])
+except Exception:
+    print('')" 2>/dev/null || echo '')"
+
+            while :; do
+                if [ -n "$cur_major" ]; then
+                    major="$(ask "Start a new major series? Whole number only, e.g. $((cur_major + 1)). Blank stays on ${cur_major}.x" '')"
+                else
+                    major="$(ask 'Start a new major series? Whole number only, e.g. 2. Blank to continue' '')"
+                fi
+                [ -z "$major" ] && break
+                case "$major" in
+                    *[!0-9]*)
+                        echo "  '$major' is not a whole number - the major only, not a version like 1.0" >&2
+                        continue ;;
+                esac
+                if [ -n "$cur_major" ] && [ "$major" -le "$cur_major" ]; then
+                    echo "  already on series $cur_major - a major jump goes forwards" >&2
+                    continue
+                fi
+                break
+            done
             after="$(choose 'Promote it after signing?' \
                 'none:No - sign only, decide later' \
                 'beta:Yes, to beta - try it on one device first' \
