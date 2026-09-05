@@ -191,11 +191,18 @@ SETUP_ERRORS = {
 }
 
 
+COMPONENTS = ('backend', 'frontend', 'prediction', 'predictlite', 'vision',
+              'nodecreator', 'visiontools')
+
+# What is_container_uptodate returns when it decides nothing needs pulling.
+UPTODATE_SENTINEL = 'True'
+
+
 def step_2():
     print("\033[0;36mStep (2/3) Pulling latest software & creating enviornment.")
     clear_text_color()
     time.sleep(2)
-    from system_server.version_check import is_container_uptodate
+    from system_server.version_check import CONTAINERS, is_container_uptodate
     backend_version = is_container_uptodate('backend')[1]
     frontend_version = is_container_uptodate('frontend')[1]
     prediction_version = is_container_uptodate('prediction')[1]
@@ -212,13 +219,28 @@ def step_2():
     # does not exist. The shell scripts quote their arguments so an empty one no
     # longer shifts the arch out of position, but it still cannot be pulled -
     # so say which component could not be resolved instead.
-    missing = [name for name, value in zip(
-        ('backend', 'frontend', 'prediction', 'predictlite', 'vision',
-         'nodecreator', 'visiontools'), versions) if not value]
+    missing = [name for name, value in zip(COMPONENTS, versions) if not value]
     if missing:
         print("\033[0;31mCould not work out a version for: {}".format(
             ', '.join(missing)))
         print("The version service may be unreachable. Nothing was installed.")
+        clear_text_color()
+        return 22
+
+    # is_container_uptodate returns the string 'True' both for "already current"
+    # and for "the endpoint did not answer" - and on a container that does not
+    # exist yet, only the second can be true. Left alone it becomes
+    # `docker pull fvonprem/x86-backend:True`.
+    unresolved = [name for name, value in zip(COMPONENTS, versions)
+                  if value == UPTODATE_SENTINEL
+                  and container_state(CONTAINERS[name]) is None]
+    if unresolved:
+        print("\033[0;31mThe version service says these need nothing, but they "
+              "are not installed:")
+        print("\033[0;31m  {}".format(', '.join(unresolved)))
+        print("That means it could not be reached, or it serves no version for")
+        print("this device's release track. Check latest_stable_ref in "
+              "~/fvconfig.json.")
         clear_text_color()
         return 22
 

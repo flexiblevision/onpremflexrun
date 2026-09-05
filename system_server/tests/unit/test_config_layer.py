@@ -151,7 +151,7 @@ class TestGenerateEnvironmentConfig:
 
         config = json.loads((home / 'fvconfig.json').read_text())
         assert config['cloud_domain'] == 'https://clouddeploy.api.flexiblevision.com'
-        assert config['latest_stable_ref'] == 'latest_stable_version_dev'
+        assert config['latest_stable_ref'] == 'latest_stable_version_check_dev'
         assert config['release_channel'] == 'beta'
         assert config['release_track'] == 'dev'
 

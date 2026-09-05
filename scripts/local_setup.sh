@@ -21,7 +21,14 @@ case "$ARCH" in
         ;;
 esac
 
+# system_setup.sh's exit code was discarded here, so this script always
+# reported whatever system_server.sh returned - a failed install looked clean.
 sh ./setup/system_setup.sh "$1" "$2" "$3" "$SYSTEM_ARCH" "$4" "$5" "$6" "$7"
+SETUP_CODE=$?
+if [ "$SETUP_CODE" -ne 0 ]; then
+    echo "[local_setup] system_setup.sh failed (exit $SETUP_CODE) - not starting servers" >&2
+    exit "$SETUP_CODE"
+fi
 
 chmod +x ./system_server/system_server.sh
 sh ./system_server/system_server.sh

@@ -501,9 +501,12 @@ class TestStep2:
     @pytest.mark.unit
     def test_an_uptodate_container_passes_the_true_sentinel(self):
         # is_container_uptodate returns 'True' rather than a tag when nothing
-        # needs pulling; the shell script reads that as "leave it alone".
+        # needs pulling; the shell script reads that as "leave it alone". Only
+        # meaningful for a container that exists - see
+        # TestUnresolvedVersionsAreRefused for the case where it does not.
         with patch('time.sleep', new=thread_aware_sleep_mock()), \
              patch('system_server.version_check.is_container_uptodate', return_value=(True, 'True')), \
+             patch.object(deploy, 'container_state', return_value=True), \
              patch('subprocess.call') as call_script:
             deploy.step_2()
 
@@ -855,3 +858,61 @@ class TestDepsRunBeforeStepTwo:
             deploy.main()
 
         deps.assert_not_called()
+
+
+class TestUnresolvedVersionsAreRefused:
+    """is_container_uptodate returns 'True' both for "already current" and for
+    "the endpoint did not answer". On a container that does not exist, only the
+    second can be true - and passing it on becomes `docker pull ...:True`."""
+
+    def _run(self, versions, existing):
+        state = lambda name: True if name in existing else None
+        with patch('time.sleep', new=thread_aware_sleep_mock()), \
+             patch('system_server.version_check.is_container_uptodate',
+                   side_effect=[(True, v) for v in versions]), \
+             patch.object(deploy, 'container_state', side_effect=state), \
+             patch('subprocess.call', return_value=0) as call_script:
+            return deploy.step_2(), call_script
+
+    @pytest.mark.unit
+    def test_the_sentinel_on_a_missing_container_is_refused(self):
+        code, call_script = self._run(['True'] * 7, existing=())
+
+        assert code == 22
+        call_script.assert_not_called()
+
+    @pytest.mark.unit
+    def test_it_names_the_components(self, capsys):
+        self._run(['1.97', 'True', '1.2', '0.1', '1.1', '0.5', '0.43'],
+                  existing=())
+
+        out = capsys.readouterr().out
+        assert 'frontend' in out
+        assert 'backend' not in out.split('are not installed:')[-1]
+
+    @pytest.mark.unit
+    def test_it_points_at_the_release_track(self, capsys):
+        """The endpoint 404s when latest_stable_ref names a function that is
+        not deployed - which is what a dev-track device hits."""
+        self._run(['True'] * 7, existing=())
+
+        assert 'latest_stable_ref' in capsys.readouterr().out
+
+    @pytest.mark.unit
+    def test_the_sentinel_is_fine_when_the_container_exists(self):
+        """Re-running setup on a working device: 'True' really does mean
+        nothing to do, and must not be treated as a failure."""
+        containers = ('capdev', 'captureui', 'localprediction', 'predictlite',
+                      'vision', 'nodecreator', 'visiontools')
+        code, call_script = self._run(['True'] * 7, existing=containers)
+
+        assert code == 0
+        call_script.assert_called_once()
+
+    @pytest.mark.unit
+    def test_real_versions_are_passed_through(self):
+        versions = ['1.97', '1.9.4', '0.51', '0.1', '1.2', '0.5', '0.43']
+        code, call_script = self._run(versions, existing=())
+
+        assert code == 0
+        assert call_script.call_args[0][0][2:] == versions

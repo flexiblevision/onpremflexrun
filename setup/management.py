@@ -51,7 +51,7 @@ RELEASE_TRACKS = {
     },
     'dev': {
         'cloud_domain': 'https://clouddeploy.api.flexiblevision.com',
-        'latest_stable_ref': 'latest_stable_version_dev',
+        'latest_stable_ref': 'latest_stable_version_check_dev',
         'release_channel': 'beta',
     },
 }
