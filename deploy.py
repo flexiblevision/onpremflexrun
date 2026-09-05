@@ -194,38 +194,126 @@ SETUP_ERRORS = {
 COMPONENTS = ('backend', 'frontend', 'prediction', 'predictlite', 'vision',
               'nodecreator', 'visiontools')
 
+PLAN_PATH = os.environ.get('FLEXRUN_PLAN', '/var/lib/flex-run/plan')
+
+ARCHES = {'x86_64': 'x86', 'aarch64': 'arm'}
+
+
+def device_arch():
+    return ARCHES.get(platform.machine(), platform.machine())
+
+
+def device_channel():
+    """The release channel this install follows, from the config step_1 wrote."""
+    try:
+        with open(os.path.join(os.environ['HOME'], 'fvconfig.json')) as handle:
+            channel = json.load(handle).get('release_channel')
+    except (OSError, ValueError, KeyError):
+        return 'stable'
+    return channel if channel in ('stable', 'beta') else 'stable'
+
+
+def release_plan(arch=None, channel=None, plan_path=None, now=None):
+    """Fetch and verify the release this device's channel names.
+
+    Returns a plan dict, or None when there is nothing to install from - an
+    unreachable endpoint or an empty channel, both of which are ordinary states
+    that fall back to the version endpoint.
+
+    A signature that does not verify is NOT one of those: it raises. Falling
+    back there would install the same software unverified, which makes the
+    signature advisory - the one thing it must never be.
+    """
+    import datetime
+
+    from release import apply as apply_mod
+    from release import fetch as fetch_mod
+    from release import trust as trust_mod
+    from release import verify as verify_mod
+
+    arch = arch or device_arch()
+    channel = channel or device_channel()
+    plan_path = plan_path or PLAN_PATH
+    now = now or datetime.datetime.utcnow()
+    trust_dir = os.environ.get('FLEXRUN_TRUST_DIR', trust_mod.DEFAULT_TRUST_DIR)
+
+    try:
+        raw, signature, _envelope = fetch_mod.fetch_release(arch, channel=channel)
+    except fetch_mod.FetchError as exc:
+        print("\033[0;33mNo signed release on '{}' ({}).".format(channel, exc))
+        print("Falling back to the version endpoint.")
+        clear_text_color()
+        return None
+
+    directory = os.path.dirname(os.path.abspath(plan_path)) or '.'
+    manifest_file = os.path.join(directory, 'manifest.json')
+    signature_file = os.path.join(directory, 'manifest.sig')
+    try:
+        if not os.path.isdir(directory):
+            os.makedirs(directory)
+        with open(manifest_file, 'wb') as handle:
+            handle.write(raw)
+        with open(signature_file, 'w') as handle:
+            handle.write(signature)
+    except OSError as exc:
+        print("\033[0;33mCannot write {} ({}).".format(directory, exc))
+        print("Falling back to the version endpoint - this install will pull by")
+        print("tag rather than by digest.")
+        clear_text_color()
+        return None
+
+    # high_water 0: this device has accepted nothing, so no counter is a
+    # rollback. What it installs is recorded afterwards, and every later
+    # upgrade is then an ordinary monotonic comparison.
+    parsed = verify_mod.verify(
+        raw, arch, 0, now,
+        manifest_path=manifest_file, signature_path=signature_file,
+        public_key_path=trust_dir)
+
+    plan = apply_mod.plan(parsed, arch, current={}, plan_path=plan_path)
+    plan['manifest'] = parsed
+    return plan
+
+
+def record_installed_release(parsed_counter_source):
+    """Write the installed release into the device state, after the containers
+    are up - so an install that failed part way does not claim a release."""
+    try:
+        from release import state as state_mod
+        from pymongo import MongoClient
+        client = MongoClient(os.environ.get('MONGO_SERVER', '172.17.0.1'),
+                             int(os.environ.get('MONGO_PORT', 27017)),
+                             serverSelectionTimeoutMS=5000)
+        state_mod.record_applied(client['fvonprem']['utils'],
+                                 parsed_counter_source)
+        return True
+    except Exception as exc:
+        print("\033[0;33mInstalled, but could not record the release: {}".format(exc))
+        print("The next upgrade will treat this device as having no release yet.")
+        clear_text_color()
+        return False
+
 # What is_container_uptodate returns when it decides nothing needs pulling.
 UPTODATE_SENTINEL = 'True'
 
 
-def step_2():
-    print("\033[0;36mStep (2/3) Pulling latest software & creating enviornment.")
-    clear_text_color()
-    time.sleep(2)
+def legacy_versions():
+    """Versions from latest_stable_ref - the fallback when no release applies.
+
+    Returns (versions, error_code). A non-zero code means nothing is safe to
+    install and the caller must stop.
+    """
     from system_server.version_check import CONTAINERS, is_container_uptodate
-    backend_version = is_container_uptodate('backend')[1]
-    frontend_version = is_container_uptodate('frontend')[1]
-    prediction_version = is_container_uptodate('prediction')[1]
-    predictlite_version = is_container_uptodate('predictlite')[1]
-    vision_version = is_container_uptodate('vision')[1]
-    creator_version = is_container_uptodate('nodecreator')[1]
-    visiontools_version = is_container_uptodate('visiontools')[1]
 
-    versions = [backend_version, frontend_version, prediction_version,
-                predictlite_version, vision_version, creator_version,
-                visiontools_version]
+    versions = [is_container_uptodate(name)[1] for name in COMPONENTS]
 
-    # An empty version becomes "fvonprem/x86-backend:", which pulls a tag that
-    # does not exist. The shell scripts quote their arguments so an empty one no
-    # longer shifts the arch out of position, but it still cannot be pulled -
-    # so say which component could not be resolved instead.
     missing = [name for name, value in zip(COMPONENTS, versions) if not value]
     if missing:
         print("\033[0;31mCould not work out a version for: {}".format(
             ', '.join(missing)))
         print("The version service may be unreachable. Nothing was installed.")
         clear_text_color()
-        return 22
+        return versions, 22
 
     # is_container_uptodate returns the string 'True' both for "already current"
     # and for "the endpoint did not answer" - and on a container that does not
@@ -242,16 +330,41 @@ def step_2():
         print("this device's release track. Check latest_stable_ref in "
               "~/fvconfig.json.")
         clear_text_color()
-        return 22
+        return versions, 22
 
-    # The exit code was discarded here, so a failed install fell through to
-    # step 3 and was reported - at best - as "containers are not running".
+    return versions, 0
+
+
+def step_2():
+    print("\033[0;36mStep (2/3) Pulling latest software & creating enviornment.")
+    clear_text_color()
+    time.sleep(2)
+
+    plan = release_plan()
+    if plan is not None:
+        print("\033[0;32mInstalling release {} (counter {}) from the {} "
+              "channel.".format(plan['release'], plan['counter'],
+                                device_channel()))
+        clear_text_color()
+        os.environ['FLEXRUN_PLAN'] = plan['plan_path']
+        versions = plan['versions']
+    else:
+        plan = None
+        versions, code = legacy_versions()
+        if code != 0:
+            return code
+
     code = subprocess.call(["sh", "./scripts/local_setup.sh"] + versions)
     if code != 0:
         print("\033[0;31mSetup failed: {}".format(
             SETUP_ERRORS.get(code, 'local_setup.sh exited {}'.format(code))))
         clear_text_color()
+        return code
+
+    if plan is not None and not not_running():
+        record_installed_release(plan['manifest'])
     return code
+
 
 def step_3():
     broken = not_running()

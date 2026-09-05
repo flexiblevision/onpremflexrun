@@ -164,16 +164,24 @@ if [ "$SYSTEM_ARCH" = "x86" ]; then
 fi
 
 # --- pull everything before starting anything -------------------------------
+# plan_ref returns the digest a signed release pinned, or the tag argument when
+# there is no plan. A first install used to pull by tag unconditionally, so a
+# device commissioned from a signed release still fetched whatever the tag
+# pointed at - the exact substitution digest pinning exists to stop.
+if [ -n "${FLEXRUN_PLAN:-}" ] && [ -r "${FLEXRUN_PLAN:-}" ]; then
+    log "installing from the release plan at $FLEXRUN_PLAN"
+fi
+
 IMAGE_MONGO="mongo:$MONGO_VERSION"
-IMAGE_CAPDEV="fvonprem/$SYSTEM_ARCH-backend:$CAPDEV_VERSION"
-IMAGE_CAPTUREUI="fvonprem/$SYSTEM_ARCH-frontend:$CAPTUREUI_VERSION"
-IMAGE_PREDICTION="fvonprem/$SYSTEM_ARCH-prediction:$PREDICTION_VERSION"
-IMAGE_PREDICTLITE="fvonprem/$SYSTEM_ARCH-predictlite:$PREDICT_LITE_VERSION"
-IMAGE_VISION="fvonprem/$SYSTEM_ARCH-vision:$VISION_VERSION"
-IMAGE_NODECREATOR="fvonprem/$SYSTEM_ARCH-nodecreator:$CREATOR_VERSION"
+IMAGE_CAPDEV="$(plan_ref backend "fvonprem/$SYSTEM_ARCH-backend:$CAPDEV_VERSION")"
+IMAGE_CAPTUREUI="$(plan_ref frontend "fvonprem/$SYSTEM_ARCH-frontend:$CAPTUREUI_VERSION")"
+IMAGE_PREDICTION="$(plan_ref prediction "fvonprem/$SYSTEM_ARCH-prediction:$PREDICTION_VERSION")"
+IMAGE_PREDICTLITE="$(plan_ref predictlite "fvonprem/$SYSTEM_ARCH-predictlite:$PREDICT_LITE_VERSION")"
+IMAGE_VISION="$(plan_ref vision "fvonprem/$SYSTEM_ARCH-vision:$VISION_VERSION")"
+IMAGE_NODECREATOR="$(plan_ref nodecreator "fvonprem/$SYSTEM_ARCH-nodecreator:$CREATOR_VERSION")"
 IMAGE_VISIONTOOLS=''
 if [ -n "$VISIONTOOLS_ENABLED" ]; then
-    IMAGE_VISIONTOOLS="fvonprem/$SYSTEM_ARCH-visiontools:$VISIONTOOLS_VERSION"
+    IMAGE_VISIONTOOLS="$(plan_ref visiontools "fvonprem/$SYSTEM_ARCH-visiontools:$VISIONTOOLS_VERSION")"
 fi
 
 _failed_pulls=''

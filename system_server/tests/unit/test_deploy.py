@@ -478,6 +478,7 @@ class TestStep2:
     @pytest.mark.unit
     def test_passes_every_resolved_version_to_the_setup_script(self):
         with patch('time.sleep', new=thread_aware_sleep_mock()), \
+             patch.object(deploy, 'release_plan', return_value=None), \
              patch('system_server.version_check.is_container_uptodate', return_value=(False, '1.2.3')), \
              patch('subprocess.call') as call_script:
             deploy.step_2()
@@ -490,6 +491,7 @@ class TestStep2:
     @pytest.mark.unit
     def test_resolves_each_container_by_name(self):
         with patch('time.sleep', new=thread_aware_sleep_mock()), \
+             patch.object(deploy, 'release_plan', return_value=None), \
              patch('system_server.version_check.is_container_uptodate', return_value=(False, '1.0')) as uptodate, \
              patch('subprocess.call'):
             deploy.step_2()
@@ -505,6 +507,7 @@ class TestStep2:
         # meaningful for a container that exists - see
         # TestUnresolvedVersionsAreRefused for the case where it does not.
         with patch('time.sleep', new=thread_aware_sleep_mock()), \
+             patch.object(deploy, 'release_plan', return_value=None), \
              patch('system_server.version_check.is_container_uptodate', return_value=(True, 'True')), \
              patch.object(deploy, 'container_state', return_value=True), \
              patch('subprocess.call') as call_script:
@@ -868,6 +871,7 @@ class TestUnresolvedVersionsAreRefused:
     def _run(self, versions, existing):
         state = lambda name: True if name in existing else None
         with patch('time.sleep', new=thread_aware_sleep_mock()), \
+             patch.object(deploy, 'release_plan', return_value=None), \
              patch('system_server.version_check.is_container_uptodate',
                    side_effect=[(True, v) for v in versions]), \
              patch.object(deploy, 'container_state', side_effect=state), \
@@ -916,3 +920,212 @@ class TestUnresolvedVersionsAreRefused:
 
         assert code == 0
         assert call_script.call_args[0][0][2:] == versions
+
+
+class TestDeviceArchAndChannel:
+    @pytest.mark.unit
+    def test_arch_is_mapped_to_the_names_releases_use(self):
+        with patch.object(deploy.platform, 'machine', return_value='x86_64'):
+            assert deploy.device_arch() == 'x86'
+        with patch.object(deploy.platform, 'machine', return_value='aarch64'):
+            assert deploy.device_arch() == 'arm'
+
+    @pytest.mark.unit
+    def test_the_channel_comes_from_the_config_step_1_wrote(self, tmp_path,
+                                                            monkeypatch):
+        monkeypatch.setenv('HOME', str(tmp_path))
+        (tmp_path / 'fvconfig.json').write_text('{"release_channel": "beta"}')
+
+        assert deploy.device_channel() == 'beta'
+
+    @pytest.mark.unit
+    def test_a_config_without_a_channel_is_stable(self, tmp_path, monkeypatch):
+        monkeypatch.setenv('HOME', str(tmp_path))
+        (tmp_path / 'fvconfig.json').write_text('{}')
+
+        assert deploy.device_channel() == 'stable'
+
+    @pytest.mark.unit
+    def test_an_unreadable_config_is_stable_not_a_crash(self, tmp_path,
+                                                        monkeypatch):
+        monkeypatch.setenv('HOME', str(tmp_path))
+
+        assert deploy.device_channel() == 'stable'
+
+    @pytest.mark.unit
+    def test_a_nonsense_channel_is_stable(self, tmp_path, monkeypatch):
+        monkeypatch.setenv('HOME', str(tmp_path))
+        (tmp_path / 'fvconfig.json').write_text('{"release_channel": "nightly"}')
+
+        assert deploy.device_channel() == 'stable'
+
+
+class TestReleasePlanOnAFreshDevice:
+    """First install used to read latest_stable_ref and pull by tag, so a
+    device commissioned from a signed release still fetched whatever the tag
+    pointed at, and had no release counter until its first upgrade."""
+
+    def _modules(self):
+        from release import apply as apply_mod
+        from release import fetch as fetch_mod
+        from release import verify as verify_mod
+        return apply_mod, fetch_mod, verify_mod
+
+    @pytest.mark.unit
+    def test_an_empty_channel_falls_back(self, tmp_path):
+        _apply, fetch_mod, _verify = self._modules()
+        with patch.object(fetch_mod, 'fetch_release',
+                          side_effect=fetch_mod.FetchError('no release published')):
+            assert deploy.release_plan('x86', 'beta',
+                                       str(tmp_path / 'plan')) is None
+
+    @pytest.mark.unit
+    def test_an_unreachable_endpoint_falls_back(self, tmp_path):
+        _apply, fetch_mod, _verify = self._modules()
+        with patch.object(fetch_mod, 'fetch_release',
+                          side_effect=fetch_mod.FetchError('connection refused')):
+            assert deploy.release_plan('x86', 'stable',
+                                       str(tmp_path / 'plan')) is None
+
+    @pytest.mark.unit
+    def test_a_bad_signature_does_NOT_fall_back(self, tmp_path):
+        """The critical one. Falling back here installs the same software
+        unverified, which makes the signature advisory."""
+        _apply, fetch_mod, verify_mod = self._modules()
+        with patch.object(fetch_mod, 'fetch_release',
+                          return_value=(b'{}', 'SIG', {})), \
+             patch.object(verify_mod, 'verify',
+                          side_effect=verify_mod.VerificationError('bad signature')):
+            with pytest.raises(verify_mod.VerificationError):
+                deploy.release_plan('x86', 'stable', str(tmp_path / 'plan'))
+
+    @pytest.mark.unit
+    def test_a_fresh_device_verifies_against_a_zero_high_water(self, tmp_path):
+        """It has accepted nothing, so no counter can be a rollback."""
+        apply_mod, fetch_mod, verify_mod = self._modules()
+        with patch.object(fetch_mod, 'fetch_release',
+                          return_value=(b'{}', 'SIG', {})), \
+             patch.object(verify_mod, 'verify', return_value={'counter': 7}) as verify, \
+             patch.object(apply_mod, 'plan', return_value={'versions': [], 'counter': 7}):
+            deploy.release_plan('x86', 'stable', str(tmp_path / 'plan'))
+
+        assert verify.call_args[0][2] == 0
+
+    @pytest.mark.unit
+    def test_the_manifest_and_signature_are_written_for_verification(self, tmp_path):
+        apply_mod, fetch_mod, verify_mod = self._modules()
+        plan_path = tmp_path / 'sub' / 'plan'
+        with patch.object(fetch_mod, 'fetch_release',
+                          return_value=(b'{"counter": 7}', 'SIGVALUE', {})), \
+             patch.object(verify_mod, 'verify', return_value={'counter': 7}), \
+             patch.object(apply_mod, 'plan', return_value={'versions': []}):
+            deploy.release_plan('x86', 'stable', str(plan_path))
+
+        assert (tmp_path / 'sub' / 'manifest.json').read_bytes() == b'{"counter": 7}'
+        assert (tmp_path / 'sub' / 'manifest.sig').read_text() == 'SIGVALUE'
+
+    @pytest.mark.unit
+    def test_the_parsed_manifest_comes_back_for_recording(self, tmp_path):
+        apply_mod, fetch_mod, verify_mod = self._modules()
+        parsed = {'counter': 7, 'release': '1.3'}
+        with patch.object(fetch_mod, 'fetch_release',
+                          return_value=(b'{}', 'SIG', {})), \
+             patch.object(verify_mod, 'verify', return_value=parsed), \
+             patch.object(apply_mod, 'plan', return_value={'versions': []}):
+            plan = deploy.release_plan('x86', 'stable', str(tmp_path / 'plan'))
+
+        assert plan['manifest'] is parsed
+
+
+class TestStepTwoPrefersTheRelease:
+    def _plan(self, **over):
+        plan = {'versions': ['1.1000'] * 7, 'plan_path': '/var/lib/flex-run/plan',
+                'counter': 7, 'release': '1.3', 'changing': ['backend'],
+                'manifest': {'counter': 7, 'release': '1.3'}}
+        plan.update(over)
+        return plan
+
+    @pytest.mark.unit
+    def test_the_release_versions_are_what_get_installed(self):
+        with patch('time.sleep', new=thread_aware_sleep_mock()), \
+             patch.object(deploy, 'release_plan', return_value=self._plan()), \
+             patch.object(deploy, 'not_running', return_value=[]), \
+             patch.object(deploy, 'record_installed_release'), \
+             patch('subprocess.call', return_value=0) as call_script:
+            assert deploy.step_2() == 0
+
+        assert call_script.call_args[0][0][2:] == ['1.1000'] * 7
+
+    @pytest.mark.unit
+    def test_the_plan_path_is_exported_so_the_scripts_pull_by_digest(self,
+                                                                     monkeypatch):
+        monkeypatch.delenv('FLEXRUN_PLAN', raising=False)
+        seen = {}
+        with patch('time.sleep', new=thread_aware_sleep_mock()), \
+             patch.object(deploy, 'release_plan', return_value=self._plan()), \
+             patch.object(deploy, 'not_running', return_value=[]), \
+             patch.object(deploy, 'record_installed_release'), \
+             patch('subprocess.call',
+                   side_effect=lambda *a, **k: seen.update(
+                       plan=os.environ.get('FLEXRUN_PLAN')) or 0):
+            deploy.step_2()
+
+        assert seen['plan'] == '/var/lib/flex-run/plan'
+
+    @pytest.mark.unit
+    def test_the_version_endpoint_is_not_consulted_when_a_release_applies(self):
+        with patch('time.sleep', new=thread_aware_sleep_mock()), \
+             patch.object(deploy, 'release_plan', return_value=self._plan()), \
+             patch.object(deploy, 'not_running', return_value=[]), \
+             patch.object(deploy, 'record_installed_release'), \
+             patch.object(deploy, 'legacy_versions') as legacy, \
+             patch('subprocess.call', return_value=0):
+            deploy.step_2()
+
+        legacy.assert_not_called()
+
+    @pytest.mark.unit
+    def test_no_release_falls_back_to_the_version_endpoint(self):
+        with patch('time.sleep', new=thread_aware_sleep_mock()), \
+             patch.object(deploy, 'release_plan', return_value=None), \
+             patch.object(deploy, 'legacy_versions',
+                          return_value=(['1.97'] * 7, 0)) as legacy, \
+             patch('subprocess.call', return_value=0) as call_script:
+            assert deploy.step_2() == 0
+
+        legacy.assert_called_once()
+        assert call_script.call_args[0][0][2:] == ['1.97'] * 7
+
+    @pytest.mark.unit
+    def test_the_release_is_recorded_once_the_containers_are_up(self):
+        with patch('time.sleep', new=thread_aware_sleep_mock()), \
+             patch.object(deploy, 'release_plan', return_value=self._plan()), \
+             patch.object(deploy, 'not_running', return_value=[]), \
+             patch.object(deploy, 'record_installed_release') as record, \
+             patch('subprocess.call', return_value=0):
+            deploy.step_2()
+
+        assert record.call_args[0][0] == {'counter': 7, 'release': '1.3'}
+
+    @pytest.mark.unit
+    def test_a_half_installed_device_does_not_claim_the_release(self):
+        """Recording a release the containers never reached would make the next
+        upgrade refuse the very release meant to repair it, as a rollback."""
+        with patch('time.sleep', new=thread_aware_sleep_mock()), \
+             patch.object(deploy, 'release_plan', return_value=self._plan()), \
+             patch.object(deploy, 'not_running', return_value=['capdev']), \
+             patch.object(deploy, 'record_installed_release') as record, \
+             patch('subprocess.call', return_value=0):
+            deploy.step_2()
+
+        record.assert_not_called()
+
+    @pytest.mark.unit
+    def test_a_failed_install_records_nothing_and_reports_the_code(self):
+        with patch('time.sleep', new=thread_aware_sleep_mock()), \
+             patch.object(deploy, 'release_plan', return_value=self._plan()), \
+             patch.object(deploy, 'record_installed_release') as record, \
+             patch('subprocess.call', return_value=22):
+            assert deploy.step_2() == 22
+
+        record.assert_not_called()
