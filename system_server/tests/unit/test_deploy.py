@@ -4,7 +4,9 @@ This is the one path a technician drives by hand on the floor, and it is the
 one path with no retry: a step that reports success without having done
 anything leaves a half-installed device behind.
 """
+import os
 import subprocess
+import sys
 import pytest
 from testsupport import thread_aware_sleep_mock
 from unittest.mock import patch, MagicMock, call, mock_open
@@ -476,7 +478,7 @@ class TestStep2:
     @pytest.mark.unit
     def test_passes_every_resolved_version_to_the_setup_script(self):
         with patch('time.sleep', new=thread_aware_sleep_mock()), \
-             patch.object(deploy, 'is_container_uptodate', return_value=(False, '1.2.3')), \
+             patch('system_server.version_check.is_container_uptodate', return_value=(False, '1.2.3')), \
              patch('subprocess.call') as call_script:
             deploy.step_2()
 
@@ -488,7 +490,7 @@ class TestStep2:
     @pytest.mark.unit
     def test_resolves_each_container_by_name(self):
         with patch('time.sleep', new=thread_aware_sleep_mock()), \
-             patch.object(deploy, 'is_container_uptodate', return_value=(False, '1.0')) as uptodate, \
+             patch('system_server.version_check.is_container_uptodate', return_value=(False, '1.0')) as uptodate, \
              patch('subprocess.call'):
             deploy.step_2()
 
@@ -501,7 +503,7 @@ class TestStep2:
         # is_container_uptodate returns 'True' rather than a tag when nothing
         # needs pulling; the shell script reads that as "leave it alone".
         with patch('time.sleep', new=thread_aware_sleep_mock()), \
-             patch.object(deploy, 'is_container_uptodate', return_value=(True, 'True')), \
+             patch('system_server.version_check.is_container_uptodate', return_value=(True, 'True')), \
              patch('subprocess.call') as call_script:
             deploy.step_2()
 
@@ -612,3 +614,244 @@ class TestMain:
 
         s1.assert_not_called()
         assert 'must be running linux' in capsys.readouterr().out
+
+
+REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', '..'))
+
+BROKEN_REQUESTS = (
+    'raise AttributeError('
+    '"module \'charset_normalizer.md\' has no attribute \'CharInfo\'")\n')
+
+
+class TestBootstrapsOnABareMachine:
+    """deploy.py runs before anything is installed. If it cannot be imported on
+    stock python3, it cannot even say what is missing."""
+
+    def _import_deploy(self, extra_path):
+        env = dict(os.environ)
+        env['PYTHONPATH'] = os.pathsep.join([extra_path, REPO])
+        return subprocess.run(
+            [sys.executable, '-c', 'import deploy; print("IMPORTED")'],
+            cwd=REPO, env=env, capture_output=True, text=True, timeout=120)
+
+    @pytest.mark.unit
+    def test_it_imports_when_requests_is_broken(self, tmp_path):
+        """The failure seen on a real device: charset_normalizer half-upgraded,
+        so `import requests` raises AttributeError rather than ImportError."""
+        (tmp_path / 'requests.py').write_text(BROKEN_REQUESTS)
+
+        result = self._import_deploy(str(tmp_path))
+
+        assert 'IMPORTED' in result.stdout, result.stderr
+
+    @pytest.mark.unit
+    def test_no_third_party_import_at_module_scope(self):
+        """requests is installed by system_server.sh, which runs inside step 2.
+        Importing it at module scope made deploy.py depend on the thing it
+        exists to install."""
+        source = open(os.path.join(REPO, 'deploy.py')).read()
+        head = source.split('def clear_text_color')[0]
+
+        assert 'version_check' not in head
+        assert 'import requests' not in head
+
+
+class TestProbePythonDeps:
+    @pytest.mark.unit
+    def test_a_working_import_is_ok(self):
+        assert deploy.probe_python_deps('pass') == (True, '')
+
+    @pytest.mark.unit
+    def test_a_broken_import_reports_the_reason(self):
+        ok, detail = deploy.probe_python_deps('raise AttributeError("CharInfo")')
+
+        assert ok is False
+        assert 'CharInfo' in detail
+
+    @pytest.mark.unit
+    def test_a_missing_package_reports_the_reason(self):
+        ok, detail = deploy.probe_python_deps('import nosuchpackage_xyz')
+
+        assert ok is False
+        assert 'nosuchpackage_xyz' in detail
+
+    @pytest.mark.unit
+    def test_it_probes_in_a_subprocess(self):
+        """An in-process retry sees the half-initialised sys.modules entry the
+        first failure left behind, and reports broken forever after."""
+        with patch.object(deploy.subprocess, 'run') as run:
+            run.return_value = MagicMock(returncode=0, stdout='', stderr='')
+            deploy.probe_python_deps()
+
+        assert run.call_args[0][0][0] == sys.executable
+
+
+class TestPipArgv:
+    @pytest.mark.unit
+    def test_it_uses_this_interpreter_not_pip3(self):
+        """Two pythons on one device means `pip3` can install into the other
+        one - a successful install followed by an import that still fails."""
+        with patch.object(deploy.subprocess, 'run') as run:
+            run.return_value = MagicMock(stdout='')
+            argv = deploy.pip_argv()
+
+        assert argv[:4] == [sys.executable, '-m', 'pip', 'install']
+
+    @pytest.mark.unit
+    def test_break_system_packages_when_pip_supports_it(self):
+        with patch.object(deploy.subprocess, 'run') as run:
+            run.return_value = MagicMock(stdout='  --break-system-packages\n')
+            assert '--break-system-packages' in deploy.pip_argv()
+
+    @pytest.mark.unit
+    def test_not_passed_when_pip_is_too_old_to_know_it(self):
+        with patch.object(deploy.subprocess, 'run') as run:
+            run.return_value = MagicMock(stdout='  --user\n')
+            assert '--break-system-packages' not in deploy.pip_argv()
+
+    @pytest.mark.unit
+    def test_an_unrunnable_pip_still_yields_an_argv(self):
+        with patch.object(deploy.subprocess, 'run', side_effect=OSError):
+            assert deploy.pip_argv()[:4] == [sys.executable, '-m', 'pip', 'install']
+
+
+class TestAsRoot:
+    @pytest.mark.unit
+    def test_no_sudo_when_already_root(self):
+        with patch.object(deploy.os, 'geteuid', return_value=0):
+            assert deploy._as_root(['apt-get']) == ['apt-get']
+
+    @pytest.mark.unit
+    def test_sudo_otherwise(self):
+        with patch.object(deploy.os, 'geteuid', return_value=1000):
+            assert deploy._as_root(['apt-get']) == ['sudo', 'apt-get']
+
+
+class TestEnsurePythonDeps:
+    @pytest.mark.unit
+    def test_a_working_environment_installs_nothing(self):
+        with patch.object(deploy, 'probe_python_deps', return_value=(True, '')), \
+             patch.object(deploy.subprocess, 'call') as call_:
+            assert deploy.ensure_python_deps() == 0
+
+        call_.assert_not_called()
+
+    @pytest.mark.unit
+    def test_it_installs_and_returns_zero(self):
+        with patch.object(deploy, 'probe_python_deps',
+                          side_effect=[(False, 'no module'), (True, '')]), \
+             patch.object(deploy, 'ensure_pip', return_value=True), \
+             patch.object(deploy, 'pip_argv', return_value=['pip', 'install']), \
+             patch.object(deploy.subprocess, 'call', return_value=0) as call_:
+            assert deploy.ensure_python_deps() == 0
+
+        assert deploy.REQUIREMENTS in call_.call_args[0][0]
+
+    @pytest.mark.unit
+    def test_a_failed_pip_is_reported_not_ignored(self):
+        with patch.object(deploy, 'probe_python_deps', return_value=(False, 'x')), \
+             patch.object(deploy, 'ensure_pip', return_value=True), \
+             patch.object(deploy, 'pip_argv', return_value=['pip', 'install']), \
+             patch.object(deploy.subprocess, 'call', return_value=1):
+            assert deploy.ensure_python_deps() == deploy.DEPS_FAILED
+
+    @pytest.mark.unit
+    def test_no_pip_and_none_installable_is_reported(self):
+        with patch.object(deploy, 'probe_python_deps', return_value=(False, 'x')), \
+             patch.object(deploy, 'ensure_pip', return_value=False), \
+             patch.object(deploy.subprocess, 'call') as call_:
+            assert deploy.ensure_python_deps() == deploy.DEPS_FAILED
+
+        call_.assert_not_called()
+
+    @pytest.mark.unit
+    def test_a_missing_requirements_file_is_reported(self, monkeypatch):
+        monkeypatch.setattr(deploy, 'REQUIREMENTS', '/nonexistent/requirements.txt')
+        with patch.object(deploy, 'probe_python_deps', return_value=(False, 'x')), \
+             patch.object(deploy.subprocess, 'call') as call_:
+            assert deploy.ensure_python_deps() == deploy.DEPS_FAILED
+
+        call_.assert_not_called()
+
+    @pytest.mark.unit
+    def test_an_install_that_does_not_fix_it_says_so(self, capsys):
+        """pip exits 0 but the import still fails: two versions of a package in
+        one directory, which is what a half-finished upgrade leaves behind."""
+        with patch.object(deploy, 'probe_python_deps',
+                          side_effect=[(False, 'CharInfo'), (False, 'CharInfo')]), \
+             patch.object(deploy, 'ensure_pip', return_value=True), \
+             patch.object(deploy, 'pip_argv', return_value=['pip', 'install']), \
+             patch.object(deploy.subprocess, 'call', return_value=0):
+            assert deploy.ensure_python_deps() == deploy.DEPS_FAILED
+
+        out = capsys.readouterr().out
+        assert 'CharInfo' in out
+        assert 'dist-info' in out
+
+
+class TestEnsurePip:
+    @pytest.mark.unit
+    def test_a_working_pip_installs_nothing(self):
+        with patch.object(deploy.subprocess, 'run') as run, \
+             patch.object(deploy.subprocess, 'call') as call_:
+            run.return_value = MagicMock(returncode=0)
+            assert deploy.ensure_pip() is True
+
+        call_.assert_not_called()
+
+    @pytest.mark.unit
+    def test_a_missing_pip_is_installed_from_apt(self):
+        with patch.object(deploy.subprocess, 'run') as run, \
+             patch.object(deploy.subprocess, 'call', return_value=0) as call_, \
+             patch.object(deploy.os, 'geteuid', return_value=0):
+            run.side_effect = [MagicMock(returncode=1), MagicMock(returncode=0)]
+            assert deploy.ensure_pip() is True
+
+        assert 'python3-pip' in call_.call_args[0][0]
+
+
+class TestDepsRunBeforeStepTwo:
+    """Ordering is the whole point: step_2 is the first thing that imports any
+    of this, and it must not be reached with the environment unfixed."""
+
+    @pytest.mark.unit
+    def test_deps_are_ensured_before_step_2(self):
+        order = []
+        with patch.object(deploy, 'preflight', return_value=[]), \
+             patch.object(deploy.platform, 'system', return_value='Linux'), \
+             patch.object(deploy, 'step_1'), \
+             patch.object(deploy, 'check_connection', return_value=True), \
+             patch.object(deploy, 'ensure_python_deps',
+                          side_effect=lambda: order.append('deps') or 0), \
+             patch.object(deploy, 'step_2',
+                          side_effect=lambda: order.append('step_2') or 0), \
+             patch.object(deploy, 'step_3',
+                          side_effect=lambda: order.append('step_3') or 0):
+            deploy.main()
+
+        assert order == ['deps', 'step_2', 'step_3']
+
+    @pytest.mark.unit
+    def test_step_2_is_not_reached_when_deps_cannot_be_fixed(self):
+        with patch.object(deploy, 'preflight', return_value=[]), \
+             patch.object(deploy.platform, 'system', return_value='Linux'), \
+             patch.object(deploy, 'step_1'), \
+             patch.object(deploy, 'check_connection', return_value=True), \
+             patch.object(deploy, 'ensure_python_deps',
+                          return_value=deploy.DEPS_FAILED), \
+             patch.object(deploy, 'step_2') as step_2:
+            assert deploy.main() == deploy.DEPS_FAILED
+
+        step_2.assert_not_called()
+
+    @pytest.mark.unit
+    def test_deps_are_not_attempted_before_the_network_is_up(self):
+        """pip needs the network, so this runs after step_1, not in preflight."""
+        with patch.object(deploy, 'preflight', return_value=[]), \
+             patch.object(deploy.platform, 'system', return_value='Linux'), \
+             patch.object(deploy, 'step_1'), \
+             patch.object(deploy, 'check_connection', return_value=False), \
+             patch.object(deploy, 'ensure_python_deps') as deps:
+            deploy.main()
+
+        deps.assert_not_called()

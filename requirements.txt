@@ -1,4 +1,11 @@
 requests==2.31.0
+# Transitive via requests, pinned because it is not. 3.3.2 -> 3.5.1 renamed the
+# compiled extensions (md.cpython-38-*.so -> md.abi3.so), and install_dependencies.sh
+# uses --ignore-installed, which skips the uninstall - so both versions' .so files
+# end up in one directory. Python then loads md from the old one and cd from the
+# new one, and `import requests` dies on md.CharInfo. Moving this forward is fine,
+# but do it deliberately and on a device first.
+charset-normalizer==3.3.2
 python-jose==3.1.0
 # release/verify.py checks the release signature with this rather than
 # shelling out to cosign, which is a 141MB binary wanting a transparency log.

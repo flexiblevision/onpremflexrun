@@ -6,7 +6,6 @@ import os
 import json
 import time
 import platform
-from system_server.version_check import is_container_uptodate
 from setup.management import generate_environment_config
 
 def clear_text_color():
@@ -196,6 +195,7 @@ def step_2():
     print("\033[0;36mStep (2/3) Pulling latest software & creating enviornment.")
     clear_text_color()
     time.sleep(2)
+    from system_server.version_check import is_container_uptodate
     backend_version = is_container_uptodate('backend')[1]
     frontend_version = is_container_uptodate('frontend')[1]
     prediction_version = is_container_uptodate('prediction')[1]
@@ -318,6 +318,109 @@ def setup_wifi():
     display_connection_results()
 
 
+REQUIREMENTS = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                            'requirements.txt')
+
+DEPS_PROBE = 'import requests'
+
+DEPS_FAILED = 25
+
+
+def _as_root(argv):
+    return argv if os.geteuid() == 0 else ['sudo'] + argv
+
+
+def probe_python_deps(probe=DEPS_PROBE):
+    """(ok, detail) for the imports step_2 will make. Subprocess, so a failed
+    import cannot poison sys.modules for the retry."""
+    try:
+        result = subprocess.run([sys.executable, '-c', probe],
+                                capture_output=True, text=True, timeout=120)
+    except (OSError, subprocess.SubprocessError) as exc:
+        return False, '{}: {}'.format(type(exc).__name__, exc)
+    if result.returncode == 0:
+        return True, ''
+    lines = (result.stderr or '').strip().splitlines()
+    return False, lines[-1] if lines else 'exit {}'.format(result.returncode)
+
+
+def pip_argv():
+    """pip as this interpreter, with --break-system-packages where supported."""
+    argv = [sys.executable, '-m', 'pip', 'install']
+    try:
+        helped = subprocess.run(
+            [sys.executable, '-m', 'pip', 'install', '--help'],
+            capture_output=True, text=True, timeout=60)
+        if '--break-system-packages' in (helped.stdout or ''):
+            argv.append('--break-system-packages')
+    except (OSError, subprocess.SubprocessError):
+        pass
+    return argv
+
+
+def ensure_pip():
+    """True if this interpreter can run pip, installing python3-pip if not."""
+    try:
+        if subprocess.run([sys.executable, '-m', 'pip', '--version'],
+                          capture_output=True, timeout=60).returncode == 0:
+            return True
+    except (OSError, subprocess.SubprocessError):
+        pass
+
+    print("\033[0;33mpip is not installed - installing python3-pip...")
+    clear_text_color()
+    try:
+        subprocess.call(_as_root(['apt-get', 'install', '-y', 'python3-pip']))
+        return subprocess.run([sys.executable, '-m', 'pip', '--version'],
+                              capture_output=True, timeout=60).returncode == 0
+    except (OSError, subprocess.SubprocessError):
+        return False
+
+
+def ensure_python_deps():
+    """Install what step_2 imports, before step_2 imports it."""
+    ok, detail = probe_python_deps()
+    if ok:
+        return 0
+
+    print("\033[0;33mPython dependencies are missing or broken:")
+    print("\033[0;33m  {}".format(detail))
+    print("Installing from {}...".format(REQUIREMENTS))
+    clear_text_color()
+
+    if not os.path.exists(REQUIREMENTS):
+        print("\033[0;31m{} is missing - this deploy tree is incomplete.".format(
+            REQUIREMENTS))
+        clear_text_color()
+        return DEPS_FAILED
+
+    if not ensure_pip():
+        print("\033[0;31mpip is not available and python3-pip could not be "
+              "installed.")
+        clear_text_color()
+        return DEPS_FAILED
+
+    code = subprocess.call(_as_root(pip_argv() + ['-r', REQUIREMENTS]))
+    if code != 0:
+        print("\033[0;31mInstalling dependencies failed (pip exited {}).".format(code))
+        clear_text_color()
+        return DEPS_FAILED
+
+    ok, detail = probe_python_deps()
+    if ok:
+        print("\033[0;32mDependencies installed.")
+        clear_text_color()
+        return 0
+
+    print("\033[0;31mDependencies still do not import after installing:")
+    print("\033[0;31m  {}".format(detail))
+    print("This is usually a half-finished upgrade leaving two versions of a")
+    print("package in one directory. Remove that package's folder and every")
+    print("matching *.dist-info from the path named above, then run setup again.")
+    clear_text_color()
+    return DEPS_FAILED
+
+
 def preflight():
     """What has to be true before anything is installed.
 
@@ -377,6 +480,10 @@ def main():
               "then retry setup.")
         clear_text_color()
         return 1
+
+    code = ensure_python_deps()
+    if code != 0:
+        return code
 
     code = step_2()
     if code != 0:
