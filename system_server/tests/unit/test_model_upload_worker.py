@@ -349,7 +349,12 @@ class TestDockerOperations:
     @patch('worker_scripts.model_upload_worker.models_collection')
     def test_docker_copy_to_lite_server(self, mock_models_collection, mock_read_job,
                                          mock_exists, mock_os_system):
-        """Test that lite models are copied to predictlite container"""
+        """predictlite bind-mounts the host lite_models directory, so a lite
+        model must NOT be copied into the container - the write to the host is
+        already visible there, and copying in would only duplicate 790MB.
+
+        It must still be restarted, because the server loads models at startup.
+        """
         from worker_scripts.model_upload_worker import upload_model
 
         mock_read_job.return_value = {'model_version': 'v1', 'model_type': 'high_speed'}
@@ -357,11 +362,11 @@ class TestDockerOperations:
 
         upload_model('/tmp/testmodel', 'testmodel#v1.zip')
 
-        # Check for docker cp command to predictlite
-        docker_calls = [str(call) for call in mock_os_system.call_args_list
-                       if 'docker cp' in str(call)]
-        assert len(docker_calls) > 0
-        assert any('predictlite' in call for call in docker_calls)
+        calls = [str(call) for call in mock_os_system.call_args_list]
+        copied = [c for c in calls if 'docker cp' in c and 'predictlite' in c]
+        assert copied == [], 'lite models are mounted, not copied: {}'.format(copied)
+        assert any('docker restart predictlite' in c for c in calls), \
+            'predictlite loads models at startup, so it has to be restarted'
 
 
 class TestFilePathConstruction:

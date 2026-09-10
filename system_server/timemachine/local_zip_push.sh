@@ -26,11 +26,21 @@ docker run -p 1934-1945:1934-1945 --network=host --name eventor -d \
     -t fvonprem/x86-eventor:prod
 
 # start rtsp server
+#
+# The image bakes in a server.key that is identical on every device and has been
+# public in this repository since 2022, so it cannot be trusted. ensure_tls_key.sh
+# gives this device its own, once, and the mounts below shadow the image's copy.
+# Without those two -v lines the container silently falls back to the public key.
+sh $HOME/flex-run/system_server/timemachine/ensure_tls_key.sh \
+    $HOME/flex-run/system_server/timemachine
+
 sudo docker stop rtsp-server
 sudo docker rm rtsp-server
 sudo docker run --network=host --name rtsp-server -d --restart unless-stopped \
     --log-opt max-size=50m --log-opt max-file=5 \
     -v $HOME/flex-run/system_server/timemachine/server.yml:/rtsp-simple-server.yml \
+    -v $HOME/flex-run/system_server/timemachine/server.key:/server.key:ro \
+    -v $HOME/flex-run/system_server/timemachine/server.crt:/server.crt:ro \
     -t fvonprem/x86-rtspserver:prod
 
 # start filesystem servers

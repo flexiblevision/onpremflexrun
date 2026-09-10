@@ -12,6 +12,9 @@ from flask_restx import Api
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 # Add grandparent directory to path (onpremflexrun - for settings.py)
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..')))
+# The tests directory itself, so unit/ and integration/ modules can import
+# testsupport.py.
+sys.path.insert(0, os.path.abspath(os.path.dirname(__file__)))
 
 # Mock settings configuration at module level BEFORE any imports
 # Create a dict-like mock that handles both attribute and key access
@@ -49,15 +52,79 @@ _mock_settings_module.FireOperator = None
 # This prevents Python from loading the real settings.py even if it's found in sys.path
 sys.modules['settings'] = _mock_settings_module
 
+# The real decorator, captured before it is replaced below.
+# Without this handle there is no way to test auth itself: requires_auth is a
+# pass-through for every test in the run, so a view decorated inside a test
+# would never validate anything.
+import auth as _auth_module
+REAL_REQUIRES_AUTH = _auth_module.requires_auth
+
+
+def _requires_auth_passthrough(f):
+    return f
+
+
+# Replaced at conftest import time rather than only inside the autouse fixture
+# below. requires_auth is applied when a routes module is imported, and a test
+# module that imports one at module scope is itself imported during collection
+# - before any fixture has run. Such a module would bind the real decorator
+# into its Resource classes for the rest of the session, and every route test
+# touching it would fail on a missing Authorization header.
+_auth_module.requires_auth = _requires_auth_passthrough
+
+
+@pytest.fixture(scope='session')
+def real_requires_auth():
+    """The genuine requires_auth, for tests that exercise auth itself."""
+    return REAL_REQUIRES_AUTH
+
+
+def make_main_thread_sleep(record, stop_after=1):
+    """Build a time.sleep double that only affects the calling thread.
+
+    Several daemons here are `while True: sleep(); work()`, and the way to test
+    one is to patch sleep so it raises after N passes. But time.sleep is global
+    and the pymongo, firestore and redis clients all run background threads
+    that call it: an unguarded side effect has its budget consumed by those
+    threads, or kills them outright. Either way the test ends up measuring the
+    driver's internals rather than the loop under test - which is exactly the
+    failure mode that made the old suite flaky.
+
+    Background threads must still ACTUALLY sleep. Returning immediately turns
+    every `while True: ...; sleep()` daemon in pymongo and redis into a full
+    speed spin - measured at ~1e6 iterations/second against 1 - which starves
+    the test, saturates the CPU and grows the heap without bound. That was the
+    cause of the suite intermittently stalling and reaching tens of GB of RSS.
+    """
+    import threading
+    import time as _time
+
+    real_sleep = _time.sleep
+
+    def sleep(seconds):
+        if threading.current_thread() is not threading.main_thread():
+            return real_sleep(seconds)
+        record.append(seconds)
+        if len(record) >= stop_after:
+            raise KeyboardInterrupt
+
+    return sleep
+
+
+@pytest.fixture
+def main_thread_sleep():
+    """Factory for a thread-scoped time.sleep double. See above."""
+    return make_main_thread_sleep
+
+
+from testsupport import thread_aware_sleep_mock  # noqa: E402,F401
+
+
 # Mock auth decorator globally for all integration tests
 @pytest.fixture(scope='session', autouse=True)
 def mock_auth_globally():
     """Mock authentication globally for all tests"""
-    # Create a no-op decorator that just returns the function unchanged
-    def requires_auth_mock(f):
-        return f
-
-    with patch('auth.requires_auth', requires_auth_mock):
+    with patch('auth.requires_auth', _requires_auth_passthrough):
         yield
 
 # Add an import hook to prevent the real settings from being loaded

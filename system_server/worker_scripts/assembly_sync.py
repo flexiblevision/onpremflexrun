@@ -18,6 +18,7 @@ import sys
 settings_path = os.environ['HOME'] + '/flex-run'
 sys.path.append(settings_path)
 
+from cloud_env import get_cloud_domain
 from pymongo import MongoClient
 from bson import json_util
 from redis import Redis
@@ -127,7 +128,7 @@ def sync_to_cloud(assemblies, access_token):
             'Authorization': f'Bearer {access_token}',
             'Content-Type': 'application/json'
         }
-        url = f'{CLOUD_DOMAIN}/api/assembly/progress/sync'
+        url = f'{get_cloud_domain(CLOUD_DOMAIN)}/api/assembly/progress/sync'
 
         res = requests.post(
             url,

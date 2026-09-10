@@ -162,7 +162,12 @@ class TestUploadModelEndpoint:
     @patch('zipfile.ZipFile')
     @patch('tempfile.gettempdir', return_value='/tmp/')
     @patch('rq.Queue.enqueue')
-    @patch('worker_scripts.job_manager.insert_job')
+    # model_routes does `from worker_scripts.job_manager import insert_job`, so
+    # the name it calls lives on model_routes. Patching it on job_manager left
+    # the real one in place, which wrote job id 'upload_job_789' to the live
+    # MongoDB - passing on an empty database and failing with DuplicateKeyError
+    # on every run after the first.
+    @patch('routes.model_routes.insert_job')
     def test_upload_model_success(self, mock_insert_job, mock_enqueue, mock_tempdir,
                                   mock_zipfile, mock_system, mock_exists, model_client):
         """Test successful model upload"""

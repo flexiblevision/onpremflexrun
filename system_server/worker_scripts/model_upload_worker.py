@@ -130,12 +130,11 @@ def upload_model(temp_model_path, filename):
                 create_config_file()
 
         if is_lite_model:
-            print('PUSHING MODELS TO PREDICT LITE SERVER')
-            os.system("docker cp /lite_models predictlite:/data/")
+            print('MODELS SYNCED FOR PREDICT LITE SERVER')
+            os.system("docker restart predictlite")
             os.system('rm -rf '+temp_model_path)
         else:
-            print('PUSHING MODELS TO PREDICTION SERVER')
-            os.system("docker cp /models localprediction:/")
+            print('MODELS SYNCED FOR PREDICTION SERVER')
             os.system("docker restart localprediction")
             os.system('rm -rf '+temp_model_path)
         

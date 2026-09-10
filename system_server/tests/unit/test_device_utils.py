@@ -152,6 +152,18 @@ class TestSystemArch:
 class TestListUsbPaths:
     """Tests for USB path listing"""
 
+    @pytest.fixture(autouse=True)
+    def cold_cache(self):
+        """list_usb_paths() caches for 5s to avoid a blkid storm, so without
+        this the first test's result is returned to every later test and their
+        mocks are never consulted."""
+        import utils.device_utils as device_utils
+        device_utils._usb_cache['paths'] = []
+        device_utils._usb_cache['time'] = 0
+        yield
+        device_utils._usb_cache['paths'] = []
+        device_utils._usb_cache['time'] = 0
+
     @pytest.mark.unit
     @patch('subprocess.Popen')
     def test_list_usb_paths_vfat(self, mock_popen):

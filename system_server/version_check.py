@@ -13,7 +13,7 @@ CONTAINERS  = {
     'visiontools': 'visiontools'
 }
 
-CLOUD_FUNCTIONS_BASE = settings.config['container_check_domain'] if 'container_check_domain' in settings.config else 'https://us-central1-flexible-vision-staging.cloudfunctions.net/'
+CLOUD_FUNCTIONS_BASE = settings.config['container_check_domain'] if 'container_check_domain' in settings.config else 'https://functions-proxy.flexiblevision.com/'
 LATEST_STABLE_REF    = settings.config['latest_stable_ref'] if 'latest_stable_ref' in settings.config else 'latest_stable_version'
 
 def get_current_container_version(container):
@@ -34,10 +34,22 @@ def get_latest_image_versions(image):
     if res:
         return res.json()
 
+def stable_ref():
+    """Which version endpoint to ask, resolved per call.
+
+    A device that switched track at runtime has to ask the ref of the track it
+    is on now, not the one baked in when this module was imported.
+    """
+    try:
+        import cloud_env
+        return cloud_env.get_latest_stable_ref(LATEST_STABLE_REF)
+    except Exception:
+        return LATEST_STABLE_REF
+
 def latest_stable_image_version(image):
     data    = {"arch": system_arch(), "image": image}
     headers = {"Content-Type": "application/json"}
-    res     = requests.post(CLOUD_FUNCTIONS_BASE+LATEST_STABLE_REF, json=data, headers=headers)
+    res     = requests.post(CLOUD_FUNCTIONS_BASE+stable_ref(), json=data, headers=headers)
     if res.status_code == 200:
         return res.text
 

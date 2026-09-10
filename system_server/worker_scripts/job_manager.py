@@ -23,8 +23,12 @@ SYNC_COMPLETION_THRESHOLD = 74
 TRACKER_COLLECTION_NAME = "sync_tracker"  # Separate collection for tracking data
 
 
-MONGODB_HOST = "172.17.0.1"  # Should move to config/environment variable
-MONGODB_PORT = 27017
+# Defaults are the docker bridge address used on devices; overridable so this
+# module can be imported where that address does not exist (CI, a dev box).
+# It pings at import and exits on failure, so an unreachable host takes the
+# whole process down rather than failing a single call.
+MONGODB_HOST = os.environ.get('MONGO_SERVER', "172.17.0.1")
+MONGODB_PORT = int(os.environ.get('MONGO_PORT', 27017))
 MONGODB_TIMEOUT_MS = 5000  # 5 second timeout
 MONGODB_MAX_POOL_SIZE = 50
 MONGODB_SERVER_SELECTION_TIMEOUT_MS = 5000
@@ -235,9 +239,11 @@ def cloud_call(url, analytics, headers):
         return True
     try:
         for a in analytics: a['synced'] = True
-        res = requests.post(url, json=analytics, headers=headers, timeout=20)
-        bq_res = requests.post(BQ_INGEST_PATH, json=analytics, headers=headers, timeout=20)
-        print(res, bq_res)
+        if config.get('environ') == 'local':
+            res = requests.post(url, json=analytics, headers=headers, timeout=20)
+        else:
+            res = requests.post(BQ_INGEST_PATH, json=analytics, headers=headers, timeout=20)
+        print(res)
         print('--------------------------------------')
         success = res.status_code == 200
         if success:
@@ -379,6 +385,22 @@ def push_analytics_to_cloud(domain, access_token):
     return True
 
 
+# Deploying an addon now happens in addons.jobs.enable_addon, driven by the
+# descriptor in addons/catalog/<name>/. These three remain only because rq
+# serialises a job by import path: a job queued before the upgrade still names
+# one of them, and deleting them would strand it.
+def _enable_addon(name):
+    from addons.jobs import enable_addon
+    return enable_addon(name)
+
+
 def enable_ocr():
-    install_file = f"{os.environ['HOME']}/flex-run/helpers/install_ocr.sh"
-    os.system(f"sudo sh {install_file}")
+    return _enable_addon('ocr')
+
+
+def enable_assembly_guidance():
+    return _enable_addon('assembly')
+
+
+def enable_audio():
+    return _enable_addon('anomaly_audio')

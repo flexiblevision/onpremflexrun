@@ -608,16 +608,32 @@ class TestZipFileExtraction:
             'exclude_models': {}
         }
 
+        # builtins.open must be patched too: the download writes
+        # <model_folder>/model.zip, and without this the test writes to a real
+        # /models path and fails before it reaches the zipfile handling.
         with patch('requests.get'), \
+             patch('builtins.open', new_callable=mock_open), \
              patch('zipfile.ZipFile') as mock_zipfile:
 
             # Simulate bad zipfile
             mock_zipfile.side_effect = zipfile.BadZipfile('Bad zip')
 
+            # A corrupt download must be skipped, not raised: one bad model
+            # cannot be allowed to abort the whole sync.
             result = retrieve_models(data, 'token123')
 
-            # Should still complete but skip the bad file
-            # The function continues despite bad zipfile
+        # Reaching here at all is the main assertion: BadZipfile is caught, not
+        # propagated, so one corrupt download cannot abort the whole sync.
+        assert mock_zipfile.called, 'the zipfile path was never exercised'
+
+        # Nothing synced, so the documented False is correct here.
+        assert result is False
+
+        # The corrupt archive must be removed, or it is retried forever and
+        # eventually fills the disk.
+        removals = [str(c) for c in mock_os_system.call_args_list if 'rm -rf' in str(c)]
+        assert any('model.zip' in c for c in removals), \
+            'corrupt model.zip was left on disk: %s' % removals
 
 
 class TestDockerIntegration:
@@ -658,8 +674,12 @@ class TestDockerIntegration:
             docker_calls = [str(call) for call in mock_os_system.call_args_list
                            if 'docker' in str(call)]
 
-            # Should exec rm, cp, and restart localprediction
-            assert any('localprediction' in call for call in docker_calls)
-            assert any('docker exec' in call for call in docker_calls)
-            assert any('docker cp' in call for call in docker_calls)
-            assert any('docker restart' in call for call in docker_calls)
+            # localprediction bind-mounts the host models directory, so a sync
+            # must NOT copy into the container - and must NOT rm inside it,
+            # which would delete the host's models through the mount.
+            assert any('docker restart localprediction' in call
+                       for call in docker_calls)
+            assert not [c for c in docker_calls
+                        if 'docker cp' in c and 'localprediction' in c]
+            assert not [c for c in docker_calls
+                        if 'docker exec' in c and 'localprediction' in c]
