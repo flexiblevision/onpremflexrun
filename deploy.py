@@ -1,5 +1,7 @@
 import getpass
+import glob
 import shutil
+import site
 import sys
 import subprocess
 import os
@@ -465,8 +467,8 @@ def _as_root(argv):
     return argv if os.geteuid() == 0 else ['sudo'] + argv
 
 
-def probe_python_deps(probe=DEPS_PROBE):
-    """(ok, detail) for the imports step_2 will make. Subprocess, so a failed
+def _probe_stderr(probe=DEPS_PROBE):
+    """(ok, stderr) for the imports step_2 will make. Subprocess, so a failed
     import cannot poison sys.modules for the retry."""
     try:
         result = subprocess.run([sys.executable, '-c', probe],
@@ -475,8 +477,75 @@ def probe_python_deps(probe=DEPS_PROBE):
         return False, '{}: {}'.format(type(exc).__name__, exc)
     if result.returncode == 0:
         return True, ''
-    lines = (result.stderr or '').strip().splitlines()
-    return False, lines[-1] if lines else 'exit {}'.format(result.returncode)
+    return False, (result.stderr or '').strip() or 'exit {}'.format(
+        result.returncode)
+
+
+def probe_python_deps(probe=DEPS_PROBE):
+    """(ok, one-line detail) for the imports step_2 will make."""
+    ok, stderr = _probe_stderr(probe)
+    if ok:
+        return True, ''
+    lines = stderr.splitlines()
+    return False, lines[-1] if lines else stderr
+
+
+def _pip_site_dirs():
+    """The directories pip installs into on this interpreter."""
+    dirs = []
+    try:
+        dirs.extend(site.getsitepackages())
+    except AttributeError:
+        pass
+    try:
+        dirs.append(site.getusersitepackages())
+    except (AttributeError, TypeError):
+        pass
+    return [d for d in dirs if d and os.path.isdir(d)]
+
+
+def broken_packages(stderr_text):
+    """(site_dir, name) for every installed package a traceback blames.
+
+    The traceback names the file each frame is in, so a failing import points
+    straight at the packages whose files are inconsistent.
+    """
+    found = []
+    for site_dir in _pip_site_dirs():
+        marker = site_dir.rstrip(os.sep) + os.sep
+        for line in stderr_text.splitlines():
+            start = line.find(marker)
+            if start == -1:
+                continue
+            name = line[start + len(marker):].split(os.sep)[0]
+            entry = (site_dir, name)
+            if entry in found or not name:
+                continue
+            if os.path.isdir(os.path.join(site_dir, name)):
+                found.append(entry)
+    return found
+
+
+def purge_packages(packages):
+    """Delete each package's directory and every version's metadata.
+
+    --ignore-installed writes a new version's files over an old one without
+    uninstalling it, so one directory ends up holding two versions: a compiled
+    module left behind by the version that was replaced still shadows the .py
+    that replaced it, and the import dies on a symbol that moved between them.
+    pip cannot repair this - it reads the metadata, sees the pin as already
+    satisfied and does nothing - so the files have to go before the reinstall.
+    """
+    removed = []
+    for site_dir, name in packages:
+        targets = [os.path.join(site_dir, name)]
+        for pattern in ('-*.dist-info', '-*.egg-info'):
+            targets.extend(glob.glob(os.path.join(site_dir, name + pattern)))
+        for target in targets:
+            if os.path.exists(target) and subprocess.call(
+                    _as_root(['rm', '-rf', target])) == 0:
+                removed.append(target)
+    return removed
 
 
 def pip_argv():
@@ -546,6 +615,27 @@ def ensure_python_deps():
         print("\033[0;32mDependencies installed.")
         clear_text_color()
         return 0
+
+    # Installing did not fix it, so the metadata pip trusts disagrees with the
+    # files on disk. Clear out the packages the traceback blames and install
+    # them again from scratch.
+    ok, stderr = _probe_stderr()
+    packages = broken_packages(stderr)
+    if packages:
+        print("\033[0;33mTwo versions of a package are installed in one "
+              "directory. Removing and reinstalling:")
+        for _, name in packages:
+            print("\033[0;33m  - {}".format(name))
+        clear_text_color()
+        purge_packages(packages)
+
+        code = subprocess.call(_as_root(pip_argv() + ['-r', REQUIREMENTS]))
+        if code == 0:
+            ok, detail = probe_python_deps()
+            if ok:
+                print("\033[0;32mDependencies repaired.")
+                clear_text_color()
+                return 0
 
     print("\033[0;31mDependencies still do not import after installing:")
     print("\033[0;31m  {}".format(detail))
@@ -628,4 +718,8 @@ def main():
 
 if __name__ == '__main__':
     # A non-zero exit so anything driving this can tell success from failure.
+    if '--repair-deps' in sys.argv[1:]:
+        # For the upgrade path, which installs over a running device and has
+        # no technician in front of it.
+        sys.exit(ensure_python_deps())
     sys.exit(main())

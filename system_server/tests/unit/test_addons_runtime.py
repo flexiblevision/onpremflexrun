@@ -24,8 +24,9 @@ class TestReferenceResolution:
     @pytest.mark.unit
     def test_the_repository_is_arch_aware(self):
         addon = registry.get('anomaly_audio')
+        # prod is the stable channel; beta sites override with IMAGE_TAG=dev.
         assert runtime.resolve_reference(addon, 'arm') == \
-            'fvonprem/arm-audio-anomaly:1'
+            'fvonprem/arm-waveform-service:prod'
 
     @pytest.mark.unit
     def test_ocr_keeps_the_tag_its_install_script_used(self):
@@ -57,7 +58,7 @@ class TestRunArgv:
         addon = registry.get('anomaly_audio')
         argv = runtime.build_run_argv(addon, 'img')
 
-        assert argv[:5] == ['docker', 'run', '-d', '--name', 'audio-anomaly']
+        assert argv[:5] == ['docker', 'run', '-d', '--name', 'waveform']
         assert '--restart' in argv and 'unless-stopped' in argv
         assert argv[argv.index('--network') + 1] == 'host'
         assert argv[argv.index('--gpus') + 1] == 'device=0'
@@ -174,8 +175,8 @@ class TestTeardown:
         runtime.teardown('anomaly_audio')
 
         assert [c[0][0] for c in docker.call_args_list] == [
-            ['docker', 'stop', 'audio-anomaly'],
-            ['docker', 'rm', 'audio-anomaly'],
+            ['docker', 'stop', 'waveform'],
+            ['docker', 'rm', 'waveform'],
         ]
 
     @pytest.mark.unit
@@ -219,3 +220,34 @@ class TestHealth:
         assert runtime.health('ftp') is True
         assert docker.call_args[0][0] == \
             ['systemctl', 'is-active', '--quiet', 'vsftpd']
+
+
+class TestEnvExpansion:
+    """Descriptor env may reference the site's cloud, not hardcode it."""
+
+    @pytest.mark.unit
+    def test_cloud_domain_comes_from_the_environment_first(self, monkeypatch):
+        monkeypatch.setenv('CLOUD_DOMAIN', 'https://clouddeploy.api.flexiblevision.com')
+        assert runtime.expand_env('${CLOUD_DOMAIN}') == \
+            'https://clouddeploy.api.flexiblevision.com'
+
+    @pytest.mark.unit
+    def test_falls_back_to_the_site_config(self, monkeypatch):
+        monkeypatch.delenv('CLOUD_DOMAIN', raising=False)
+        monkeypatch.setattr(runtime, 'site_config',
+                            lambda: {'cloud_domain': 'https://site.example'})
+        assert runtime.expand_env('${CLOUD_DOMAIN}') == 'https://site.example'
+
+    @pytest.mark.unit
+    def test_unresolvable_refuses_rather_than_shipping_an_empty_value(self, monkeypatch):
+        # An empty CLOUD_DOMAIN would let the addon start and then fail every
+        # cloud call at runtime, which is far harder to diagnose than a refusal.
+        monkeypatch.delenv('CLOUD_DOMAIN', raising=False)
+        monkeypatch.setattr(runtime, 'site_config', lambda: {})
+        with pytest.raises(runtime.DeployError):
+            runtime.expand_env('${CLOUD_DOMAIN}')
+
+    @pytest.mark.unit
+    def test_values_without_a_token_pass_through(self, monkeypatch):
+        assert runtime.expand_env('mongodb://172.17.0.1:27017/') == \
+            'mongodb://172.17.0.1:27017/'

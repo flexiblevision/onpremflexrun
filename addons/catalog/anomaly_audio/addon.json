@@ -8,16 +8,17 @@
   "entitlement": "audio_anomaly",
   "kind": "container",
   "arches": ["x86", "arm"],
-  "component": "audio-anomaly",
+  "component": "waveform-service",
   "source": "https://github.com/flexiblevision/audio_anomaly",
   "container": {
-    "name": "audio-anomaly",
-    "default_tag": "1",
+    "name": "waveform",
+    "default_tag": "prod",
     "restart": "unless-stopped",
     "network": "host",
     "gpu": "optional",
     "env": {
-      "MONGO_URI": "mongodb://172.17.0.1:27017/"
+      "MONGO_URI": "mongodb://172.17.0.1:27017/",
+      "CLOUD_DOMAIN": "${CLOUD_DOMAIN}"
     },
     "volumes": [
       {

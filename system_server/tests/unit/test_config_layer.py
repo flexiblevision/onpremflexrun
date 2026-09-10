@@ -206,6 +206,50 @@ class TestGenerateEnvironmentConfig:
         assert config['release_channel'] == 'beta'
 
 
+class TestTrackSettings:
+    """What a runtime override has to write to move a device between tracks."""
+
+    def _management(self, home):
+        return _load_real('_real_management', 'setup/management.py')
+
+    @pytest.mark.unit
+    def test_the_dev_track_carries_the_channel_and_the_ref_with_the_cloud(self, home):
+        management = self._management(home)
+
+        assert management.track_settings('dev') == {
+            'cloud_domain': 'https://clouddeploy.api.flexiblevision.com',
+            'gcp_functions_domain': 'https://functions-proxy.flexiblevision.com/',
+            'latest_stable_ref': 'latest_stable_version_check_dev',
+            'release_channel': 'beta',
+        }
+
+    @pytest.mark.unit
+    def test_the_prod_track_resolves_to_the_production_cloud(self, home):
+        # prod names no cloud_domain of its own, so it has to come from the
+        # base profile - an override that omitted it would leave a switched
+        # device on clouddeploy while claiming to be on prod.
+        management = self._management(home)
+        settings = management.track_settings('prod')
+
+        assert settings['cloud_domain'] == 'https://v1.cloud.flexiblevision.com'
+        assert settings['release_channel'] == 'stable'
+        assert settings['latest_stable_ref'] == 'latest_stable_version'
+
+    @pytest.mark.unit
+    def test_a_cluster_site_resolves_against_the_local_profile(self, home):
+        management = self._management(home)
+
+        assert management.track_settings('dev', 'local')['gcp_functions_domain'] == \
+            'http://localhost/api/capture/functions/'
+
+    @pytest.mark.unit
+    def test_an_unknown_track_is_refused(self, home):
+        management = self._management(home)
+
+        with pytest.raises(ValueError):
+            management.track_settings('nightly')
+
+
 class TestManagementUpdateConfig:
     @pytest.mark.unit
     def test_writes_over_an_existing_config(self, home):
@@ -276,8 +320,35 @@ class TestSettingsModule:
 @pytest.fixture(autouse=True)
 def reset_cloud_env_cache():
     cloud_env._utils_coll = None
+    cloud_env.reset_cache()
     yield
     cloud_env._utils_coll = None
+    cloud_env.reset_cache()
+
+
+@pytest.fixture
+def dev_device(home, monkeypatch):
+    """A device on the dev track, with the override collection stubbed.
+
+    Returns the collection so a test can say what is stored and assert on
+    what was written.
+    """
+    monkeypatch.delenv('CLOUD_DOMAIN', raising=False)
+    monkeypatch.delenv('GCP_FUNCTIONS_DOMAIN', raising=False)
+    (home / 'fvconfig.json').write_text(json.dumps({
+        'environ': 'cloud',
+        'release_track': 'dev',
+        'cloud_domain': 'https://from-the-file',
+        'gcp_functions_domain': 'https://functions-from-the-file/',
+    }))
+    coll = MagicMock()
+    coll.find_one.return_value = None
+    cloud_env._utils_coll = coll
+    return coll
+
+
+def stored(**config):
+    return {'type': cloud_env.OVERRIDE_TYPE, 'config': config}
 
 
 class TestLocalConfig:
@@ -425,6 +496,369 @@ class TestGetCloudFunctionsBase:
 
         assert cloud_env.get_cloud_functions_base() == \
             'http://master/api/capture/functions/'
+
+
+class TestOverrideAllowed:
+    """Who may be repointed at another cloud at runtime.
+
+    Not prod: cloud_domain travels with the channel and the version ref that
+    decide where signed releases come from, and mongo on 172.17.0.1 takes no
+    credentials.
+    """
+
+    @pytest.mark.unit
+    def test_a_dev_device_is_opted_in_by_its_track(self, home):
+        (home / 'fvconfig.json').write_text(
+            json.dumps({'environ': 'cloud', 'release_track': 'dev'}))
+
+        assert cloud_env.override_allowed() is True
+
+    @pytest.mark.unit
+    def test_a_prod_device_is_not(self, home):
+        (home / 'fvconfig.json').write_text(
+            json.dumps({'environ': 'cloud', 'release_track': 'prod'}))
+
+        assert cloud_env.override_allowed() is False
+
+    @pytest.mark.unit
+    def test_a_device_from_before_tracks_existed_is_not(self, home):
+        (home / 'fvconfig.json').write_text(json.dumps({'environ': 'cloud'}))
+
+        assert cloud_env.override_allowed() is False
+
+    @pytest.mark.unit
+    def test_a_device_can_be_opted_in_explicitly(self, home):
+        (home / 'fvconfig.json').write_text(json.dumps(
+            {'environ': 'cloud', 'release_track': 'prod',
+             'allow_runtime_override': True}))
+
+        assert cloud_env.override_allowed() is True
+
+
+class TestReadOverride:
+    @pytest.mark.unit
+    def test_a_prod_device_does_not_even_ask(self, home):
+        # The gate closes before the round trip: every device in the fleet
+        # would otherwise pay for a switch only dev devices can make.
+        (home / 'fvconfig.json').write_text(json.dumps({'environ': 'cloud'}))
+        coll = MagicMock()
+        cloud_env._utils_coll = coll
+
+        assert cloud_env.read_override() == {}
+        coll.find_one.assert_not_called()
+
+    @pytest.mark.unit
+    def test_a_dev_device_reads_what_is_stored(self, dev_device):
+        dev_device.find_one.return_value = stored(
+            cloud_domain='https://clouddeploy.api.flexiblevision.com',
+            release_channel='beta')
+
+        assert cloud_env.read_override() == {
+            'cloud_domain': 'https://clouddeploy.api.flexiblevision.com',
+            'release_channel': 'beta'}
+
+    @pytest.mark.unit
+    def test_keys_that_are_not_ours_are_dropped(self, dev_device):
+        dev_device.find_one.return_value = stored(
+            cloud_domain='https://elsewhere', auth0_domain='https://evil')
+
+        assert cloud_env.read_override() == {'cloud_domain': 'https://elsewhere'}
+
+    @pytest.mark.unit
+    def test_an_unrecognised_channel_is_dropped(self, dev_device):
+        # Not honoured and not an error: the rest of the record still applies,
+        # and the channel falls back to what the config says.
+        dev_device.find_one.return_value = stored(release_channel='nightly')
+
+        assert cloud_env.read_override() == {}
+
+    @pytest.mark.unit
+    def test_a_non_string_value_is_dropped(self, dev_device):
+        dev_device.find_one.return_value = stored(cloud_domain=['a', 'list'])
+
+        assert cloud_env.read_override() == {}
+
+    @pytest.mark.unit
+    def test_the_lookup_is_cached(self, dev_device):
+        # get_cloud_domain() is on the model download path; a find_one per
+        # call would put a round trip in front of every sync.
+        dev_device.find_one.return_value = stored(cloud_domain='https://a')
+
+        cloud_env.read_override()
+        cloud_env.read_override()
+
+        dev_device.find_one.assert_called_once()
+
+    @pytest.mark.unit
+    def test_an_unreachable_mongo_keeps_serving_the_last_value(
+            self, dev_device, monkeypatch):
+        monkeypatch.setattr(cloud_env, 'CACHE_TTL', 0)
+        dev_device.find_one.return_value = stored(cloud_domain='https://a')
+        assert cloud_env.read_override() == {'cloud_domain': 'https://a'}
+
+        dev_device.find_one.side_effect = Exception('no mongo')
+
+        # Not the file's domain: a blip must not repoint a device mid-sync.
+        assert cloud_env.read_override() == {'cloud_domain': 'https://a'}
+
+    @pytest.mark.unit
+    def test_an_unreachable_mongo_with_nothing_cached_is_no_override(self, dev_device):
+        dev_device.find_one.side_effect = Exception('no mongo')
+
+        assert cloud_env.read_override() == {}
+
+    @pytest.mark.unit
+    def test_an_unreachable_mongo_is_not_retried_on_every_call(self, dev_device):
+        # The connect timeout is 2s. Retrying per call would put it in front
+        # of every model download for as long as mongo is down.
+        dev_device.find_one.side_effect = Exception('no mongo')
+
+        cloud_env.read_override()
+        cloud_env.read_override()
+
+        dev_device.find_one.assert_called_once()
+
+
+class TestOverrideResolution:
+    @pytest.mark.unit
+    def test_the_override_beats_the_environment_and_the_file(
+            self, dev_device, monkeypatch):
+        monkeypatch.setenv('CLOUD_DOMAIN', 'https://from-the-environment')
+        dev_device.find_one.return_value = stored(
+            cloud_domain='https://from-the-override')
+
+        assert cloud_env.get_cloud_domain() == 'https://from-the-override'
+
+    @pytest.mark.unit
+    def test_the_environment_beats_what_the_caller_passed(self, dev_device, monkeypatch):
+        # What system_setup.sh injected at container start has to win over
+        # settings.config: inside a container that config is regenerated from
+        # the cloud profile, so it names production on a dev device.
+        monkeypatch.setenv('CLOUD_DOMAIN', 'https://from-the-environment')
+
+        assert cloud_env.get_cloud_domain('https://from-the-caller') == \
+            'https://from-the-environment'
+
+    @pytest.mark.unit
+    def test_what_the_caller_passed_beats_the_file(self, dev_device):
+        # settings.config, as the calling process read it. A caller that
+        # resolved the config for itself is not second-guessed.
+        assert cloud_env.get_cloud_domain('https://from-the-caller') == \
+            'https://from-the-caller'
+
+    @pytest.mark.unit
+    def test_the_file_is_the_bootstrap(self, dev_device):
+        assert cloud_env.get_cloud_domain() == 'https://from-the-file'
+
+    @pytest.mark.unit
+    def test_a_cluster_master_still_wins(self, home):
+        # The override moves which cloud a device talks to; in cluster mode
+        # there is no cloud, only the master on the LAN.
+        (home / 'fvconfig.json').write_text(json.dumps(
+            {'environ': 'local', 'release_track': 'dev',
+             'cloud_domain': 'http://stale'}))
+        coll = MagicMock()
+        coll.find_one.return_value = {'config': {'master_ip': '10.0.0.5'}}
+        cloud_env._utils_coll = coll
+
+        assert cloud_env.get_cloud_domain() == 'http://10.0.0.5'
+
+    @pytest.mark.unit
+    def test_the_functions_base_follows_the_override(self, dev_device):
+        dev_device.find_one.return_value = stored(
+            gcp_functions_domain='https://functions-from-the-override/')
+
+        assert cloud_env.get_cloud_functions_base() == \
+            'https://functions-from-the-override/'
+
+    @pytest.mark.unit
+    def test_the_functions_base_honours_what_the_caller_passed(self, dev_device):
+        assert cloud_env.get_cloud_functions_base('https://functions-from-the-caller/') == \
+            'https://functions-from-the-caller/'
+
+    @pytest.mark.unit
+    def test_the_functions_base_falls_back_to_the_file(self, dev_device):
+        assert cloud_env.get_cloud_functions_base() == \
+            'https://functions-from-the-file/'
+
+
+class TestGetReleaseChannel:
+    @pytest.mark.unit
+    def test_the_override_moves_the_channel(self, dev_device):
+        dev_device.find_one.return_value = stored(release_channel='beta')
+
+        assert cloud_env.get_release_channel('stable') == 'beta'
+
+    @pytest.mark.unit
+    def test_without_an_override_the_configured_channel_stands(self, dev_device):
+        assert cloud_env.get_release_channel('beta') == 'beta'
+
+    @pytest.mark.unit
+    def test_an_unrecognised_fallback_is_stable(self, dev_device):
+        assert cloud_env.get_release_channel('nightly') == 'stable'
+
+    @pytest.mark.unit
+    def test_the_stable_ref_follows_the_override(self, dev_device):
+        dev_device.find_one.return_value = stored(
+            latest_stable_ref='latest_stable_version_check_dev')
+
+        assert cloud_env.get_latest_stable_ref() == \
+            'latest_stable_version_check_dev'
+
+
+class TestSetOverride:
+    @pytest.mark.unit
+    def test_a_prod_device_refuses_rather_than_writing_a_dead_record(self, home):
+        (home / 'fvconfig.json').write_text(
+            json.dumps({'environ': 'cloud', 'release_track': 'prod'}))
+        coll = MagicMock()
+        cloud_env._utils_coll = coll
+
+        with pytest.raises(cloud_env.CloudEnvError):
+            cloud_env.set_override({'release_channel': 'beta'})
+
+        coll.update_one.assert_not_called()
+
+    @pytest.mark.unit
+    def test_an_unknown_key_is_refused(self, dev_device):
+        with pytest.raises(cloud_env.CloudEnvError):
+            cloud_env.set_override({'clowd_domain': 'https://typo'})
+
+    @pytest.mark.unit
+    def test_an_unrecognised_channel_is_refused(self, dev_device):
+        with pytest.raises(cloud_env.CloudEnvError):
+            cloud_env.set_override({'release_channel': 'nightly'})
+
+    @pytest.mark.unit
+    def test_a_domain_without_a_scheme_is_refused(self, dev_device):
+        # 'clouddeploy.api.flexiblevision.com' concatenated onto a path makes
+        # a request that fails everywhere it is used.
+        with pytest.raises(cloud_env.CloudEnvError):
+            cloud_env.set_override(
+                {'cloud_domain': 'clouddeploy.api.flexiblevision.com'})
+
+    @pytest.mark.unit
+    def test_it_merges_with_what_is_already_stored(self, dev_device):
+        dev_device.find_one.return_value = stored(cloud_domain='https://a')
+
+        merged = cloud_env.set_override({'release_channel': 'beta'})
+
+        assert merged == {'cloud_domain': 'https://a', 'release_channel': 'beta'}
+        written = dev_device.update_one.call_args
+        assert written[0][0] == {'type': cloud_env.OVERRIDE_TYPE}
+        assert written[0][1]['$set']['config'] == merged
+        assert written[1]['upsert'] is True
+
+    @pytest.mark.unit
+    def test_the_switch_takes_effect_without_waiting_out_the_cache(self, dev_device):
+        assert cloud_env.get_cloud_domain() == 'https://from-the-file'
+
+        cloud_env.set_override({'cloud_domain': 'https://switched'})
+        dev_device.find_one.return_value = stored(cloud_domain='https://switched')
+
+        assert cloud_env.get_cloud_domain() == 'https://switched'
+
+    @pytest.mark.unit
+    def test_clearing_drops_the_record(self, dev_device):
+        cloud_env.clear_override()
+
+        dev_device.delete_one.assert_called_once_with(
+            {'type': cloud_env.OVERRIDE_TYPE})
+
+    @pytest.mark.unit
+    def test_clearing_is_allowed_even_where_setting_is_not(self, home):
+        # Putting a device back on the config it was installed with is always
+        # available: the guard exists to stop a device drifting off its track,
+        # not to trap one that already has.
+        (home / 'fvconfig.json').write_text(
+            json.dumps({'environ': 'cloud', 'release_track': 'prod'}))
+        coll = MagicMock()
+        cloud_env._utils_coll = coll
+
+        cloud_env.clear_override()
+
+        coll.delete_one.assert_called_once()
+
+
+@pytest.fixture
+def real_management(dev_device, monkeypatch):
+    """The real setup.management, past the session-wide conftest stub.
+
+    track_override() resolves a track through it, so a CLI test against the
+    stub would assert nothing about the values a switch actually writes.
+    """
+    management = _load_real('_real_management', 'setup/management.py')
+    monkeypatch.setitem(sys.modules, 'setup.management', management)
+    return management
+
+
+class TestCli:
+    """The interface that actually gets typed on a device."""
+
+    @pytest.mark.unit
+    def test_show_reports_the_resolution(self, dev_device, capsys):
+        dev_device.find_one.return_value = stored(release_channel='beta')
+
+        assert cloud_env.main(['show']) == 0
+
+        out = capsys.readouterr().out
+        assert 'release_track:        dev' in out
+        assert 'override honoured:    yes' in out
+        assert 'https://from-the-file' in out
+        assert 'beta' in out
+
+    @pytest.mark.unit
+    def test_setting_writes_the_pairs(self, dev_device, capsys):
+        assert cloud_env.main(['set', 'release_channel=beta']) == 0
+
+        assert dev_device.update_one.call_args[0][1]['$set']['config'] == \
+            {'release_channel': 'beta'}
+
+    @pytest.mark.unit
+    def test_a_track_writes_the_whole_set(self, real_management, dev_device):
+        assert cloud_env.main(['track', 'dev']) == 0
+
+        assert dev_device.update_one.call_args[0][1]['$set']['config'] == {
+            'cloud_domain': 'https://clouddeploy.api.flexiblevision.com',
+            'gcp_functions_domain': 'https://functions-proxy.flexiblevision.com/',
+            'latest_stable_ref': 'latest_stable_version_check_dev',
+            'release_channel': 'beta',
+        }
+
+    @pytest.mark.unit
+    def test_a_refusal_is_reported_and_writes_nothing(self, home, capsys):
+        (home / 'fvconfig.json').write_text(
+            json.dumps({'environ': 'cloud', 'release_track': 'prod'}))
+        coll = MagicMock()
+        cloud_env._utils_coll = coll
+
+        assert cloud_env.main(['track', 'dev']) == 1
+
+        assert 'prod' in capsys.readouterr().err
+        coll.update_one.assert_not_called()
+
+    @pytest.mark.unit
+    @pytest.mark.parametrize('argv', [
+        [],
+        ['bogus'],
+        ['track'],
+        ['track', 'dev', 'extra'],
+        ['set'],
+        ['set', 'no-equals-sign'],
+    ])
+    def test_unusable_arguments_print_the_usage(self, dev_device, argv, capsys):
+        assert cloud_env.main(argv) == 2
+
+        assert 'usage: cloud_env.py' in capsys.readouterr().out
+        dev_device.update_one.assert_not_called()
+
+    @pytest.mark.unit
+    def test_an_unknown_track_is_reported_not_raised(
+            self, real_management, dev_device, capsys):
+        assert cloud_env.main(['track', 'nightly']) == 1
+
+        assert 'nightly' in capsys.readouterr().err
+        dev_device.update_one.assert_not_called()
 
 
 # --------------------------------------------------------------------------

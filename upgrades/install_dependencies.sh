@@ -33,3 +33,10 @@ if pip3 install --help 2>/dev/null | grep -q -- --break-system-packages; then
 else
     pip3 install --ignore-installed -r "$REQUIREMENTS"
 fi
+
+# --ignore-installed skips the uninstall, so a pin that moves a package
+# backwards writes over the newer version without removing it and leaves a
+# compiled module behind that shadows the .py replacing it. Nothing here
+# imports requests, so the break would surface later as every service on the
+# device failing to start.
+python3 "$HOME/flex-run/deploy.py" --repair-deps

@@ -53,7 +53,7 @@ class TestShippedCatalog:
     def test_the_release_components_are_the_container_addons(self):
         # This is what build_release.py should populate features= from.
         assert registry.components() == {
-            'anomaly_audio': 'audio-anomaly',
+            'anomaly_audio': 'waveform-service',
             'assembly': 'assembly-client',
             'ocr': 'ocr',
         }

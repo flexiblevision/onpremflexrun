@@ -44,52 +44,111 @@ class Restart(Resource):
         print('restarting system')
         os.system("reboot")
 
+VISION_API = 'http://172.17.0.1:5555/api/vision/vision'
+# The endpoint system_setup.sh smoke-tests capdev on: it answers only once
+# gunicorn is serving, which is what a caller means by "capdev is back".
+CAPDEV_READY_URL = 'http://172.17.0.1:5000/api/capture/auth/jwks'
+
+
+def _wait_for_cameras(max_wait=120, poll_interval=5):
+    """Poll vision until it reports cameras. True if they turned up.
+
+    A single poll can block for its whole timeout - listCameras runs
+    synchronously on the first /cameras call - so the time it spent counts
+    against the budget. Charging only poll_interval turned this 120s wait into
+    24 * 35s of capdev downtime whenever vision was slow to answer.
+    """
+    import requests
+
+    elapsed = 0
+    while elapsed < max_wait:
+        time.sleep(poll_interval)
+        started = time.monotonic()
+        try:
+            resp = requests.get(VISION_API + '/cameras', timeout=30)
+            if resp.status_code == 200:
+                cameras = resp.json()
+                if len(cameras) > 0:
+                    print('vision: {} cameras discovered and connected ({}s)'.format(
+                        len(cameras), int(elapsed)))
+                    return True
+        except Exception:
+            print('waiting for vision... ({}s)'.format(int(elapsed)))
+        elapsed += poll_interval + (time.monotonic() - started)
+
+    return False
+
+
+def _wait_for_capdev(max_wait=90, poll_interval=5):
+    """True once capdev is answering again."""
+    import requests
+
+    elapsed = 0
+    while elapsed < max_wait:
+        started = time.monotonic()
+        try:
+            if requests.get(CAPDEV_READY_URL, timeout=10).status_code == 200:
+                print('capdev is answering ({}s)'.format(int(elapsed)))
+                return True
+        except Exception:
+            pass
+        elapsed += poll_interval + (time.monotonic() - started)
+        if elapsed < max_wait:
+            time.sleep(poll_interval)
+
+    print('warning: capdev did not answer after being started')
+    return False
+
+
+def _start_capdev(attempts=3, retry_delay=2):
+    """Start capdev, retrying, then confirm it is serving.
+
+    A failed start does not heal on its own: capdev was stopped by hand, and
+    unless-stopped will not bring back a container stopped that way - not in
+    the background, and not across a reboot. Leaving the exit status unchecked
+    is what turned one bad start into a device that stays dark.
+    """
+    for attempt in range(1, attempts + 1):
+        print('starting capdev (attempt {}/{})...'.format(attempt, attempts))
+        if os.system("docker start capdev") == 0:
+            return _wait_for_capdev()
+        print('docker start capdev failed')
+        time.sleep(retry_delay)
+
+    return False
+
+
 class RestartBackend(Resource):
     @auth.requires_auth
     def get(self):
-        import time
         import requests
 
-        vision_base = 'http://172.17.0.1:5555'
-        vision_api = vision_base + '/api/vision/vision'
-
+        # capdev stays down for the whole vision restart. It holds camera
+        # streams open against vision and none of its calls into vision carry
+        # a timeout, so a capdev left running while vision goes away hangs
+        # every one of its 8 gunicorn threads and never answers again. Only
+        # bracketing the restart - stop, then start - keeps it out of that.
         print('stopping capdev to release camera locks...')
-        os.system("docker restart capdev")
+        os.system("docker stop capdev")
 
-        # Release cameras and restart vision
-        try:
-            requests.get(vision_api + '/releaseAll', timeout=5)
-        except Exception as e:
-            print('releaseAll:', e)
-
-        print('restarting vision...')
-        os.system("docker restart vision")
-
-        # Wait for vision to finish camera discovery (listCameras runs synchronously on first /cameras call)
-        max_wait = 120
-        poll_interval = 5
-        elapsed = 0
         cameras_ready = False
-
-        while elapsed < max_wait:
-            time.sleep(poll_interval)
-            elapsed += poll_interval
+        try:
             try:
-                resp = requests.get(vision_api + '/cameras', timeout=30)
-                if resp.status_code == 200:
-                    cameras = resp.json()
-                    if len(cameras) > 0:
-                        print(f'vision: {len(cameras)} cameras discovered and connected ({elapsed}s)')
-                        cameras_ready = True
-                        break
+                requests.get(VISION_API + '/releaseAll', timeout=5)
             except Exception as e:
-                print(f'waiting for vision... ({elapsed}s)')
+                print('releaseAll:', e)
 
-        if not cameras_ready:
-            print('warning: vision not ready, starting capdev anyway')
+            print('restarting vision...')
+            os.system("docker restart vision")
 
-        print('starting capdev...')
-        os.system("docker start capdev")
+            cameras_ready = _wait_for_cameras()
+            if not cameras_ready:
+                print('warning: vision not ready, starting capdev anyway')
+        finally:
+            # However the vision half went, capdev is never left stopped.
+            capdev_ready = _start_capdev()
+
+        return {'cameras_ready': cameras_ready, 'capdev_ready': capdev_ready}
 
 class ListServices(Resource):
     def get(self):

@@ -352,18 +352,25 @@ DEFAULT_CHANNEL = 'stable'
 
 
 def _device_channel():
-    """Which release channel this device follows, from its own fvconfig.
+    """Which release channel this device follows.
 
-    Set at install time by deploy.py. Anything unreadable or unrecognised is
-    stable: a device must never end up on beta because its config was
-    malformed.
+    Its fvconfig, written at install time by deploy.py, then the mongo
+    override on a dev device that has been repointed since. Anything
+    unreadable or unrecognised is stable: a device must never end up on beta
+    because its config was malformed.
     """
     try:
         import settings
         channel = settings.config.get('release_channel')
     except Exception:
-        return DEFAULT_CHANNEL
-    return channel if channel in ('stable', 'beta') else DEFAULT_CHANNEL
+        channel = None
+    configured = channel if channel in ('stable', 'beta') else DEFAULT_CHANNEL
+
+    try:
+        import cloud_env
+        return cloud_env.get_release_channel(configured)
+    except Exception:
+        return configured
 
 
 def _legacy_versions():

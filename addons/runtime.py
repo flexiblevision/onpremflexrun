@@ -7,6 +7,7 @@ Image references go through resolve_reference(): today repo:tag, as the install
 scripts did, but the seam takes a pinned digest so the upgrade path can hand in
 what release/manifest.py:pinned_reference() produces.
 """
+import json
 import os
 import subprocess
 
@@ -25,6 +26,57 @@ PULL_TIMEOUT = 900
 
 class DeployError(Exception):
     """Raised when a deploy or teardown cannot be carried out."""
+
+
+def site_config():
+    try:
+        with open(os.path.join(os.path.expanduser('~'), 'fvconfig.json')) as handle:
+            return json.load(handle)
+    except Exception:
+        return {}
+
+
+def _cloud_domain_override():
+    try:
+        import cloud_env
+        return cloud_env.read_override().get('cloud_domain')
+    except Exception:
+        return None
+
+
+def _cloud_domain():
+    # The mongo override first, so an addon deployed after a device switched
+    # cloud lands on the one it is now pointed at rather than the one its
+    # containers were started with.
+    #
+    # Then $CLOUD_DOMAIN and the config, the way system_setup.sh reads it for
+    # capdev. cloud_env.get_cloud_domain() is not used for those two because
+    # its fallback hands back the public default, and a site with no cloud
+    # configured has to refuse in expand_env rather than talk to production.
+    return (_cloud_domain_override()
+            or os.environ.get('CLOUD_DOMAIN')
+            or site_config().get('cloud_domain')
+            or '')
+
+
+# Descriptor env values may reference these rather than hardcoding a domain
+# into a catalog file shared by every site.
+ENV_TOKENS = {'CLOUD_DOMAIN': _cloud_domain}
+
+
+def expand_env(value):
+    text = str(value)
+    for name, resolve in ENV_TOKENS.items():
+        token = '${' + name + '}'
+        if token in text:
+            resolved = resolve()
+            if not resolved:
+                raise DeployError(
+                    '{} is referenced by an addon but could not be resolved '
+                    '(no CLOUD_DOMAIN in the environment and no cloud_domain '
+                    'in ~/fvconfig.json)'.format(token))
+            text = text.replace(token, resolved)
+    return text
 
 
 def system_arch(uname=None):
@@ -69,7 +121,7 @@ def build_run_argv(addon, image, gpu=True):
         argv += ['-p', '{}:{}'.format(port['host'], port['container'])]
 
     for key in sorted(container.get('env') or {}):
-        argv += ['-e', '{}={}'.format(key, container['env'][key])]
+        argv += ['-e', '{}={}'.format(key, expand_env(container['env'][key]))]
 
     for volume in container.get('volumes') or []:
         mount = '{}:{}'.format(volume['host'], volume['container'])

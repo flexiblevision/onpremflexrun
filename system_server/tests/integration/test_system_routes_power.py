@@ -5,6 +5,8 @@ These are the endpoints that take a factory-floor machine off the line:
 locks, /upgrade_flex_run replaces the code this very server is running from.
 Each one is one HTTP call away from a caller who guessed the URL.
 """
+import itertools
+
 import pytest
 from testsupport import thread_aware_sleep_mock
 from unittest.mock import patch, MagicMock, call
@@ -70,31 +72,68 @@ class TestRestart:
         system.assert_not_called()
 
 
+def _resp(status=200, payload=None):
+    r = MagicMock(status_code=status)
+    r.json.return_value = [] if payload is None else payload
+    return r
+
+
+def _routed_get(cameras, release=None, capdev=None):
+    """A requests.get double that answers by URL.
+
+    Each of cameras/release/capdev is a response or an exception to raise;
+    cameras may also be a list handed out in turn, the last one repeating.
+    capdev defaults to healthy so a test can assert on the vision budget
+    without the capdev readiness poll contributing sleeps of its own.
+    """
+    release = _resp(200) if release is None else release
+    capdev = _resp(200) if capdev is None else capdev
+    queue = list(cameras) if isinstance(cameras, list) else None
+
+    def answer(value):
+        if isinstance(value, Exception):
+            raise value
+        return value
+
+    def get(url, **kw):
+        if '/auth/jwks' in url:
+            return answer(capdev)
+        if url.endswith('/releaseAll'):
+            return answer(release)
+        if queue:
+            return answer(queue.pop(0) if len(queue) > 1 else queue[0])
+        return answer(cameras)
+
+    return get
+
+
 class TestRestartBackend:
-    """capdev is stopped, cameras released, vision restarted, capdev started."""
+    """capdev is stopped, cameras released, vision restarted, capdev started.
+
+    capdev stays down for the whole vision restart on purpose. Its calls into
+    vision carry no timeout, so a capdev left running while vision goes away
+    hangs every gunicorn thread it has and never answers again.
+    """
 
     @pytest.mark.integration
-    def test_restarts_capdev_and_vision_in_order(self, client, no_sleep):
-        ready = MagicMock(status_code=200)
-        ready.json.return_value = [{'id': 'cam0'}]
-
-        with patch('os.system') as system, \
-             patch('requests.get', return_value=ready):
+    def test_stops_capdev_for_the_whole_vision_restart(self, client, no_sleep):
+        with patch('os.system', return_value=0) as system, \
+             patch('requests.get', side_effect=_routed_get(_resp(200, [{'id': 'cam0'}]))):
             response = client.get('/refresh_backend')
 
         assert response.status_code == 200
         assert system.call_args_list == [
-            call('docker restart capdev'),
+            call('docker stop capdev'),
             call('docker restart vision'),
             call('docker start capdev'),
         ]
+        assert response.get_json() == {'cameras_ready': True, 'capdev_ready': True}
 
     @pytest.mark.integration
     def test_releases_camera_locks_before_restarting_vision(self, client, no_sleep):
-        ready = MagicMock(status_code=200)
-        ready.json.return_value = [{'id': 'cam0'}]
-
-        with patch('os.system'), patch('requests.get', return_value=ready) as get:
+        with patch('os.system', return_value=0), \
+             patch('requests.get',
+                   side_effect=_routed_get(_resp(200, [{'id': 'cam0'}]))) as get:
             client.get('/refresh_backend')
 
         assert get.call_args_list[0][0][0].endswith('/releaseAll')
@@ -103,15 +142,10 @@ class TestRestartBackend:
     def test_starts_capdev_even_when_release_all_fails(self, client, no_sleep):
         # A vision container that is already down must not strand capdev in the
         # stopped state.
-        ready = MagicMock(status_code=200)
-        ready.json.return_value = [{'id': 'cam0'}]
-
-        def get(url, **kw):
-            if url.endswith('/releaseAll'):
-                raise ConnectionError('vision is down')
-            return ready
-
-        with patch('os.system') as system, patch('requests.get', side_effect=get):
+        with patch('os.system', return_value=0) as system, \
+             patch('requests.get',
+                   side_effect=_routed_get(_resp(200, [{'id': 'cam0'}]),
+                                           release=ConnectionError('vision is down'))):
             response = client.get('/refresh_backend')
 
         assert response.status_code == 200
@@ -119,36 +153,50 @@ class TestRestartBackend:
 
     @pytest.mark.integration
     def test_stops_polling_as_soon_as_cameras_appear(self, client, no_sleep):
-        empty = MagicMock(status_code=200)
-        empty.json.return_value = []
-        found = MagicMock(status_code=200)
-        found.json.return_value = [{'id': 'cam0'}, {'id': 'cam1'}]
-        responses = [MagicMock(status_code=200), empty, empty, found]
+        found = _resp(200, [{'id': 'cam0'}, {'id': 'cam1'}])
 
-        with patch('os.system'), patch('requests.get', side_effect=responses):
+        with patch('os.system', return_value=0), \
+             patch('requests.get',
+                   side_effect=_routed_get([_resp(200), _resp(200), found])):
             client.get('/refresh_backend')
 
-        # releaseAll + three /cameras polls, then it stops rather than
-        # burning the full 120s budget.
+        # Three /cameras polls, then it stops rather than burning the full
+        # 120s budget.
         assert no_sleep.call_count == 3
 
     @pytest.mark.integration
     def test_gives_up_after_the_timeout_and_starts_capdev_anyway(self, client, no_sleep):
-        empty = MagicMock(status_code=200)
-        empty.json.return_value = []
-
-        with patch('os.system') as system, patch('requests.get', return_value=empty):
+        with patch('os.system', return_value=0) as system, \
+             patch('requests.get', side_effect=_routed_get(_resp(200))):
             response = client.get('/refresh_backend')
 
         assert response.status_code == 200
         # 120s budget on a 5s interval.
         assert no_sleep.call_count == 24
         assert system.call_args_list[-1] == call('docker start capdev')
+        assert response.get_json()['cameras_ready'] is False
+
+    @pytest.mark.integration
+    def test_a_slow_poll_is_charged_against_the_budget(self, client, no_sleep):
+        # listCameras runs synchronously on the first /cameras call, so a poll
+        # can block for its full 30s timeout. Charging only the 5s interval
+        # made the 120s budget 24 * 35s of capdev downtime instead.
+        clock = itertools.count(0, 30)
+
+        with patch('os.system', return_value=0), \
+             patch('time.monotonic', side_effect=lambda: next(clock)), \
+             patch('requests.get', side_effect=_routed_get(_resp(200))):
+            client.get('/refresh_backend')
+
+        # 35s consumed per poll, so four of them exhaust the budget.
+        assert no_sleep.call_count == 4
 
     @pytest.mark.integration
     def test_unreachable_vision_does_not_abort_the_restart(self, client, no_sleep):
-        with patch('os.system') as system, \
-             patch('requests.get', side_effect=ConnectionError('refused')):
+        with patch('os.system', return_value=0) as system, \
+             patch('requests.get',
+                   side_effect=_routed_get(ConnectionError('refused'),
+                                           release=ConnectionError('refused'))):
             response = client.get('/refresh_backend')
 
         assert response.status_code == 200
@@ -156,10 +204,52 @@ class TestRestartBackend:
 
     @pytest.mark.integration
     def test_non_200_from_cameras_keeps_polling(self, client, no_sleep):
-        with patch('os.system'), patch('requests.get', return_value=MagicMock(status_code=503)):
+        with patch('os.system', return_value=0), \
+             patch('requests.get', side_effect=_routed_get(_resp(503))):
             client.get('/refresh_backend')
 
         assert no_sleep.call_count == 24
+
+    @pytest.mark.integration
+    def test_a_failed_start_is_retried(self, client, no_sleep):
+        # capdev was stopped by hand, so unless-stopped will not bring it back
+        # on its own - not in the background, and not across a reboot. An
+        # unchecked start is what leaves a device dark.
+        def system(cmd):
+            return 1 if cmd == 'docker start capdev' else 0
+
+        with patch('os.system', side_effect=system) as sysmock, \
+             patch('requests.get', side_effect=_routed_get(_resp(200, [{'id': 'cam0'}]))):
+            response = client.get('/refresh_backend')
+
+        assert sysmock.call_args_list.count(call('docker start capdev')) == 3
+        assert response.get_json()['capdev_ready'] is False
+
+    @pytest.mark.integration
+    def test_reports_a_capdev_that_starts_but_never_answers(self, client, no_sleep):
+        with patch('os.system', return_value=0), \
+             patch('requests.get',
+                   side_effect=_routed_get(_resp(200, [{'id': 'cam0'}]),
+                                           capdev=ConnectionError('refused'))):
+            response = client.get('/refresh_backend')
+
+        assert response.get_json() == {'cameras_ready': True, 'capdev_ready': False}
+
+    @pytest.mark.integration
+    def test_capdev_is_started_even_when_the_vision_phase_blows_up(self, client, no_sleep):
+        def system(cmd):
+            if cmd == 'docker restart vision':
+                raise RuntimeError('docker daemon gone')
+            return 0
+
+        with patch('os.system', side_effect=system) as sysmock, \
+             patch('requests.get', side_effect=_routed_get(_resp(200, [{'id': 'cam0'}]))):
+            try:
+                client.get('/refresh_backend')
+            except RuntimeError:
+                pass
+
+        assert call('docker start capdev') in sysmock.call_args_list
 
 
 class TestUpgradeFlexRun:

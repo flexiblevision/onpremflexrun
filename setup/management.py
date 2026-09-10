@@ -57,6 +57,24 @@ RELEASE_TRACKS = {
 }
 
 
+# What a track means once it is resolved against the base config, which is
+# what a runtime override has to write: cloud_domain alone would leave the
+# device fetching releases from the channel and ref of the track it left.
+TRACK_SETTINGS_KEYS = ('cloud_domain', 'gcp_functions_domain',
+                       'latest_stable_ref', 'release_channel')
+
+
+def track_settings(release_track, environment='cloud'):
+    if release_track not in RELEASE_TRACKS:
+        raise ValueError(
+            'unknown release track {!r} - expected one of {}'.format(
+                release_track, ', '.join(sorted(RELEASE_TRACKS))))
+
+    merged = dict(LOCAL if environment == 'local' else CLOUD)
+    merged.update(RELEASE_TRACKS[release_track])
+    return {key: merged[key] for key in TRACK_SETTINGS_KEYS if key in merged}
+
+
 def generate_environment_config(environment='cloud', override=False,
                                 release_track='prod'):
     config = dict(CLOUD)

@@ -794,6 +794,86 @@ class TestEnsurePythonDeps:
         assert 'CharInfo' in out
         assert 'dist-info' in out
 
+    @pytest.mark.unit
+    def test_it_purges_and_reinstalls_a_two_version_package(self, tmp_path):
+        """The device failure: pip reports the pin satisfied and installs
+        nothing, so the leftover .so survives until the files are removed."""
+        site_dir = tmp_path / 'dist-packages'
+        (site_dir / 'charset_normalizer').mkdir(parents=True)
+        (site_dir / 'charset_normalizer-3.5.1.dist-info').mkdir()
+        trace = ('  File "{}/charset_normalizer/api.py", line 5\n'
+                 "AttributeError: module 'charset_normalizer.md' has no "
+                 "attribute 'CharInfo'\n").format(site_dir)
+
+        with patch.object(deploy, 'probe_python_deps',
+                          side_effect=[(False, 'CharInfo'), (False, 'CharInfo'),
+                                       (True, '')]), \
+             patch.object(deploy, '_probe_stderr', return_value=(False, trace)), \
+             patch.object(deploy, '_pip_site_dirs', return_value=[str(site_dir)]), \
+             patch.object(deploy, 'ensure_pip', return_value=True), \
+             patch.object(deploy, 'pip_argv', return_value=['pip', 'install']), \
+             patch.object(deploy.os, 'geteuid', return_value=0), \
+             patch.object(deploy.subprocess, 'call', return_value=0) as call_:
+            assert deploy.ensure_python_deps() == 0
+
+        removes = [c for c in call_.call_args_list if c[0][0][0] == 'rm']
+        removed = {c[0][0][-1] for c in removes}
+        assert str(site_dir / 'charset_normalizer') in removed
+        assert str(site_dir / 'charset_normalizer-3.5.1.dist-info') in removed
+        # and then installed again, or the device is left with no package at all
+        assert call_.call_args_list[-1][0][0] == ['pip', 'install', '-r',
+                                                  deploy.REQUIREMENTS]
+
+
+class TestBrokenPackages:
+    @pytest.mark.unit
+    def test_it_names_the_packages_a_traceback_blames(self, tmp_path):
+        (tmp_path / 'charset_normalizer').mkdir()
+        (tmp_path / 'requests').mkdir()
+        trace = ('  File "{0}/requests/__init__.py", line 48\n'
+                 '  File "{0}/charset_normalizer/api.py", line 5\n').format(tmp_path)
+
+        with patch.object(deploy, '_pip_site_dirs', return_value=[str(tmp_path)]):
+            found = deploy.broken_packages(trace)
+
+        assert sorted(name for _, name in found) == ['charset_normalizer',
+                                                     'requests']
+
+    @pytest.mark.unit
+    def test_it_ignores_paths_that_are_not_installed_packages(self, tmp_path):
+        """A traceback also names stdlib and the probe itself. Purging a path
+        that is not a package directory would delete the wrong thing."""
+        trace = '  File "{}/nosuchpackage/api.py", line 5\n'.format(tmp_path)
+
+        with patch.object(deploy, '_pip_site_dirs', return_value=[str(tmp_path)]):
+            assert deploy.broken_packages(trace) == []
+
+    @pytest.mark.unit
+    def test_a_clean_traceback_names_nothing(self, tmp_path):
+        with patch.object(deploy, '_pip_site_dirs', return_value=[str(tmp_path)]):
+            assert deploy.broken_packages('') == []
+
+
+class TestPurgePackages:
+    @pytest.mark.unit
+    def test_it_removes_the_directory_and_every_version_of_the_metadata(
+            self, tmp_path):
+        """Leaving one stale dist-info behind is enough to make pip report the
+        package as already installed and skip the reinstall."""
+        (tmp_path / 'charset_normalizer').mkdir()
+        (tmp_path / 'charset_normalizer' / 'cd.so').write_text('stale')
+        for version in ('3.3.2', '3.4.6', '3.5.1'):
+            (tmp_path / 'charset_normalizer-{}.dist-info'.format(version)).mkdir()
+        (tmp_path / 'requests').mkdir()
+
+        with patch.object(deploy.os, 'geteuid', return_value=0):
+            removed = deploy.purge_packages([(str(tmp_path), 'charset_normalizer')])
+
+        assert len(removed) == 4
+        assert not (tmp_path / 'charset_normalizer').exists()
+        assert not list(tmp_path.glob('charset_normalizer-*.dist-info'))
+        assert (tmp_path / 'requests').exists()
+
 
 class TestEnsurePip:
     @pytest.mark.unit

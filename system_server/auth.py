@@ -63,7 +63,12 @@ def requires_auth(f):
     @wraps(f)
     def decorated(*args, **kwargs):
         token = get_token_auth_header()
-        jsonurl = urlopen("http://localhost:5000/api/capture/auth/jwks")
+        # Timed out deliberately. capdev serves this, so a capdev that is down
+        # or wedged used to hang every authenticated route here forever, one
+        # leaked thread per request - including /refresh_backend and
+        # /list_services, the two an operator needs to recover the device. Fail
+        # fast instead and leave a way back in.
+        jsonurl = urlopen("http://localhost:5000/api/capture/auth/jwks", timeout=5)
         jwks = json.loads(jsonurl.read())
         unverified_header = jwt.get_unverified_header(token)
         if ENVIRON != 'local':
