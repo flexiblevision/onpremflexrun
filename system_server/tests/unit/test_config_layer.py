@@ -498,12 +498,12 @@ class TestGetCloudFunctionsBase:
             'http://master/api/capture/functions/'
 
 
-class TestOverrideAllowed:
-    """Who may be repointed at another cloud at runtime.
+class TestReleaseOverrideAllowed:
+    """Who may be moved onto another release channel at runtime.
 
-    Not prod: cloud_domain travels with the channel and the version ref that
-    decide where signed releases come from, and mongo on 172.17.0.1 takes no
-    credentials.
+    Not prod: release_channel and latest_stable_ref decide where signed
+    releases come from, and mongo on 172.17.0.1 takes no credentials. The
+    data-plane keys are not gated by this - see TestPlaneSplit.
     """
 
     @pytest.mark.unit
@@ -511,20 +511,20 @@ class TestOverrideAllowed:
         (home / 'fvconfig.json').write_text(
             json.dumps({'environ': 'cloud', 'release_track': 'dev'}))
 
-        assert cloud_env.override_allowed() is True
+        assert cloud_env.release_override_allowed() is True
 
     @pytest.mark.unit
     def test_a_prod_device_is_not(self, home):
         (home / 'fvconfig.json').write_text(
             json.dumps({'environ': 'cloud', 'release_track': 'prod'}))
 
-        assert cloud_env.override_allowed() is False
+        assert cloud_env.release_override_allowed() is False
 
     @pytest.mark.unit
     def test_a_device_from_before_tracks_existed_is_not(self, home):
         (home / 'fvconfig.json').write_text(json.dumps({'environ': 'cloud'}))
 
-        assert cloud_env.override_allowed() is False
+        assert cloud_env.release_override_allowed() is False
 
     @pytest.mark.unit
     def test_a_device_can_be_opted_in_explicitly(self, home):
@@ -532,20 +532,81 @@ class TestOverrideAllowed:
             {'environ': 'cloud', 'release_track': 'prod',
              'allow_runtime_override': True}))
 
-        assert cloud_env.override_allowed() is True
+        assert cloud_env.release_override_allowed() is True
+
+
+@pytest.fixture
+def prod_device(home, monkeypatch):
+    monkeypatch.delenv('CLOUD_DOMAIN', raising=False)
+    monkeypatch.delenv('GCP_FUNCTIONS_DOMAIN', raising=False)
+    (home / 'fvconfig.json').write_text(json.dumps({
+        'environ': 'cloud',
+        'release_track': 'prod',
+        'cloud_domain': 'https://from-the-file',
+    }))
+    coll = MagicMock()
+    coll.find_one.return_value = None
+    cloud_env._utils_coll = coll
+    return coll
+
+
+class TestPlaneSplit:
+    """A production site can be repointed at another cloud; it cannot be
+    moved onto another release channel.
+
+    The waveform site service reads cloud_domain out of this same record on
+    ordinary customer sites, so gating the whole record on the dev track
+    would leave it with no cloud address at all.
+    """
+
+    @pytest.mark.unit
+    def test_a_prod_device_honours_the_data_plane(self, prod_device):
+        prod_device.find_one.return_value = stored(
+            cloud_domain='https://switched')
+
+        assert cloud_env.read_override() == {'cloud_domain': 'https://switched'}
+        assert cloud_env.get_cloud_domain() == 'https://switched'
+
+    @pytest.mark.unit
+    def test_a_prod_device_ignores_the_release_plane(self, prod_device):
+        prod_device.find_one.return_value = stored(
+            cloud_domain='https://switched',
+            release_channel='beta',
+            latest_stable_ref='latest_stable_version_check_dev')
+
+        assert cloud_env.read_override() == {'cloud_domain': 'https://switched'}
+        assert cloud_env.get_release_channel('stable') == 'stable'
+        assert cloud_env.get_latest_stable_ref() == 'latest_stable_version'
+
+    @pytest.mark.unit
+    def test_a_dev_device_honours_both(self, dev_device):
+        dev_device.find_one.return_value = stored(
+            cloud_domain='https://switched', release_channel='beta')
+
+        assert cloud_env.get_cloud_domain() == 'https://switched'
+        assert cloud_env.get_release_channel('stable') == 'beta'
+
+    @pytest.mark.unit
+    def test_a_prod_device_may_set_the_data_plane(self, prod_device):
+        cloud_env.set_override({'cloud_domain': 'https://switched'})
+
+        assert prod_device.update_one.call_args[0][1]['$set']['config'] == \
+            {'cloud_domain': 'https://switched'}
+
+    @pytest.mark.unit
+    def test_a_prod_device_may_not_set_the_release_plane(self, prod_device):
+        with pytest.raises(cloud_env.CloudEnvError) as raised:
+            cloud_env.set_override({'cloud_domain': 'https://switched',
+                                    'release_channel': 'beta'})
+
+        # Named so the message says which half was the problem, and that the
+        # other half was not the problem.
+        assert 'release_channel' in str(raised.value)
+        assert 'cloud_domain' in str(raised.value)
+        prod_device.update_one.assert_not_called()
 
 
 class TestReadOverride:
-    @pytest.mark.unit
-    def test_a_prod_device_does_not_even_ask(self, home):
-        # The gate closes before the round trip: every device in the fleet
-        # would otherwise pay for a switch only dev devices can make.
-        (home / 'fvconfig.json').write_text(json.dumps({'environ': 'cloud'}))
-        coll = MagicMock()
-        cloud_env._utils_coll = coll
-
-        assert cloud_env.read_override() == {}
-        coll.find_one.assert_not_called()
 
     @pytest.mark.unit
     def test_a_dev_device_reads_what_is_stored(self, dev_device):
@@ -803,7 +864,7 @@ class TestCli:
 
         out = capsys.readouterr().out
         assert 'release_track:        dev' in out
-        assert 'override honoured:    yes' in out
+        assert 'release override:     honoured' in out
         assert 'https://from-the-file' in out
         assert 'beta' in out
 

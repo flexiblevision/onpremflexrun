@@ -20,17 +20,19 @@ environment stay the bootstrap. The override is what lets a device change
 cloud afterwards without recreating every container to re-inject
 $CLOUD_DOMAIN.
 
-The override is honoured only where fvconfig says release_track is 'dev', or
-allow_runtime_override is true. cloud_domain travels with release_channel and
-latest_stable_ref, which together decide where signed releases are fetched
-from, and mongo on 172.17.0.1 takes no credentials - a customer device stays
-pinned to the file it was installed with.
+The override is split by plane, because the two halves carry very different
+risk. See DATA_PLANE_KEYS / RELEASE_PLANE_KEYS below.
 
 Reads are cached for CACHE_TTL seconds: get_cloud_domain() sits on the model
 download and device flow paths, and a find_one per call would put a round trip
 in front of every sync. A mongo that has gone away keeps serving the last
 value rather than falling back, so a blip cannot silently repoint a device
 mid-run.
+
+The override document is a cross-service contract, not private to this repo.
+The waveform site service reads the same record directly - see
+audio_anomaly/cloud.py in the FVKWS project - so OVERRIDE_TYPE and the shape
+`{'type': OVERRIDE_TYPE, 'config': {...}}` cannot be renamed here alone.
 """
 import datetime
 import json
@@ -46,8 +48,20 @@ DEFAULT_STABLE_REF = 'latest_stable_version'
 CHANNELS = ('stable', 'beta')
 
 OVERRIDE_TYPE = 'cloud_env'
-OVERRIDE_KEYS = ('cloud_domain', 'gcp_functions_domain', 'latest_stable_ref',
-                 'release_channel')
+
+# The data plane: where clips, projects and models go. Switchable on any site,
+# including production. Repointing it moves traffic and nothing else, and a
+# site aimed at the wrong cloud fails visibly on its next call.
+DATA_PLANE_KEYS = ('cloud_domain', 'gcp_functions_domain')
+
+# The release plane: which channel and which version endpoint this device
+# takes SIGNED RELEASES from. Honoured only where fvconfig says release_track
+# is 'dev', or allow_runtime_override is true - mongo on 172.17.0.1 takes no
+# credentials, and a write there must not be able to walk a customer device
+# onto pre-release software.
+RELEASE_PLANE_KEYS = ('latest_stable_ref', 'release_channel')
+
+OVERRIDE_KEYS = DATA_PLANE_KEYS + RELEASE_PLANE_KEYS
 
 CACHE_TTL = 30
 
@@ -128,18 +142,15 @@ def _clean(raw):
     return out
 
 
-def override_allowed(cfg=None):
+def release_override_allowed(cfg=None):
+    """Whether the release-plane keys are honoured on this device."""
     cfg = _site_config() if cfg is None else cfg
     return (cfg.get('release_track') == 'dev'
             or cfg.get('allow_runtime_override') is True)
 
 
-def read_override(cfg=None):
-    """The override in force here, or {} - never raises."""
-    cfg = _site_config() if cfg is None else cfg
-    if not override_allowed(cfg):
-        return {}
-
+def _cached_override():
+    """The stored record, both planes, cached - never raises."""
     now = time.monotonic()
     at = _override_cache['at']
     if at is not None and now - at < CACHE_TTL:
@@ -158,6 +169,21 @@ def read_override(cfg=None):
     _override_cache['value'] = _clean((found or {}).get('config') or {})
     _override_cache['at'] = now
     return _override_cache['value']
+
+
+def read_override(cfg=None):
+    """The override in force here, or {} - never raises.
+
+    Off the dev track the release-plane keys are dropped rather than the whole
+    record: a production site can still be repointed at another cloud, it just
+    cannot be moved onto another release channel.
+    """
+    cfg = _site_config() if cfg is None else cfg
+    stored = _cached_override()
+    if release_override_allowed(cfg):
+        return stored
+    return {key: value for key, value in stored.items()
+            if key in DATA_PLANE_KEYS}
 
 
 def _cloud_base(fallback=None):
@@ -220,30 +246,37 @@ def _stored(collection=None):
     return _clean((found or {}).get('config') or {})
 
 
-def require_override_allowed():
-    """Raise unless an override written here would actually be honoured.
+def require_override_allowed(values=None):
+    """Raise unless the keys about to be written would be honoured here.
 
-    Callers that have work to do before the write - resolving a track, which
-    imports setup.management - check this first, so a command that is going
-    to be refused does nothing on the way there.
+    `values` is the keys being written; omitted means all of them, which is
+    what the CLI's track switch does. Callers with work to do before the
+    write - resolving a track, which imports setup.management - check this
+    first, so a command that is going to be refused does nothing on the way.
     """
-    cfg = _site_config()
-    if not override_allowed(cfg):
-        raise CloudEnvError(
-            "this device is on the '{}' release track, where the cloud and "
-            "channel stay pinned to ~/fvconfig.json - add "
-            '"allow_runtime_override": true there to opt it in'.format(
-                cfg.get('release_track', 'prod')))
+    keys = OVERRIDE_KEYS if values is None else tuple(values)
+    refused = sorted(key for key in keys if key in RELEASE_PLANE_KEYS)
+    if not refused or release_override_allowed():
+        return
+
+    raise CloudEnvError(
+        "{} decide{} where this device takes signed releases from, and it is "
+        "on the '{}' release track where that stays pinned to "
+        '~/fvconfig.json - add "allow_runtime_override": true there to opt it '
+        'in. {} can be set on any device.'.format(
+            ' and '.join(refused), '' if len(refused) > 1 else 's',
+            _site_config().get('release_track', 'prod'),
+            ' and '.join(DATA_PLANE_KEYS)))
 
 
 def set_override(values, collection=None):
     """Point this device at a different cloud or channel, live.
 
-    Refuses on a device the override would not be honoured on, rather than
-    writing a record that changes nothing and letting somebody believe the
-    device moved. Mongo failures propagate for the same reason.
+    Refuses keys this device would not honour, rather than writing a record
+    that changes nothing and letting somebody believe the device moved. Mongo
+    failures propagate for the same reason.
     """
-    require_override_allowed()
+    require_override_allowed(values)
 
     unknown = sorted(set(values) - set(OVERRIDE_KEYS))
     if unknown:
@@ -299,16 +332,22 @@ USAGE = ('usage: cloud_env.py show\n'
          '       cloud_env.py set KEY=VALUE [KEY=VALUE ...]\n'
          '       cloud_env.py clear\n'
          '\n'
-         'keys: ' + ', '.join(OVERRIDE_KEYS) + '\n')
+         'keys, any device:   ' + ', '.join(DATA_PLANE_KEYS) + '\n'
+         'keys, dev track:    ' + ', '.join(RELEASE_PLANE_KEYS) + '\n')
 
 
 def _print_state():
     cfg = _site_config()
     print('release_track:        {}'.format(cfg.get('release_track', 'prod')))
-    print('override honoured:    {}'.format(
-        'yes' if override_allowed(cfg) else 'no'))
-    stored = _stored() if override_allowed(cfg) else {}
-    print('override:             {}'.format(stored or '(none)'))
+    print('release override:     {}'.format(
+        'honoured' if release_override_allowed(cfg) else 'not honoured here'))
+    # show has to work on a device whose mongo is down - that is one of the
+    # things you run it to find out. Only the write paths let mongo errors out.
+    try:
+        print('stored override:      {}'.format(_stored() or '(none)'))
+    except Exception as exc:
+        print('stored override:      (unreadable: {})'.format(exc))
+    print('in force:             {}'.format(read_override(cfg) or '(none)'))
     print('cloud_domain:         {}'.format(get_cloud_domain()))
     print('cloud functions base: {}'.format(get_cloud_functions_base()))
     print('release_channel:      {}'.format(get_release_channel()))
