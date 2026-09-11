@@ -350,3 +350,42 @@ class TestUnchangedContainersAreLeftAlone:
         r.go(tmp_path)
         order = upgrade_runner.VERSION_ARGS
         assert r.run_env['versions'][order.index('backend')] == '1.999'
+
+
+class TestDeviceArch:
+    """The arch handed to the release endpoint.
+
+    device_utils.system_arch() shells out to `arch`, which prints the machine
+    name - 'x86_64', not 'x86'. The endpoint knows only manifest.ARCHES and
+    refuses the raw name with a 400, so passing it through made every signed
+    fetch fail and every upgrade fall back to the legacy version endpoint,
+    silently, on every device. The tests above stub _device_arch to 'x86',
+    which is exactly why nothing caught it.
+    """
+
+    @pytest.mark.unit
+    @pytest.mark.parametrize('machine,expected', [
+        ('x86_64', 'x86'),
+        ('aarch64', 'arm'),
+    ])
+    def test_the_machine_name_is_translated(self, monkeypatch, machine, expected):
+        import utils.device_utils as device_utils
+        monkeypatch.setattr(device_utils, 'system_arch', lambda: machine)
+
+        assert upgrade_runner._device_arch() == expected
+
+    @pytest.mark.unit
+    def test_what_it_returns_is_an_arch_the_pipeline_knows(self, monkeypatch):
+        import utils.device_utils as device_utils
+        monkeypatch.setattr(device_utils, 'system_arch', lambda: 'x86_64')
+
+        assert upgrade_runner._device_arch() in m.ARCHES
+
+    @pytest.mark.unit
+    def test_an_unknown_machine_passes_through_rather_than_guessing(self, monkeypatch):
+        # Better a 400 naming the machine than a device silently taking the
+        # wrong architecture's release.
+        import utils.device_utils as device_utils
+        monkeypatch.setattr(device_utils, 'system_arch', lambda: 'riscv64')
+
+        assert upgrade_runner._device_arch() == 'riscv64'

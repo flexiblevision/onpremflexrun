@@ -344,8 +344,17 @@ USAGE = (
 
 
 def _device_arch():
+    """The arch the release pipeline names, not the one uname prints.
+
+    device_utils.system_arch() shells out to `arch` and hands back the raw
+    machine - 'x86_64', 'aarch64'. The release endpoint knows only 'x86' and
+    'arm' and refuses anything else with a 400, so passing the raw name made
+    every signed fetch fail and every upgrade fall back to the legacy version
+    endpoint, quietly, on every device.
+    """
     from utils.device_utils import system_arch
-    return system_arch()
+    from release import manifest as manifest_mod
+    return manifest_mod.normalize_arch(system_arch())
 
 
 DEFAULT_CHANNEL = 'stable'

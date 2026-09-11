@@ -72,6 +72,17 @@ TIER_FEATURE = 'feature'
 
 ARCHES = ('x86', 'arm')
 
+# What uname calls a machine, mapped to what the pipeline calls it. The
+# release endpoint knows only ARCHES and refuses anything else with a 400, so
+# a caller reading the arch off the device has to come through here first.
+UNAME_ARCHES = {'x86_64': 'x86', 'aarch64': 'arm'}
+
+
+def normalize_arch(machine):
+    """The pipeline's name for a machine. Unknown machines pass through so the
+    endpoint reports them rather than being silently mapped to the wrong one."""
+    return UNAME_ARCHES.get(machine, machine)
+
 # Components that do not exist for an arch yet. Declared, never inferred: a tag
 # that is simply missing stays a hard error, because that is how ARM devices
 # came to silently never upgrade visiontools. Delete the entry when the image
