@@ -4,6 +4,10 @@ export DEBIAN_FRONTEND=noninteractive
 apt install -y vsftpd
 apt-get -y install isc-dhcp-server
 apt-get -y install jq
+# create_ap needs iw to create the AP virtual interface. Without it create_ap
+# falls back to --no-virt, binds the physical wifi adapter and marks it
+# unmanaged, which leaves the device with no wifi client.
+apt-get -y install iw
 apt-get -y --only-upgrade install google-chrome-stable
 # linux-crashdump pulls in kexec-tools, which fires an interactive debconf prompt
 # ("Should kexec-tools handle reboots?") that hangs the script even with -y.

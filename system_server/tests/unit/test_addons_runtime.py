@@ -10,6 +10,21 @@ def completed(returncode=0, stdout='', stderr=''):
     return subprocess.CompletedProcess([], returncode, stdout, stderr)
 
 
+@pytest.fixture(autouse=True)
+def cloud_domain(monkeypatch):
+    """A resolvable ${CLOUD_DOMAIN} for every test here.
+
+    anomaly_audio's env references the token, so building its argv resolves
+    one. Pinned rather than left to the machine: a developer box answers from
+    ~/fvconfig.json or a running mongo, and CI, which has neither, refused.
+    TestEnvExpansion overrides this to exercise the resolution order itself.
+    """
+    monkeypatch.delenv('CLOUD_DOMAIN', raising=False)
+    monkeypatch.setattr(runtime, '_cloud_domain_override', lambda: None)
+    monkeypatch.setattr(runtime, 'site_config',
+                        lambda: {'cloud_domain': 'https://test.example'})
+
+
 @pytest.fixture
 def docker():
     with patch.object(runtime, '_run', return_value=completed()) as run:
@@ -63,6 +78,7 @@ class TestRunArgv:
         assert argv[argv.index('--network') + 1] == 'host'
         assert argv[argv.index('--gpus') + 1] == 'device=0'
         assert 'MONGO_URI=mongodb://172.17.0.1:27017/' in argv
+        assert 'CLOUD_DOMAIN=https://test.example' in argv
         assert ('/home/visioncell/Documents/audio_anomaly_data:/app/data') in argv
         assert 'max-size=50m' in argv and 'max-file=5' in argv
         assert argv[-1] == 'img'

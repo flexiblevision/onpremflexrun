@@ -24,6 +24,7 @@ apt-get -y install nodejs
 apt-get -y install npm
 apt-get -y install curl
 apt-get -y install hostapd
+apt-get -y install iw
 apt install -y redis-server
 apt install -y openssh-server
 apt-get -y install isc-dhcp-server
