@@ -72,12 +72,94 @@ def device_environment(tmp_path, monkeypatch):
          patch.object(dr, 'get_presets', return_value=[]), \
          patch.object(dr, 'find_utility', return_value=[]), \
          patch('subprocess.Popen', side_effect=popen_dispatch()), \
-         patch('settings.config', {'ssid': 'visioncell_5cd3c6'}):
+         patch('settings.config', {'ssid': 'visioncell_5cd3c6'}), \
+         patch.object(dr, '_release_identity',
+                      return_value={'release': None, 'release_channel': None,
+                                    'cloud': None}):
         yield
 
 
 def _info(client):
     return client.get('/device_info').get_json()
+
+
+class TestReleaseIdentity:
+    """What this device runs and where it takes it from.
+
+    Support asks for these in the same breath as the serial, so they ride
+    along with it. Each resolves independently: /device_info is also how the
+    hotspot page and the cloud find this device, and none of that should be
+    lost because mongo is down.
+    """
+
+    @pytest.mark.integration
+    def test_the_payload_carries_the_release_channel_and_cloud(
+            self, client, device_environment):
+        dr._release_identity.return_value = {
+            'release': '1.4', 'release_channel': 'beta', 'cloud': 'dev'}
+
+        body = _info(client)
+
+        assert body['release'] == '1.4'
+        assert body['release_channel'] == 'beta'
+        assert body['cloud'] == 'dev'
+
+    @pytest.mark.integration
+    def test_it_reports_the_installed_release_and_where_it_came_from(self):
+        collection = MagicMock()
+        collection.find_one.return_value = {
+            'installed': {'counter': 8, 'release': '1.4'}, 'high_water': 8,
+            'history': [],
+        }
+        client = MagicMock()
+        client.__getitem__.return_value = {'utils': collection}
+
+        with patch('upgrade_runner._device_channel', return_value='beta'), \
+             patch('cloud_env.get_cloud_domain',
+                   return_value='https://clouddeploy.api.flexiblevision.com'), \
+             patch('pymongo.MongoClient', return_value=client):
+            identity = dr._release_identity()
+
+        assert identity == {'release': '1.4', 'release_channel': 'beta',
+                            'cloud': 'dev'}
+
+    @pytest.mark.integration
+    def test_a_cloud_that_is_neither_dev_nor_prod_is_not_relabelled(self):
+        with patch('upgrade_runner._device_channel', return_value='stable'), \
+             patch('cloud_env.get_cloud_domain', return_value='https://cloud.acme.internal'), \
+             patch('pymongo.MongoClient', side_effect=RuntimeError('no mongo')):
+            identity = dr._release_identity()
+
+        assert identity['cloud'] is None
+        assert identity['release_channel'] == 'stable'
+
+    @pytest.mark.integration
+    def test_an_unreachable_mongo_costs_only_the_release(self, capsys):
+        with patch('upgrade_runner._device_channel', return_value='stable'), \
+             patch('cloud_env.get_cloud_domain',
+                   return_value='https://v1.cloud.flexiblevision.com'), \
+             patch('pymongo.MongoClient', side_effect=RuntimeError('connection refused')):
+            identity = dr._release_identity()
+
+        assert identity['release'] is None
+        assert identity['release_channel'] == 'stable'
+        assert identity['cloud'] == 'prod'
+        assert 'could not read the installed release' in capsys.readouterr().out
+
+    @pytest.mark.integration
+    def test_a_device_that_has_never_applied_a_release_reports_none(self):
+        collection = MagicMock()
+        collection.find_one.return_value = None
+        client = MagicMock()
+        client.__getitem__.return_value = {'utils': collection}
+
+        with patch('upgrade_runner._device_channel', return_value='stable'), \
+             patch('cloud_env.get_cloud_domain',
+                   return_value='https://v1.cloud.flexiblevision.com'), \
+             patch('pymongo.MongoClient', return_value=client):
+            identity = dr._release_identity()
+
+        assert identity['release'] is None
 
 
 class TestSerialNumber:
