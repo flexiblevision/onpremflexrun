@@ -113,14 +113,18 @@ class TestAddonList:
             body = client.get('/addons').get_json()
 
         assert {entry['name'] for entry in body} == {
-            'anomaly_audio', 'assembly', 'client_mode', 'ftp', 'ocr', 'timemachine'}
+            'anomaly_audio', 'anomaly_visual', 'assembly', 'client_mode',
+            'ftp', 'ocr', 'timemachine'}
 
     @pytest.mark.integration
     def test_an_addon_with_no_image_for_this_arch_is_not_offered(self, client):
         with patch.object(addon_routes.runtime, 'system_arch', return_value='arm'):
             body = client.get('/addons').get_json()
 
-        assert 'ocr' not in {entry['name'] for entry in body}
+        names = {entry['name'] for entry in body}
+        assert 'ocr' not in names
+        # no arm-anomaly-server image is published either
+        assert 'anomaly_visual' not in names
 
     @pytest.mark.integration
     def test_intent_and_health_are_reported_apart(self, client):

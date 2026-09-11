@@ -476,9 +476,11 @@ class TestAssignPresetToLatestVersion:
         versions = ['v1', 'v3', 'v2']  # Unsorted
         assign_preset_to_latest_version('test_model', versions, 'versions')
 
-        # Should update preset to use v3 (latest after sorting)
-        mock_presets_collection.update.assert_called()
-        update_call = mock_presets_collection.update.call_args
+        # Should update preset to use v3 (latest after sorting).
+        # update_one, not update: the latter is gone in pymongo 4 and the
+        # caller swallows the failure, so the bump would silently stop working.
+        mock_presets_collection.update_one.assert_called()
+        update_call = mock_presets_collection.update_one.call_args
         assert 'v3' in str(update_call)
 
     @pytest.mark.unit
@@ -496,7 +498,27 @@ class TestAssignPresetToLatestVersion:
         assign_preset_to_latest_version('test_model', versions, 'versions')
 
         # Should update all presets
-        assert mock_presets_collection.update.call_count == 2
+        assert mock_presets_collection.update_one.call_count == 2
+
+
+class TestAnomalyPresetType:
+    """anomaly is a preset model type like high_accuracy and high_speed."""
+
+    @pytest.mark.unit
+    @patch('worker_scripts.retrieve_models.presets_collection')
+    def test_anomaly_presets_are_bumped(self, mock_presets_collection):
+        """Without 'anomaly' in type_map this raised KeyError into a bare
+        except, so an anomaly preset silently never tracked the latest
+        version."""
+        from worker_scripts.retrieve_models import assign_preset_to_latest_version
+
+        mock_presets_collection.find.return_value = [{'presetId': 1}]
+        assign_preset_to_latest_version('test_anomaly',
+                                        [1787951809790, 1787957450461], 'anomaly')
+
+        mock_presets_collection.find.assert_called_with(
+            {'modelName': 'test_anomaly', 'modelType': 'anomaly'})
+        assert '1787957450461' in str(mock_presets_collection.update_one.call_args)
 
 
 class TestModelTypeMapping:
