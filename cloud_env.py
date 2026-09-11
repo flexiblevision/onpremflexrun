@@ -47,6 +47,34 @@ DEFAULT_STABLE_REF = 'latest_stable_version'
 
 CHANNELS = ('stable', 'beta')
 
+# The two clouds a device can be pointed at, by the names people use for them.
+# The same pair setup.management.RELEASE_TRACKS pins per track, named here so
+# the settings screen and the CLI can offer a choice without either of them
+# hardcoding a hostname.
+#
+# stable always runs against prod: a device taking fleet releases must not be
+# reading its projects and models from the cloud those releases are tested
+# against. beta may sit on either - dev to exercise a release before the fleet
+# takes it, prod to run a pre-release build against real data.
+CLOUD_DOMAINS = {
+    'prod': DEFAULT_CLOUD_DOMAIN,
+    'dev': 'https://clouddeploy.api.flexiblevision.com',
+}
+STABLE_CLOUD = 'prod'
+
+
+def cloud_name(domain):
+    """Which named cloud a domain is, or None for anything else.
+
+    A site pointed somewhere bespoke - a self-hosted cloud, a staging box -
+    is not one of these, and reporting None lets the screen show the URL
+    rather than mislabel it.
+    """
+    for name, url in CLOUD_DOMAINS.items():
+        if domain and domain.rstrip('/') == url.rstrip('/'):
+            return name
+    return None
+
 OVERRIDE_TYPE = 'cloud_env'
 
 # The data plane: where clips, projects and models go. Switchable on any site,

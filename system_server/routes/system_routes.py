@@ -290,6 +290,35 @@ def _release_collection():
     return client['fvonprem']['utils']
 
 
+# The settings screen is the only place a person sees which release their
+# device would take, so asking the channel what it offers has to happen here.
+# Four seconds, not fetch's default thirty: this sits in front of the settings
+# screen, and a factory network that is not answering has to render "could not
+# check" rather than hang the page.
+OFFER_TIMEOUT = 4
+
+
+def _channel_offer(high_water):
+    """What this device's channel is offering, and which channel that is.
+
+    Resolved through upgrade_runner's own helpers rather than re-read from the
+    config here: the answer shown on the screen has to be the answer the
+    upgrade will use, and two implementations of that would drift. Never
+    raises - "could not check" is a state to display, not an error.
+    """
+    channel = None
+    try:
+        import upgrade_runner
+        from release import fetch as fetch_mod
+        channel = upgrade_runner._device_channel()
+        offer = fetch_mod.available(
+            upgrade_runner._device_arch(), high_water,
+            channel=channel, timeout=OFFER_TIMEOUT)
+    except Exception as e:
+        offer = {'reachable': False, 'detail': str(e)}
+    return offer, channel
+
+
 class Releases(Resource):
     """What release is running, what is offered, and what it can go back to.
 
@@ -299,14 +328,18 @@ class Releases(Resource):
     def get(self):
         try:
             from release import state as release_state
-            summary = release_state.summary(_release_collection(), available=None)
+            collection = _release_collection()
+            offer, channel = _channel_offer(
+                release_state.read(collection)['high_water'])
+            summary = release_state.summary(collection, available=offer)
+            summary['channel'] = channel
         except Exception as e:
             # A device that predates release tracking has no state; say so
             # rather than 500ing the whole settings screen.
             summary = {'installed': None, 'high_water': 0, 'history': [],
                        'rollback_targets': [], 'available': None,
                        'update_available': False, 'rolled_back_from': None,
-                       'unavailable': str(e)}
+                       'channel': None, 'unavailable': str(e)}
 
         # Which keys this device trusts. Reported so a rotation can be tracked
         # across the fleet: you cannot safely retire a key until every device
@@ -319,6 +352,73 @@ class Releases(Resource):
             summary['trust'] = {'count': 0, 'keys': [], 'unavailable': str(e)}
 
         return summary
+
+
+class ReleaseChannel(Resource):
+    """Which channel this device takes releases from, and whether it may move.
+
+    GET is open, like the rest of the release state. PUT is authenticated and
+    goes through cloud_env, which refuses the write anywhere the release plane
+    is not honoured: mongo on 172.17.0.1 takes no credentials, and a write
+    there must not be able to walk a customer device onto pre-release
+    software. The refusal is reported rather than hidden so the screen can say
+    why the control is disabled.
+    """
+    def get(self):
+        try:
+            import cloud_env
+            domain = cloud_env.get_cloud_domain()
+            return {'channel': upgrade_runner._device_channel(),
+                    'changeable': cloud_env.release_override_allowed(),
+                    'choices': list(cloud_env.CHANNELS),
+                    'cloud_domain': domain,
+                    'cloud': cloud_env.cloud_name(domain),
+                    'cloud_choices': sorted(cloud_env.CLOUD_DOMAINS)}
+        except Exception as e:
+            return {'channel': None, 'changeable': False, 'choices': [],
+                    'cloud_domain': None, 'cloud': None, 'cloud_choices': [],
+                    'unavailable': str(e)}
+
+    @auth.requires_auth
+    def put(self):
+        from flask import request
+        import cloud_env
+
+        body = request.get_json(silent=True) or {}
+        channel = body.get('channel')
+        if channel not in cloud_env.CHANNELS:
+            return {'error': 'channel must be one of {}'.format(
+                ', '.join(cloud_env.CHANNELS))}, 400
+
+        # stable is prod, and that is enforced here rather than only hidden in
+        # the UI: a device left pointing at dev while taking fleet releases
+        # would read its projects and models from the cloud those releases are
+        # tested against, which is not a state anyone would choose on purpose.
+        cloud = body.get('cloud')
+        if channel == 'stable':
+            cloud = cloud_env.STABLE_CLOUD
+        elif cloud is None:
+            cloud = cloud_env.cloud_name(cloud_env.get_cloud_domain())
+
+        if cloud is not None and cloud not in cloud_env.CLOUD_DOMAINS:
+            return {'error': 'cloud must be one of {}'.format(
+                ', '.join(sorted(cloud_env.CLOUD_DOMAINS)))}, 400
+
+        values = {'release_channel': channel}
+        if cloud is not None:
+            values['cloud_domain'] = cloud_env.CLOUD_DOMAINS[cloud]
+
+        try:
+            cloud_env.set_override(values)
+        except cloud_env.CloudEnvError as e:
+            # Not a server fault - this device is not allowed to move.
+            return {'error': str(e)}, 403
+        except Exception as e:
+            return {'error': str(e)}, 500
+
+        domain = cloud_env.get_cloud_domain()
+        return {'channel': upgrade_runner._device_channel(),
+                'cloud_domain': domain, 'cloud': cloud_env.cloud_name(domain)}
 
 
 class Rollback(Resource):
@@ -565,6 +665,7 @@ def register_routes(api):
     api.add_resource(UpgradeFlexRun, '/upgrade_flex_run')
     api.add_resource(SystemVersions, '/system_versions')
     api.add_resource(Releases, '/releases')
+    api.add_resource(ReleaseChannel, '/release_channel')
     api.add_resource(Rollback, '/rollback')
     api.add_resource(SystemIsUptodate, '/system_uptodate')
     api.add_resource(StartTeamviewer, '/start_teamviewer')

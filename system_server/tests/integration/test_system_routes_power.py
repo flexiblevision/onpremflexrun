@@ -32,6 +32,19 @@ def no_sleep():
         yield sleep
 
 
+@pytest.fixture(autouse=True)
+def offline_channel():
+    """No test reaches the release endpoint.
+
+    /releases now asks the channel what it offers. Left alone that is a real
+    request per call - slow here, and answered by whatever the CI runner's DNS
+    resolves. Tests that care about the offer patch this with their own.
+    """
+    with patch('routes.system_routes._channel_offer',
+               return_value=({'reachable': False, 'detail': 'offline'}, 'stable')) as offer:
+        yield offer
+
+
 def _completed(returncode=0, stdout='', stderr=''):
     return MagicMock(returncode=returncode, stdout=stdout, stderr=stderr)
 
@@ -351,6 +364,224 @@ class TestRouteRegistration:
         rules = {r.rule for r in client.application.url_map.iter_rules()}
 
         assert expected <= rules
+
+
+@pytest.fixture
+def installed_release():
+    """A device sitting on release 1.3 (counter 7).
+
+    The collection is faked rather than reached: state.read only calls
+    find_one, and these assertions must not depend on whether the machine
+    running them happens to have a mongo with release state in it.
+    """
+    collection = MagicMock()
+    collection.find_one.return_value = {
+        'installed': {'counter': 7, 'release': '1.3'},
+        'high_water': 7,
+        'history': [{'counter': 7, 'release': '1.3'}],
+    }
+    with patch('routes.system_routes._release_collection', return_value=collection):
+        yield collection
+
+
+class TestReleasesReportsTheOffer:
+    """Which release this device would take, and from which channel.
+
+    Without this the settings screen showed "Update available" from the legacy
+    per-container check, which knows nothing about channels - so a stable
+    device displayed the same badge whether or not anything was promoted to it,
+    and nobody could tell what pressing the button would install.
+    """
+
+    @pytest.mark.integration
+    def test_it_reports_the_offer_and_the_channel(
+            self, client, offline_channel, installed_release):
+        offline_channel.return_value = (
+            {'reachable': True, 'counter': 8, 'release': '1.4',
+             'newer_than_installed': True}, 'beta')
+
+        body = client.get('/releases').get_json()
+
+        assert body['channel'] == 'beta'
+        assert body['available']['release'] == '1.4'
+        assert body['update_available'] is True
+
+    @pytest.mark.integration
+    def test_a_channel_with_nothing_newer_is_not_an_update(
+            self, client, offline_channel, installed_release):
+        # The device is already on what beta offers. The old badge said
+        # "Update available" here anyway.
+        offline_channel.return_value = (
+            {'reachable': True, 'counter': 7, 'release': '1.3',
+             'newer_than_installed': False}, 'beta')
+
+        body = client.get('/releases').get_json()
+
+        assert body['update_available'] is False
+
+    @pytest.mark.integration
+    def test_an_unreachable_endpoint_renders_rather_than_failing(
+            self, client, installed_release):
+        # The autouse fixture is already the offline case: a device on a
+        # factory network is offline more often than not, and the settings
+        # screen still has to draw.
+        body = client.get('/releases').get_json()
+
+        assert body['available']['reachable'] is False
+        assert body['update_available'] is False
+        assert 'high_water' in body
+
+    @pytest.mark.integration
+    def test_the_offer_is_asked_for_against_the_device_high_water(
+            self, client, offline_channel, installed_release):
+        # Not the installed counter: a device that rolled back must not be
+        # offered the release it deliberately left.
+        client.get('/releases')
+
+        assert offline_channel.call_args[0][0] == 7
+
+    @pytest.mark.integration
+    def test_a_failure_resolving_the_channel_does_not_break_the_payload(self, client):
+        with patch('routes.system_routes._channel_offer',
+                   side_effect=RuntimeError('no upgrade_runner')):
+            body = client.get('/releases').get_json()
+
+        assert body['update_available'] is False
+        assert body['channel'] is None
+        assert 'unavailable' in body
+
+
+class TestReleaseChannel:
+    """Reading and moving the channel this device follows.
+
+    The write is gated in cloud_env, not here: mongo on 172.17.0.1 takes no
+    credentials, so a customer device must refuse to be walked onto beta.
+    These pin that the route reports the refusal instead of swallowing it,
+    because the screen disables the control on the strength of it.
+    """
+
+    @pytest.mark.integration
+    def test_it_reports_the_channel_and_whether_it_can_move(self, client):
+        with patch('upgrade_runner._device_channel', return_value='beta'), \
+             patch('cloud_env.release_override_allowed', return_value=True):
+            body = client.get('/release_channel').get_json()
+
+        assert body['channel'] == 'beta'
+        assert body['changeable'] is True
+        assert 'stable' in body['choices'] and 'beta' in body['choices']
+
+    @pytest.mark.integration
+    def test_a_customer_device_reports_that_it_cannot_move(self, client):
+        with patch('upgrade_runner._device_channel', return_value='stable'), \
+             patch('cloud_env.release_override_allowed', return_value=False):
+            body = client.get('/release_channel').get_json()
+
+        assert body['channel'] == 'stable'
+        assert body['changeable'] is False
+
+    @pytest.mark.integration
+    def test_a_put_moves_the_channel(self, client):
+        import cloud_env
+        with patch('cloud_env.set_override') as write, \
+             patch('cloud_env.get_cloud_domain',
+                   return_value=cloud_env.CLOUD_DOMAINS['prod']), \
+             patch('upgrade_runner._device_channel', return_value='beta'):
+            response = client.put('/release_channel', json={'channel': 'beta'})
+
+        assert response.status_code == 200
+        assert write.call_args[0][0]['release_channel'] == 'beta'
+        assert response.get_json()['channel'] == 'beta'
+
+    @pytest.mark.integration
+    def test_a_refused_device_gets_403_and_the_reason(self, client):
+        import cloud_env
+        with patch('cloud_env.set_override',
+                   side_effect=cloud_env.CloudEnvError('on the prod release track')):
+            response = client.put('/release_channel', json={'channel': 'beta'})
+
+        assert response.status_code == 403
+        assert 'prod release track' in response.get_json()['error']
+
+    @pytest.mark.integration
+    @pytest.mark.parametrize('channel', ['nightly', '', None, 'STABLE'])
+    def test_an_unknown_channel_is_refused_without_writing(self, client, channel):
+        with patch('cloud_env.set_override') as write:
+            response = client.put('/release_channel', json={'channel': channel})
+
+        assert response.status_code == 400
+        write.assert_not_called()
+
+    @pytest.mark.integration
+    def test_beta_may_point_at_either_cloud(self, client):
+        import cloud_env
+        with patch('cloud_env.set_override') as write, \
+             patch('upgrade_runner._device_channel', return_value='beta'):
+            client.put('/release_channel', json={'channel': 'beta', 'cloud': 'dev'})
+
+        assert write.call_args[0][0] == {
+            'release_channel': 'beta',
+            'cloud_domain': cloud_env.CLOUD_DOMAINS['dev'],
+        }
+
+    @pytest.mark.integration
+    def test_stable_is_forced_back_to_prod(self, client):
+        """Even when the caller asks for dev.
+
+        A device taking fleet releases must not read its projects and models
+        from the cloud those releases are tested against, so the rule is
+        enforced here rather than only hidden in the UI.
+        """
+        import cloud_env
+        with patch('cloud_env.set_override') as write, \
+             patch('upgrade_runner._device_channel', return_value='stable'):
+            client.put('/release_channel', json={'channel': 'stable', 'cloud': 'dev'})
+
+        assert write.call_args[0][0] == {
+            'release_channel': 'stable',
+            'cloud_domain': cloud_env.CLOUD_DOMAINS['prod'],
+        }
+
+    @pytest.mark.integration
+    def test_an_unknown_cloud_is_refused_without_writing(self, client):
+        with patch('cloud_env.set_override') as write:
+            response = client.put(
+                '/release_channel', json={'channel': 'beta', 'cloud': 'staging'})
+
+        assert response.status_code == 400
+        write.assert_not_called()
+
+    @pytest.mark.integration
+    def test_beta_with_no_cloud_named_keeps_the_one_it_is_on(self, client):
+        import cloud_env
+        with patch('cloud_env.set_override') as write, \
+             patch('cloud_env.get_cloud_domain',
+                   return_value=cloud_env.CLOUD_DOMAINS['dev']), \
+             patch('upgrade_runner._device_channel', return_value='beta'):
+            client.put('/release_channel', json={'channel': 'beta'})
+
+        assert write.call_args[0][0]['cloud_domain'] == cloud_env.CLOUD_DOMAINS['dev']
+
+    @pytest.mark.integration
+    def test_a_bespoke_cloud_is_left_alone_rather_than_relabelled(self, client):
+        # A site on its own cloud is not dev or prod. Switching channel must
+        # not silently move its data plane onto one of ours.
+        with patch('cloud_env.set_override') as write, \
+             patch('cloud_env.get_cloud_domain', return_value='https://cloud.acme.internal'), \
+             patch('upgrade_runner._device_channel', return_value='beta'):
+            client.put('/release_channel', json={'channel': 'beta'})
+
+        assert 'cloud_domain' not in write.call_args[0][0]
+
+    @pytest.mark.integration
+    def test_the_reported_cloud_is_a_name_not_a_url(self, client):
+        import cloud_env
+        with patch('cloud_env.get_cloud_domain',
+                   return_value=cloud_env.CLOUD_DOMAINS['dev']), \
+             patch('upgrade_runner._device_channel', return_value='beta'):
+            body = client.get('/release_channel').get_json()
+
+        assert body['cloud'] == 'dev'
+        assert sorted(body['cloud_choices']) == ['dev', 'prod']
 
 
 class TestReleasesReportsTrust:
