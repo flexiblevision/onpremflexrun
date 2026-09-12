@@ -221,3 +221,62 @@ class TestUploadModelEndpoint:
 
         # Should handle error gracefully
         assert response.status_code == 200
+
+
+class TestDownloadModelsRoutesByType:
+    """/download_models picks the worker by model type."""
+
+    def post(self, client, model_type):
+        body = {'models': {}, 'exclude_models': {}}
+        if model_type is not None:
+            body['model_type'] = model_type
+        return client.post('/download_models',
+                           data=json.dumps(body),
+                           content_type='application/json',
+                           headers={'Access-Token': 'test_token'})
+
+    @pytest.mark.integration
+    @patch('rq.Queue.enqueue')
+    @patch('worker_scripts.job_manager.job_collection')
+    def test_anomaly_goes_to_the_anomaly_worker(self, mock_jobs, mock_enqueue, model_client):
+        mock_enqueue.return_value = MagicMock(id='job_anomaly')
+
+        assert self.post(model_client, 'anomaly').status_code == 200
+
+        assert mock_enqueue.call_count == 1
+        assert mock_enqueue.call_args[0][0].__name__ == 'retrieve_anomaly_models'
+
+    @pytest.mark.integration
+    @patch('rq.Queue.enqueue')
+    @patch('worker_scripts.job_manager.job_collection')
+    def test_waveform_goes_to_the_waveform_worker(self, mock_jobs, mock_enqueue, model_client):
+        mock_enqueue.return_value = MagicMock(id='job_waveform')
+
+        assert self.post(model_client, 'waveform').status_code == 200
+
+        # One job, and not retrieve_models: a waveform package has no
+        # saved_model/ and must never be filed as detection.
+        assert mock_enqueue.call_count == 1
+        assert mock_enqueue.call_args[0][0].__name__ == 'retrieve_waveform_models'
+
+    @pytest.mark.integration
+    @patch('rq.Queue.enqueue')
+    @patch('worker_scripts.job_manager.job_collection')
+    def test_unknown_type_is_refused(self, mock_jobs, mock_enqueue, model_client):
+        response = self.post(model_client, 'something_new')
+
+        assert response.status_code == 400
+        assert mock_enqueue.call_count == 0
+
+    @pytest.mark.integration
+    @pytest.mark.parametrize('model_type', [None, 'high_accuracy', 'high_speed', 'ocr'])
+    @patch('rq.Queue.enqueue')
+    @patch('worker_scripts.job_manager.job_collection')
+    def test_detection_types_still_take_the_detection_path(self, mock_jobs, mock_enqueue,
+                                                           model_client, model_type):
+        mock_enqueue.return_value = MagicMock(id='job_models')
+
+        assert self.post(model_client, model_type).status_code == 200
+
+        assert mock_enqueue.call_count == 3  # models, masks, programs
+        assert mock_enqueue.call_args_list[0][0][0].__name__ == 'retrieve_models'

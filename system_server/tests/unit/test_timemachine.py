@@ -6,6 +6,7 @@ method instead of calling it. Each is pinned with a test that names the defect,
 so the behaviour is recorded rather than assumed and a fix shows up as a
 deliberate test change.
 """
+import datetime
 import json
 import os
 import pytest
@@ -215,59 +216,120 @@ class TestGetArchiveDays:
 
 
 class TestCleanupTimemachineRecords:
+    """Recordings older than the archive window, and nothing newer.
+
+    This used to raise NameError on its third line - `ms_day` where the local
+    is `s_day` - so DELETE /cleanup_timemachine had never removed a record on
+    any device. Two more sat behind it: `failed.append(path)` with no `path`
+    in scope, and a num_records that was reported but never counted.
+    """
+
     @pytest.mark.unit
-    def test_the_retention_arithmetic_references_an_undefined_name(self):
-        # `time_back = time_now - (ms_day*days)`; the local is named s_day.
-        # The function raises NameError on its third line, so
-        # DELETE /cleanup_timemachine has never removed a record.
+    def test_it_keeps_one_interval_of_history(self):
+        # archive_days of 1 removes what is older than 24 hours ago, measured
+        # from now - not from whenever the job last managed to run.
+        now = int(datetime.datetime.now().timestamp())
+        with patch.object(cleanup, 'get_archive_days', return_value=1), \
+             patch.object(cleanup.tm_records_db, 'find', return_value=[]) as find:
+            cleanup.cleanup_timemachine_records()
+
+        cutoff = find.call_args[0][0]['record_start_time']['$lt']
+        assert abs((now - cutoff) - 86400) <= 2
+
+    @pytest.mark.unit
+    def test_the_window_scales_with_the_configured_days(self):
+        now = int(datetime.datetime.now().timestamp())
         with patch.object(cleanup, 'get_archive_days', return_value=30), \
-             patch.object(cleanup.tm_records_db, 'find') as find:
-            with pytest.raises(NameError, match='ms_day'):
-                cleanup.cleanup_timemachine_records()
+             patch.object(cleanup.tm_records_db, 'find', return_value=[]) as find:
+            cleanup.cleanup_timemachine_records()
 
-        find.assert_not_called()
-
-    @pytest.mark.unit
-    def test_the_failure_branch_also_references_an_undefined_name(self):
-        # Past the ms_day fix there is a second one: the except arm does
-        # `failed.append(path)` and no `path` exists in that scope, so any
-        # record whose file is already gone raises instead of being recorded
-        # in the 'failed' list the function returns.
-        records = [{'id': 'r1', 'filepath_webm': '/a.webm', 'filepath_mp4': '/a.mp4'}]
-        with patch.object(cleanup, 'get_archive_days', return_value=30), \
-             patch.object(cleanup.tm_records_db, 'find', return_value=records), \
-             patch('os.remove', side_effect=OSError('already gone')), \
-             patch.dict(cleanup.__dict__, {'ms_day': 86400}):
-            with pytest.raises(NameError, match='path'):
-                cleanup.cleanup_timemachine_records()
+        cutoff = find.call_args[0][0]['record_start_time']['$lt']
+        assert abs((now - cutoff) - 30 * 86400) <= 2
 
     @pytest.mark.unit
-    def test_a_successful_pass_removes_both_encodings_and_the_record(self, monkeypatch):
+    def test_the_cutoff_is_in_seconds_like_the_records(self):
+        # record_start_time is epoch seconds. A millisecond cutoff would sit
+        # far in the future of every record and delete the whole archive.
+        with patch.object(cleanup, 'get_archive_days', return_value=1), \
+             patch.object(cleanup.tm_records_db, 'find', return_value=[]) as find:
+            cleanup.cleanup_timemachine_records()
+
+        cutoff = find.call_args[0][0]['record_start_time']['$lt']
+        assert 1e9 < cutoff < 1e10
+
+    @pytest.mark.unit
+    def test_a_successful_pass_removes_both_encodings_and_the_record(self):
         records = [{'id': 'r1', 'filepath_webm': '/a.webm', 'filepath_mp4': '/a.mp4'},
                    {'id': 'r2', 'filepath_webm': '/b.webm', 'filepath_mp4': '/b.mp4'}]
 
         with patch.object(cleanup, 'get_archive_days', return_value=30), \
              patch.object(cleanup.tm_records_db, 'find', return_value=records), \
              patch.object(cleanup.tm_records_db, 'delete_one') as delete, \
-             patch('os.remove') as remove, \
-             patch.dict(cleanup.__dict__, {'ms_day': 86400}):
+             patch('os.remove') as remove:
             logs = cleanup.cleanup_timemachine_records()
 
-        assert logs == {'num_records': 0, 'removed': 2, 'failed': []}
+        assert logs == {'num_records': 2, 'removed': 2, 'failed': []}
         assert remove.call_count == 4
         assert delete.call_args_list == [call({'id': 'r1'}), call({'id': 'r2'})]
 
     @pytest.mark.unit
-    def test_num_records_is_never_incremented(self, monkeypatch):
-        # num_to_remove is initialised to 0 and never touched, so the report
-        # always claims zero records were eligible.
+    def test_a_file_that_is_already_gone_still_takes_its_record(self):
+        # Otherwise the record is found again on every pass and the archive
+        # never drains.
+        records = [{'id': 'r1', 'filepath_webm': '/a.webm', 'filepath_mp4': '/a.mp4'}]
+
+        with patch.object(cleanup, 'get_archive_days', return_value=30), \
+             patch.object(cleanup.tm_records_db, 'find', return_value=records), \
+             patch.object(cleanup.tm_records_db, 'delete_one') as delete, \
+             patch('os.remove', side_effect=FileNotFoundError('gone')):
+            logs = cleanup.cleanup_timemachine_records()
+
+        assert logs['removed'] == 1
+        assert logs['failed'] == []
+        delete.assert_called_once_with({'id': 'r1'})
+
+    @pytest.mark.unit
+    def test_a_real_failure_is_reported_and_the_record_kept(self):
+        records = [{'id': 'r1', 'filepath_webm': '/a.webm', 'filepath_mp4': '/a.mp4'}]
+
+        with patch.object(cleanup, 'get_archive_days', return_value=30), \
+             patch.object(cleanup.tm_records_db, 'find', return_value=records), \
+             patch.object(cleanup.tm_records_db, 'delete_one') as delete, \
+             patch('os.remove', side_effect=OSError('permission denied')):
+            logs = cleanup.cleanup_timemachine_records()
+
+        assert logs['removed'] == 0
+        assert len(logs['failed']) == 2
+        assert 'permission denied' in logs['failed'][0]
+        delete.assert_not_called()
+
+    @pytest.mark.unit
+    def test_one_bad_record_does_not_stop_the_rest(self):
+        records = [{'id': 'bad', 'filepath_webm': '/bad.webm', 'filepath_mp4': '/bad.mp4'},
+                   {'id': 'ok', 'filepath_webm': '/ok.webm', 'filepath_mp4': '/ok.mp4'}]
+
+        def remove(path):
+            if 'bad' in path:
+                raise OSError('permission denied')
+
+        with patch.object(cleanup, 'get_archive_days', return_value=30), \
+             patch.object(cleanup.tm_records_db, 'find', return_value=records), \
+             patch.object(cleanup.tm_records_db, 'delete_one') as delete, \
+             patch('os.remove', side_effect=remove):
+            logs = cleanup.cleanup_timemachine_records()
+
+        assert logs == {'num_records': 2, 'removed': 1,
+                        'failed': logs['failed']}
+        delete.assert_called_once_with({'id': 'ok'})
+
+    @pytest.mark.unit
+    def test_it_reports_how_many_were_eligible(self):
         records = [{'id': 'r1', 'filepath_webm': '/a.webm', 'filepath_mp4': '/a.mp4'}]
         with patch.object(cleanup, 'get_archive_days', return_value=30), \
              patch.object(cleanup.tm_records_db, 'find', return_value=records), \
              patch.object(cleanup.tm_records_db, 'delete_one'), \
-             patch('os.remove'), \
-             patch.dict(cleanup.__dict__, {'ms_day': 86400}):
-            assert cleanup.cleanup_timemachine_records()['num_records'] == 0
+             patch('os.remove'):
+            assert cleanup.cleanup_timemachine_records()['num_records'] == 1
 
     @pytest.mark.unit
     def test_files_are_resolved_under_the_visioncell_home(self, monkeypatch):
@@ -277,8 +339,7 @@ class TestCleanupTimemachineRecords:
         with patch.object(cleanup, 'get_archive_days', return_value=30), \
              patch.object(cleanup.tm_records_db, 'find', return_value=records), \
              patch.object(cleanup.tm_records_db, 'delete_one'), \
-             patch('os.remove') as remove, \
-             patch.dict(cleanup.__dict__, {'ms_day': 86400}):
+             patch('os.remove') as remove:
             cleanup.cleanup_timemachine_records()
 
         assert remove.call_args_list == [

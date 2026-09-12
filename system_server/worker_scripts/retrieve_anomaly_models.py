@@ -243,11 +243,6 @@ def save_anomaly_versions(synced):
     behaves like every other type - including its empty-list pruning and the
     preset bump via assign_preset_to_latest_version().
 
-    NOTE: that pruning deletes any model document left with all version lists
-    empty. On a device carrying both object detection and anomaly models that
-    can evict an unrelated record (it removed UniversalPodInspection on a test
-    device here). Kept because the spec calls for these semantics to carry over;
-    the fix belongs in save_models_versions, not in a per-type workaround.
     """
     models_versions = [{'type': name, MODEL_TYPE: record['versions']}
                        for name, record in synced.items()]
@@ -265,7 +260,8 @@ def save_anomaly_versions(synced):
                     'model_version': version,
                     'file':          detail['file'],
                     'lane':          manifest.get('method') or manifest.get('lane'),
-                    'categories':    manifest.get('categories'),
+                    # The manifest key is 'category', singular.
+                    'categories':    manifest.get('categories') or manifest.get('category'),
                     'manifest':      manifest,
                     'synced_at':     datetime.datetime.utcnow(),
                 }},
