@@ -121,12 +121,21 @@ class TestInitialize:
 
         upgrade_recorder.initialize("test_upgrade_001", 5)
 
-        # Check that update_one was called to set running upgrades to failed
-        calls = mock_mongo_client.update_one.call_args_list
-        assert len(calls) == 2
-        # First call should update running to failed
-        assert calls[0][0][0] == {'state': 'running'}
-        assert calls[0][0][1] == {'$set': {'state': 'failed'}}
+        mock_mongo_client.update_many.assert_called_once_with(
+            {'state': 'running'}, {'$set': {'state': 'failed'}})
+
+    @patch('upgrade_recorder.ms_timestamp')
+    def test_initialize_sweeps_every_stale_record(self, mock_timestamp, mock_mongo_client):
+        """Every abandoned record is cleared, not just the first.
+
+        One left behind keeps /running_update returning a running record, and
+        the top-bar chip never stops saying the system is updating.
+        """
+        mock_timestamp.return_value = 1234567890000
+
+        upgrade_recorder.initialize("test_upgrade_001", 5)
+
+        assert mock_mongo_client.update_one.call_count == 1
 
     @patch('upgrade_recorder.ms_timestamp')
     def test_initialize_inserts_new_record(self, mock_timestamp, mock_mongo_client):
@@ -137,9 +146,8 @@ class TestInitialize:
 
         # Check that update_one was called with upsert=True
         calls = mock_mongo_client.update_one.call_args_list
-        # Second call should insert the new record
-        assert calls[1][0][0] == {'id': "test_upgrade_001"}
-        assert calls[1][0][2] is True  # upsert=True
+        assert calls[0][0][0] == {'id': "test_upgrade_001"}
+        assert calls[0][0][2] is True  # upsert=True
 
 
 class TestGetRecord:

@@ -28,8 +28,11 @@ def initialize(id, num_steps):
         "id": id 
     }
 
-    # update any running upgrade records to failed
-    upgrade_records.update_one({'state': 'running'}, {'$set': {'state': 'failed'}})
+    # Any record still marked running belongs to a run that died without
+    # recording its end. update_many, not update_one: more than one can
+    # accumulate, and one left behind keeps the top bar claiming an upgrade is
+    # in progress forever.
+    upgrade_records.update_many({'state': 'running'}, {'$set': {'state': 'failed'}})
     updated_record = upgrade_records.update_one({'id': id}, {'$set': record}, True)
     return record
 
