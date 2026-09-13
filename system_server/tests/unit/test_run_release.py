@@ -224,7 +224,7 @@ class TestPreferManifestWithFallback:
         self._legacy(monkeypatch, calls)
         monkeypatch.setattr(upgrade_runner, 'run_release',
                             lambda *a, **k: (_ for _ in ()).throw(
-                                fetch_mod.FetchError('offline')))
+                                fetch_mod.ReleaseUnavailable('offline')))
         assert upgrade_runner._release_or_legacy('r1') == 0
         assert calls == [('legacy', ['1.97'] * 7)]
 
@@ -234,9 +234,25 @@ class TestPreferManifestWithFallback:
         self._legacy(monkeypatch, calls)
         monkeypatch.setattr(upgrade_runner, 'run_release',
                             lambda *a, **k: (_ for _ in ()).throw(
-                                fetch_mod.FetchError('no release promoted')))
+                                fetch_mod.ReleaseUnavailable('no release promoted')))
         upgrade_runner._release_or_legacy('r1')
         assert calls and calls[0][0] == 'legacy'
+
+    def test_a_rejected_request_does_NOT_fall_back(self, monkeypatch):
+        """The endpoint answering 400 means this device asked wrongly - it is
+        not an outage. Falling back here is how a bad arch string silently
+        downgraded devices to the legacy track while reporting success."""
+        from release import fetch as fetch_mod
+        calls = []
+        self._legacy(monkeypatch, calls)
+        monkeypatch.setattr(upgrade_runner, 'run_release',
+                            lambda *a, **k: (_ for _ in ()).throw(
+                                fetch_mod.FetchError(
+                                    "release endpoint returned HTTP 400: "
+                                    "unknown or missing arch 'x86_64'")))
+        with pytest.raises(fetch_mod.FetchError, match='HTTP 400'):
+            upgrade_runner._release_or_legacy('r1')
+        assert calls == []
 
     def test_a_verification_failure_does_NOT_fall_back(self, monkeypatch):
         """The critical one. Falling back here would mean a tampered or

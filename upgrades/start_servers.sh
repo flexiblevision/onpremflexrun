@@ -94,4 +94,6 @@ sleep 3
 
 forever stop $HOME/flex-run/system_server/server.py
 sleep 2
-forever start -c python3 $HOME/flex-run/system_server/server.py
+# Through the wrapper, not `forever start` directly: it exports PYTHONPATH, and
+# the upgrade runner this server spawns inherits its environment.
+sh $HOME/flex-run/scripts/fv_system_server_start.sh

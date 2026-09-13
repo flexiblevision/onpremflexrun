@@ -123,18 +123,26 @@ class TestFailures:
 
     def test_an_unreachable_endpoint_says_so(self):
         s = Session(boom=OSError('name resolution failed'))
-        with pytest.raises(f.FetchError, match='could not reach'):
+        with pytest.raises(f.ReleaseUnavailable, match='could not reach'):
             f.fetch_release('x86', session=s)
 
     def test_404_carries_the_reason(self):
         """Nothing promoted is the normal state of a channel, not a fault."""
         body = {'error': "no release promoted to 'stable' for x86"}
-        with pytest.raises(f.FetchError, match='no release promoted'):
+        with pytest.raises(f.ReleaseUnavailable, match='no release promoted'):
             f.fetch_release('x86', session=Session(Response(404, body)))
 
     def test_a_500_names_the_status(self):
         with pytest.raises(f.FetchError, match='HTTP 500'):
             f.fetch_release('x86', session=Session(Response(500, {})))
+
+    def test_a_rejected_request_is_not_unavailable(self):
+        """A 400 means we asked wrongly. Typing it as unavailable would let the
+        caller fall back to the legacy track and call that success."""
+        body = {'error': "unknown or missing arch 'x86_64'"}
+        with pytest.raises(f.FetchError) as caught:
+            f.fetch_release('x86_64', session=Session(Response(400, body)))
+        assert not isinstance(caught.value, f.ReleaseUnavailable)
 
     def test_non_json_is_refused(self):
         with pytest.raises(f.FetchError, match='did not return JSON'):

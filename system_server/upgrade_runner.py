@@ -18,6 +18,12 @@ import os
 import subprocess
 import sys
 
+# `release` lives one level up, and this is spawned as a bare script by absolute
+# path, so only its own directory is on sys.path. Resolved from __file__ rather
+# than an inherited PYTHONPATH: start_servers.sh restarts the system server
+# without one, and the runner must not depend on how its parent was launched.
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 # Exit codes are defined in upgrades/upgrade_flex_run.sh; keep in sync with it.
 FLEX_RUN_ERRORS = {
     10: 'Bad or missing fvconfig.json - could not determine which branch to deploy',
@@ -397,6 +403,9 @@ def _release_or_legacy(run_id, channel=None):
     fails verification is not a reason to go and do the same upgrade
     unverified: that would make the signature advisory, which is the one thing
     it must never be.
+
+    Nor is a request the service answers and rejects. A 4xx is our own bug, and
+    absorbing one here is what let a bad arch string downgrade devices quietly.
     """
     from release import fetch as fetch_mod
 
@@ -405,7 +414,7 @@ def _release_or_legacy(run_id, channel=None):
 
     try:
         return run_release(run_id, _device_arch(), channel=channel)
-    except fetch_mod.FetchError as exc:
+    except fetch_mod.ReleaseUnavailable as exc:
         print('[upgrade_runner] no signed release available ({}) - falling '
               'back to the version endpoint'.format(exc))
 

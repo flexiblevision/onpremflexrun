@@ -260,3 +260,30 @@ class TestFlexRunErrorMapping:
         assert documented <= set(upgrade_runner.FLEX_RUN_ERRORS), \
             'unmapped exit codes: {}'.format(
                 sorted(documented - set(upgrade_runner.FLEX_RUN_ERRORS)))
+
+
+class TestImportsWithoutInheritedPath:
+    """The runner is spawned as a bare script by absolute path, so only its own
+    directory is on sys.path - `release` lives a level up. It used to reach it
+    through the PYTHONPATH that scripts/fv_system_server_start.sh exports and
+    the server passes to its children, which meant that after an upgrade
+    restarted the server via start_servers.sh (no export) every later run died
+    with "No module named 'release'" and the device could not upgrade again.
+    """
+
+    REPO = os.path.abspath(os.path.join(os.path.dirname(__file__),
+                                        '..', '..', '..'))
+
+    def test_release_is_importable_with_no_pythonpath(self, tmp_path):
+        runner = os.path.join(self.REPO, 'system_server', 'upgrade_runner.py')
+        env = {k: v for k, v in os.environ.items() if k != 'PYTHONPATH'}
+
+        # run_name keeps __main__ from firing, so this loads the module without
+        # starting an upgrade. cwd is outside the repo so '' cannot supply it.
+        code = ('import runpy; '
+                "runpy.run_path({!r}, run_name='loaded'); "
+                'import release.fetch'.format(runner))
+        proc = subprocess.run([sys.executable, '-c', code],
+                              cwd=str(tmp_path), env=env,
+                              capture_output=True, text=True)
+        assert proc.returncode == 0, proc.stderr

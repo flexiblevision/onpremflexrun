@@ -23,6 +23,16 @@ class FetchError(Exception):
     pass
 
 
+class ReleaseUnavailable(FetchError):
+    """No release could be obtained: nothing answered, or nothing is promoted.
+
+    Only this justifies falling back to the legacy version endpoint. A service
+    that answers and rejects the request is a bug on this side, and treating
+    one as an outage turned a single bad arch string into a fleet-wide silent
+    downgrade that reported success.
+    """
+
+
 def _post(base, ref, payload, session=None, timeout=TIMEOUT):
     import requests
 
@@ -33,7 +43,7 @@ def _post(base, ref, payload, session=None, timeout=TIMEOUT):
                          headers={'Content-Type': 'application/json'},
                          timeout=timeout)
     except Exception as exc:
-        raise FetchError('could not reach {}: {}'.format(url, exc))
+        raise ReleaseUnavailable('could not reach {}: {}'.format(url, exc))
 
 
 def fetch_release(arch, channel='stable', counter=None, base=DEFAULT_BASE,
@@ -57,7 +67,7 @@ def fetch_release(arch, channel='stable', counter=None, base=DEFAULT_BASE,
 
     if status == 404:
         # Nothing promoted yet is the normal state of a channel, not a fault.
-        raise FetchError(_detail(response) or 'no release published')
+        raise ReleaseUnavailable(_detail(response) or 'no release published')
     if status != 200:
         raise FetchError('release endpoint returned HTTP {}{}'.format(
             status, ': ' + _detail(response) if _detail(response) else ''))
