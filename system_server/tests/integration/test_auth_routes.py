@@ -135,6 +135,7 @@ def sync_env():
     """Everything /sync_analytics fans out to."""
     with patch.object(auth_routes, 'push_analytics_to_cloud') as analytics, \
          patch.object(auth_routes, 'push_assembly_progress') as assembly, \
+         patch.object(auth_routes, 'push_device_identity') as identity, \
          patch.object(auth_routes, 'get_unprocessed_events',
                       return_value={'count': 0}) as events, \
          patch.object(auth_routes, 'insert_job') as insert, \
@@ -143,7 +144,7 @@ def sync_env():
          patch.object(auth_routes, 'get_cloud_domain',
                       return_value='https://cloud.example'):
         yield {'analytics': analytics, 'assembly': assembly, 'events': events,
-               'insert': insert, 'enqueue': enqueue}
+               'insert': insert, 'enqueue': enqueue, 'identity': identity}
 
 
 class TestSyncAnalytics:

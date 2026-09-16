@@ -11,6 +11,7 @@ from redis import Redis
 from rq import Queue, Retry
 from worker_scripts.job_manager import insert_job, push_analytics_to_cloud
 from worker_scripts.assembly_sync import push_assembly_progress
+from worker_scripts.device_identity import push_device_identity
 from timemachine.zip_push import push_event_records, get_unprocessed_events
 from helpers.config_helper import write_settings_to_config
 
@@ -62,6 +63,8 @@ class SyncAnalytics(Resource):
 
         if access_token:
             cloud_domain = get_cloud_domain(CLOUD_DOMAIN)
+            # First: a record synced before its place is known cannot be placed.
+            push_device_identity(cloud_domain, access_token)
             push_analytics_to_cloud(cloud_domain, access_token)
             push_assembly_progress(access_token)
             events = get_unprocessed_events()
