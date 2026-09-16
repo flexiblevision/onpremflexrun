@@ -14,6 +14,7 @@ from testsupport import thread_aware_sleep_mock
 from unittest.mock import patch, MagicMock, call, mock_open
 
 from timemachine import installer, cleanup, zip_push
+from timemachine import analytics as tm_analytics
 
 
 # --------------------------------------------------------------------------
@@ -402,60 +403,81 @@ class TestBatchAndProcess:
         with patch('builtins.open', mock_open(read_data=b'')):
             batches = zip_push.batch_and_process(self._events(12))
 
-        assert [len(b) for b in batches] == [5, 5, 2]
+        assert [len(files) for files, _ in batches] == [5, 5, 2]
 
     @pytest.mark.unit
     def test_a_partial_batch_is_still_returned(self):
         with patch('builtins.open', mock_open(read_data=b'')):
             batches = zip_push.batch_and_process(self._events(3))
 
-        assert [len(b) for b in batches] == [3]
+        assert [len(files) for files, _ in batches] == [3]
 
     @pytest.mark.unit
     def test_no_events_still_yields_one_empty_batch(self):
-        # push_event_records iterates the result, so an empty batch is a no-op
-        # rather than an error.
-        assert zip_push.batch_and_process([]) == [[]]
+        # push_event_records skips an empty batch, so this stays a no-op rather
+        # than an error.
+        assert zip_push.batch_and_process([]) == [([], [])]
 
     @pytest.mark.unit
     def test_each_entry_is_a_multipart_file_tuple(self):
         with patch('builtins.open', mock_open(read_data=b'')) as opener:
-            batch = zip_push.batch_and_process(self._events(1))[0]
+            files, _ = zip_push.batch_and_process(self._events(1))[0]
 
-        device_id, (name, handle, content_type) = batch[0]
+        device_id, (name, handle, content_type) = files[0]
         assert name == '0.zip'
         assert content_type == 'application/zip'
         opener.assert_called_once_with('/home/visioncell/z/0.zip', 'rb')
 
     @pytest.mark.unit
+    def test_each_upload_travels_with_its_record(self):
+        # The multipart field name is the device id, shared across the batch, so
+        # the record is what says which row to mark.
+        with patch.object(zip_push, 'DEV_ID', 'dev-42'), \
+             patch('builtins.open', mock_open(read_data=b'')):
+            files, events = zip_push.batch_and_process(self._events(3))[0]
+
+        assert [e['id'] for e in events] == ['e0', 'e1', 'e2']
+        assert [f[0] for f in files] == ['dev-42'] * 3
+
+    @pytest.mark.unit
     def test_the_device_id_keys_each_upload(self):
         with patch.object(zip_push, 'DEV_ID', 'dev-42'), \
              patch('builtins.open', mock_open(read_data=b'')):
-            batch = zip_push.batch_and_process(self._events(1))[0]
+            files, _ = zip_push.batch_and_process(self._events(1))[0]
 
-        assert batch[0][0] == 'dev-42'
+        assert files[0][0] == 'dev-42'
 
     @pytest.mark.unit
     def test_an_unregistered_device_falls_back_to_the_event_id(self):
         with patch.object(zip_push, 'DEV_ID', None), \
              patch('builtins.open', mock_open(read_data=b'')):
-            batch = zip_push.batch_and_process(self._events(1))[0]
+            files, _ = zip_push.batch_and_process(self._events(1))[0]
 
-        assert batch[0][0] == 'e0'
+        assert files[0][0] == 'e0'
+
+
+def _files(n=1):
+    return [('dev-42', (f'{i}.zip', MagicMock(name=f'/tmp/{i}.zip'), 'application/zip'))
+            for i in range(n)]
+
+
+def _records(n=1):
+    return [{'id': f'e{i}', 'zip_name': f'{i}.zip', 'zip_path': f'/z/{i}.zip',
+             'record_start_time': 1789000000 + i} for i in range(n)]
 
 
 def _batch(n=1):
-    return [(f'e{i}', (f'{i}.zip', MagicMock(name=f'/tmp/{i}.zip'), 'application/zip'))
-            for i in range(n)]
+    return (_files(n), _records(n))
 
 
 class TestMarkAsProcessed:
     @pytest.mark.unit
     def test_flags_the_record_and_deletes_the_archive(self):
-        batch = _batch(2)
+        files, events = _batch(2)
         with patch.object(zip_push.tm_records_db, 'update_one') as update, \
+             patch.object(zip_push.analytics, 'record_event'), \
              patch('os.remove') as remove:
-            zip_push.mark_as_processed(batch)
+            zip_push.mark_as_processed(files, events)
 
         assert update.call_count == 2
         assert update.call_args[0][0] == {'id': 'e1'}
@@ -463,24 +485,118 @@ class TestMarkAsProcessed:
         assert remove.call_count == 2
 
     @pytest.mark.unit
-    def test_an_already_deleted_archive_does_not_stop_the_batch(self, capsys):
-        batch = _batch(2)
+    def test_the_event_id_is_used_not_the_device_id(self):
+        # The upload tuple carries the device id; marking by it matched no row.
+        files, events = _batch(1)
         with patch.object(zip_push.tm_records_db, 'update_one') as update, \
+             patch.object(zip_push.analytics, 'record_event'), \
+             patch('os.remove'):
+            zip_push.mark_as_processed(files, events)
+
+        assert update.call_args[0][0] == {'id': 'e0'}
+
+    @pytest.mark.unit
+    def test_a_delivered_event_joins_the_analytics_spine(self):
+        files, events = _batch(2)
+        with patch.object(zip_push.tm_records_db, 'update_one'), \
+             patch.object(zip_push.analytics, 'record_event') as record, \
+             patch('os.remove'):
+            zip_push.mark_as_processed(files, events)
+
+        assert record.call_count == 2
+        assert record.call_args[0][0]['id'] == 'e1'
+
+    @pytest.mark.unit
+    def test_an_already_deleted_archive_does_not_stop_the_batch(self, capsys):
+        files, events = _batch(2)
+        with patch.object(zip_push.tm_records_db, 'update_one') as update, \
+             patch.object(zip_push.analytics, 'record_event'), \
              patch('os.remove', side_effect=OSError('gone')):
-            zip_push.mark_as_processed(batch)
+            zip_push.mark_as_processed(files, events)
 
         # Both records are still marked processed - the upload succeeded, and
         # a stuck local file must not make the device re-push it forever.
         assert update.call_count == 2
 
 
+class TestAnalyticsProducer:
+    """The record that puts a time machine event on the analytics spine."""
+
+    def _event(self, **over):
+        event = {'id': 'e1', 'record_start_time': 1789000000,
+                 'zip_name': 'a.zip', 'zip_path': '/z/a.zip',
+                 'filepath_mp4': '/b/a.mp4', 'serial_number': 'SN-1'}
+        event.update(over)
+        return event
+
+    @pytest.mark.unit
+    def test_start_time_becomes_iso_with_an_offset(self):
+        # record_start_time is epoch SECONDS while predictions are ms. Resolving
+        # it here is what stops the spine guessing (PRODUCERS.md rule 1).
+        record = tm_analytics.build_record(self._event())
+
+        assert record['event_ts'] == '2026-09-10T00:26:40+00:00'
+
+    @pytest.mark.unit
+    def test_the_recording_span_is_end_ts_never_duration(self):
+        record = tm_analytics.build_record(
+            self._event(record_end_time=1789000030))
+
+        assert record['end_ts'] == '2026-09-10T00:27:10+00:00'
+        assert 'duration_ms' not in record
+
+    @pytest.mark.unit
+    def test_it_is_tagged_for_the_time_machine_pack(self):
+        record = tm_analytics.build_record(self._event())
+
+        assert record['domain'] == 'time_machine'
+        assert record['synced'] is False
+        assert isinstance(record['modified'], int)
+
+    @pytest.mark.unit
+    def test_no_bucket_is_claimed(self):
+        # The recording lands in the *device's* bucket, resolved cloud-side.
+        record = tm_analytics.build_record(self._event())
+
+        assert 'bucket' not in record
+
+    @pytest.mark.unit
+    def test_the_device_is_carried_for_place_resolution(self):
+        record = tm_analytics.build_record(self._event(), device_id='dev-42')
+
+        assert record['metadata']['device_id'] == 'dev-42'
+
+    @pytest.mark.unit
+    @pytest.mark.parametrize('missing', ['id', 'record_start_time'])
+    def test_an_unusable_event_is_skipped_not_guessed(self, missing):
+        event = self._event()
+        del event[missing]
+
+        assert tm_analytics.build_record(event) is None
+
+    @pytest.mark.unit
+    def test_recording_upserts_so_a_re_push_does_not_duplicate(self):
+        with patch.object(tm_analytics.analytics_coll, 'update_one') as update:
+            assert tm_analytics.record_event(self._event()) is True
+
+        assert update.call_args[0][0] == {'id': 'e1'}
+        assert update.call_args[1]['upsert'] is True
+
+    @pytest.mark.unit
+    def test_a_store_failure_never_breaks_the_push(self):
+        with patch.object(tm_analytics.analytics_coll, 'update_one',
+                          side_effect=RuntimeError('mongo down')):
+            assert tm_analytics.record_event(self._event()) is False
+
+
 class TestMarkAsDequeued:
     @pytest.mark.unit
     def test_clears_the_queued_flag_so_the_event_is_retried(self):
         with patch.object(zip_push.tm_records_db, 'update_one') as update:
-            zip_push.mark_as_dequeued(_batch(2))
+            zip_push.mark_as_dequeued(_records(2))
 
         assert update.call_count == 2
+        assert update.call_args[0][0] == {'id': 'e1'}
         assert update.call_args[0][1] == {'$set': {'queued': False}}
 
 
