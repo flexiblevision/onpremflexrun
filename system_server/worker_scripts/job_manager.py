@@ -57,6 +57,8 @@ use_aws           = False
 aws_client        = None
 config            = settings.config
 BATCH_SIZE        = 10
+# A whole batch is published as one Pub/Sub message, which caps at 10MB.
+MAX_BATCH_BYTES   = int(os.environ.get('MAX_BATCH_BYTES', 8 * 1024 * 1024))
 LB_DOMAIN         = "https://functions-proxy.flexiblevision.com"
 BQ_INGEST_PATH    = "https://data-ingest-queue-172198548516.us-central1.run.app"
 if config['latest_stable_ref'] == 'latest_stable_version':
@@ -346,20 +348,33 @@ def kinesis_call(analytics):
 
         return False
 
+def batch_records(records, max_records=BATCH_SIZE, max_bytes=MAX_BATCH_BYTES):
+    """Slice by record count *and* serialized size.
+
+    An oversized record still goes alone rather than being dropped.
+    """
+    batch, size = [], 0
+    for record in records:
+        weight = len(json.dumps(record, default=str)) + 1
+        if batch and (len(batch) >= max_records or size + weight > max_bytes):
+            yield batch
+            batch, size = [], 0
+        batch.append(record)
+        size += weight
+    if batch:
+        yield batch
+
+
 def push_analytics_to_cloud(domain, access_token):
     headers = {"Authorization": "Bearer "+access_token, 'Content-Type': 'application/json'}
     url     = domain+"/api/capture/devices/upload_prediction"
 
     latest_analytics = get_unsynced_records()
-    num_analytics = len(latest_analytics)
 
-    if num_analytics == 0:
+    if not latest_analytics:
         return True
 
-    for i in range(0, num_analytics, BATCH_SIZE):
-        analytics = latest_analytics[i:i+BATCH_SIZE]
-        if not analytics: break
-
+    for analytics in batch_records(latest_analytics):
         print('#Analytics: ', len(analytics))
         if use_aws:
             j_push = job_queue.enqueue(

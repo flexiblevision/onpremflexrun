@@ -481,3 +481,54 @@ class TestBQIngestPath:
         """Test BQ ingest path for development"""
         # This test verifies the module-level logic
         pass
+
+
+class TestBatchRecords:
+    """Tests for batch_records - the publish batcher"""
+
+    @pytest.mark.unit
+    def test_empty_input_yields_nothing(self):
+        from worker_scripts.job_manager import batch_records
+        assert list(batch_records([])) == []
+
+    @pytest.mark.unit
+    def test_splits_on_record_count(self):
+        from worker_scripts.job_manager import batch_records
+
+        records = [{'id': i} for i in range(25)]
+        batches = list(batch_records(records, max_records=10, max_bytes=10**9))
+
+        assert [len(b) for b in batches] == [10, 10, 5]
+        assert sum(len(b) for b in batches) == 25
+
+    @pytest.mark.unit
+    def test_splits_on_payload_size_before_count(self):
+        """A heavy record closes the batch early - the Pub/Sub 10MB cap."""
+        from worker_scripts.job_manager import batch_records
+
+        records = [{'id': i, 'base64': 'x' * 400} for i in range(10)]
+        batches = list(batch_records(records, max_records=10, max_bytes=1000))
+
+        assert len(batches) > 1
+        assert all(len(b) < 10 for b in batches)
+        assert sum(len(b) for b in batches) == 10
+
+    @pytest.mark.unit
+    def test_oversized_record_is_sent_alone_not_dropped(self):
+        """Nothing is silently discarded - an unsplittable record still goes."""
+        from worker_scripts.job_manager import batch_records
+
+        records = [{'id': 'small'}, {'id': 'huge', 'base64': 'x' * 5000}, {'id': 'small2'}]
+        batches = list(batch_records(records, max_records=10, max_bytes=1000))
+
+        assert sum(len(b) for b in batches) == 3
+        huge = [b for b in batches if any(r['id'] == 'huge' for r in b)]
+        assert len(huge) == 1 and len(huge[0]) == 1
+
+    @pytest.mark.unit
+    def test_non_serializable_values_do_not_raise(self):
+        """Records come from json_util and can carry datetimes."""
+        from worker_scripts.job_manager import batch_records
+
+        records = [{'id': 1, 'modified': datetime.now()}]
+        assert [len(b) for b in batch_records(records)] == [1]
