@@ -49,7 +49,7 @@ MANIFEST   = 'manifest.json'
 # here, so moving the mount does not silently strand the sync.
 ADDON_JSON = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(
     os.path.abspath(__file__)))), 'addons', 'catalog', 'anomaly_audio', 'addon.json')
-FALLBACK_HOST_DATA      = '/home/visioncell/Documents/audio_anomaly_data'
+FALLBACK_HOST_DATA      = '/root/waveform'
 FALLBACK_CONTAINER_DATA = '/app/data'
 
 INVALID_STEM_CHARS = re.compile(r'[^A-Za-z0-9_-]')

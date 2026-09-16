@@ -118,7 +118,7 @@ class TestDataDirs:
     def test_reads_the_addon_mount(self):
         host, container = w.data_dirs()
         assert container == '/app/data'
-        assert host.endswith('audio_anomaly_data')
+        assert host == '/root/waveform'
 
     def test_falls_back_when_the_descriptor_is_missing(self, monkeypatch):
         monkeypatch.setattr(w, 'ADDON_JSON', '/nonexistent/addon.json')

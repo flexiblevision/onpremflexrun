@@ -69,7 +69,7 @@ class TestReferenceResolution:
 
 class TestRunArgv:
     @pytest.mark.unit
-    def test_the_audio_argv_matches_its_old_install_script(self):
+    def test_the_audio_argv_matches_its_descriptor(self):
         addon = registry.get('anomaly_audio')
         argv = runtime.build_run_argv(addon, 'img')
 
@@ -79,7 +79,7 @@ class TestRunArgv:
         assert argv[argv.index('--gpus') + 1] == 'device=0'
         assert 'MONGO_URI=mongodb://172.17.0.1:27017/' in argv
         assert 'CLOUD_DOMAIN=https://test.example' in argv
-        assert ('/home/visioncell/Documents/audio_anomaly_data:/app/data') in argv
+        assert ('/root/waveform:/app/data') in argv
         assert 'max-size=50m' in argv and 'max-file=5' in argv
         assert argv[-1] == 'img'
 

@@ -22,7 +22,7 @@
     },
     "volumes": [
       {
-        "host": "/home/visioncell/Documents/audio_anomaly_data",
+        "host": "/root/waveform",
         "container": "/app/data",
         "create": true
       }
