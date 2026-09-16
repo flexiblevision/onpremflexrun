@@ -32,6 +32,24 @@ class ApplyError(Exception):
     pass
 
 
+def is_current(entry, running):
+    """Is this container already on what the release pins?
+
+    A container created from a pinned reference reports its digest, not a tag,
+    so comparing against the tag alone read every pinned container as changed -
+    the recreate-the-whole-stack that `current` exists to prevent.
+
+    Used by both readers below: the positional versions decide which containers
+    are touched and the plan decides what bytes they get, and the two disagreeing
+    is worse than either being wrong.
+    """
+    if running is None:
+        # "Not known to be current" - and never a match for an entry that
+        # happens to carry no digest.
+        return False
+    return running in (entry.get('tag'), entry.get('digest'))
+
+
 def plan_lines(parsed, arch, current=None):
     """'<component> <version> <repo>@sha256:...' per component, sorted.
 
@@ -43,8 +61,9 @@ def plan_lines(parsed, arch, current=None):
     current = current or {}
     lines = []
     for name in sorted(components):
-        tag = components[name]['tag']
-        version = UP_TO_DATE if current.get(name) == tag else tag
+        entry = components[name]
+        tag = entry['tag']
+        version = UP_TO_DATE if is_current(entry, current.get(name)) else tag
         lines.append('{} {} {}'.format(
             name, version, manifest_mod.pinned_reference(parsed, arch, name)))
     return lines
@@ -97,8 +116,8 @@ def versions_for(parsed, arch, current=None):
             # Not in this release for this arch - visiontools on arm, say.
             versions.append(UP_TO_DATE)
             continue
-        tag = entry['tag']
-        versions.append(UP_TO_DATE if current.get(name) == tag else tag)
+        versions.append(UP_TO_DATE if is_current(entry, current.get(name))
+                        else entry['tag'])
     return versions
 
 

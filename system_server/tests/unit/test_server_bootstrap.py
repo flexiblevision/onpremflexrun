@@ -19,8 +19,8 @@ SERVER_PATH = os.path.abspath(
 
 ROUTE_MODULES = [
     'system_routes', 'network_routes', 'model_routes', 'image_routes',
-    'device_routes', 'auth_routes', 'ftp_routes', 'timemachine_routes',
-    'assembly_routes', 'addon_routes',
+    'device_routes', 'auth_routes', 'ftp_routes', 'job_routes',
+    'timemachine_routes', 'assembly_routes', 'addon_routes',
 ]
 
 

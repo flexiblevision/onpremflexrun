@@ -79,13 +79,36 @@ class TestGetCurrentContainerVersion:
             assert version_check.get_current_container_version('capdev') is False
 
     @pytest.mark.unit
-    def test_untagged_image_raises(self):
-        # An image reference with no ':' makes split(':')[1] fail. This is a
-        # real crash on a device running an untagged image; the test pins the
-        # behaviour so a fix is a deliberate change, not an accident.
+    def test_untagged_image_returns_false(self):
+        # Was an IndexError out of split(':')[1]. False means "not known to be
+        # current", which every caller already handles.
         with patch('subprocess.Popen', return_value=_popen(b"'flexiblevision/capdev'\n")):
-            with pytest.raises(IndexError):
-                version_check.get_current_container_version('capdev')
+            assert version_check.get_current_container_version('capdev') is False
+
+    @pytest.mark.unit
+    def test_a_digest_pinned_container_reports_its_digest(self):
+        """Every container a signed release pinned looks like this.
+
+        Splitting on the first ':' returned the bare hex, which matches no
+        manifest tag - so the next release read the whole stack as changed and
+        recreated containers that were already correct.
+        """
+        out = b"'fvonprem/x86-backend@sha256:4922cfc36cd8109d212a0661e4e12ea1'\n"
+        with patch('subprocess.Popen', return_value=_popen(out)):
+            assert version_check.get_current_container_version('capdev') == \
+                'sha256:4922cfc36cd8109d212a0661e4e12ea1'
+
+    @pytest.mark.unit
+    def test_a_registry_port_is_not_mistaken_for_a_tag(self):
+        out = b"'registry.local:5000/fvonprem/x86-backend:1.97'\n"
+        with patch('subprocess.Popen', return_value=_popen(out)):
+            assert version_check.get_current_container_version('capdev') == '1.97'
+
+    @pytest.mark.unit
+    def test_vernemq_is_a_known_container(self):
+        # Absent from CONTAINERS it is never seen as current, so a release
+        # tears the broker down and recreates it on every single run.
+        assert version_check.CONTAINERS['vernemq'] == 'vernemq'
 
 
 class TestGetLatestImageVersions:
@@ -268,6 +291,7 @@ class TestContainerMap:
             'vision': 'vision',
             'nodecreator': 'nodecreator',
             'visiontools': 'visiontools',
+            'vernemq': 'vernemq',
         }
 
     @pytest.mark.unit

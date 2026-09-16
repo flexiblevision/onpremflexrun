@@ -1348,6 +1348,21 @@ class TestContainerUpgradeDispatch:
         result, pulls = runner(['1.9.3'] + ['True'] * 6, arch='arm')
         assert any('fvonprem/arm-backend:1.9.3' in p for p in pulls), pulls
 
+    def test_a_deployment_environ_is_never_used_as_a_vernemq_tag(self, runner, sh):
+        """'cloud' is an environ, not a published channel.
+
+        vernemq has no positional slot, so without a plan its version falls back
+        to $ENVIRON. The pull gate ran before setup_mqtt.sh's own mapping, so
+        :cloud failed and the whole block was skipped - every device upgrading
+        from the legacy path ended up with no broker at all.
+        """
+        _write_stub(sh.stubs, 'jq', 'echo cloud\n')
+        result, pulls = runner(self.ALL_CURRENT)
+        vernemq = [p for p in pulls if 'vernemq' in p]
+        assert vernemq, 'vernemq was not pulled at all: %s' % pulls
+        assert all(':cloud' not in p for p in vernemq), vernemq
+        assert any('vernemq:dev' in p for p in vernemq), vernemq
+
     def test_an_empty_version_is_not_a_syntax_error(self, runner):
         """Reachable when the version service returns 200 with an empty body."""
         result, pulls = runner([''] + ['True'] * 6)

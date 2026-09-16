@@ -76,8 +76,9 @@ VISIONTOOLS_UPTD="$(plan_version visiontools "$VISIONTOOLS_UPTD_ARG")"
 
 # vernemq had no positional slot at all - it was upgraded unconditionally with
 # $ENVIRON as its tag, which is a channel name and not a version. With a plan it
-# is an ordinary component; without one it keeps the old behaviour.
-VERNEMQ_UPTD="$(plan_version vernemq "$ENVIRON")"
+# is an ordinary component; without one it keeps the old behaviour, with the
+# environ mapped to a tag that is actually published.
+VERNEMQ_UPTD="$(plan_version vernemq "$(vernemq_tag "$ENVIRON")")"
 
 # Counted after resolution, not from $@: with a plan the versions do not come
 # from the argument list at all, and a step count taken from argv would leave
@@ -402,7 +403,11 @@ elif safe_pull "$REF_VERNEMQ" && \
    retire_container vernemq; then
 
     SCRIPT_DIR="$HOME/flex-run/setup/mqtt"
-    if ! "$SCRIPT_DIR/setup_mqtt.sh" "$4" "$ENVIRON"; then
+    # The reference, not just the tag: setup_mqtt.sh would otherwise rebuild the
+    # image name from the tag and start that, so a digest a signed release
+    # pinned would be pulled here and then not be what runs.
+    if ! VERNEMQ_IMAGE="$REF_VERNEMQ" \
+         "$SCRIPT_DIR/setup_mqtt.sh" "$SYSTEM_ARCH" "$VERNEMQ_UPTD"; then
         echo "ERROR: setup_mqtt.sh failed — attempting fallback with local image"
         docker run -d \
             --name vernemq \

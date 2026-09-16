@@ -11,6 +11,7 @@ from . import (
     device_routes,
     auth_routes,
     ftp_routes,
+    job_routes,
     timemachine_routes,
     assembly_routes,
     addon_routes,
@@ -45,6 +46,9 @@ def register_all_routes(api, settings):
 
     # FTP management routes
     ftp_routes.register_routes(api)
+
+    # Job cancellation - the receiving end of captureui's Cancel button
+    job_routes.register_routes(api)
 
     # Timemachine install/uninstall routes
     timemachine_routes.register_routes(api)

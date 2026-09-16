@@ -210,12 +210,19 @@ def _check_dates_and_arch(parsed, arch, now, enforce_expiry):
 
 def verify(raw_manifest, arch, high_water, now,
            signature_path=None, public_key_path=None, manifest_path=None,
-           verifier=None, enforce_expiry=False):
+           verifier=None, enforce_expiry=False, installed=None):
     """The automatic path: what a device accepts from its channel unprompted.
 
     high_water is the highest counter this device has ever accepted, NOT what
     is currently running. Passing the running counter instead would let a
     remote actor push a device that had rolled back straight back down again.
+
+    `installed` is the counter running now, and it is only ever allowed to
+    equal the one being offered: re-applying the release a device is already on
+    is a no-op, not a rollback, and refusing it made pressing upgrade on an
+    up-to-date device fail the run. A device that deliberately rolled back has
+    installed below high_water, so the rule below still refuses to walk it
+    forward again.
     """
     parsed = _parsed_and_signed(raw_manifest, signature_path, public_key_path,
                                manifest_path, verifier)
@@ -225,7 +232,7 @@ def verify(raw_manifest, arch, high_water, now,
             'high_water must be an integer, got {!r}'.format(high_water))
 
     counter = parsed['counter']
-    if counter <= high_water:
+    if counter != installed and counter <= high_water:
         raise VerificationError(
             'release {} has counter {} which is not newer than this device\'s '
             'high water mark {} - refusing a rollback'

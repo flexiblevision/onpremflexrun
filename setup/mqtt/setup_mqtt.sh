@@ -13,7 +13,9 @@ case "$IMAGE_TAG" in
     local|cloud|"") IMAGE_TAG="${VERNEMQ_TAG:-dev}" ;;
 esac
 
-IMAGE_NAME="fvonprem/${SYSTEM_ARCH}-vernemq:${IMAGE_TAG}"
+# VERNEMQ_IMAGE is the whole reference, set by the upgrade path, which has
+# already resolved it - a digest when a signed release pinned one.
+IMAGE_NAME="${VERNEMQ_IMAGE:-fvonprem/${SYSTEM_ARCH}-vernemq:${IMAGE_TAG}}"
 CONTAINER_NAME="vernemq"
 
 # Config lives next to this script. Override with CONFIG_FILE=... if needed.

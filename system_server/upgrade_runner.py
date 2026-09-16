@@ -296,6 +296,7 @@ def run_release(run_id, arch, channel='stable', counter=None,
 
     existing = state_mod.read(collection)
     high_water = existing.get('high_water') or 0
+    installed_counter = (existing.get('installed') or {}).get('counter')
 
     raw, signature, _envelope = fetch_mod.fetch_release(
         arch, channel=channel, counter=counter)
@@ -313,7 +314,7 @@ def run_release(run_id, arch, channel='stable', counter=None,
 
     if counter is None:
         parsed = verify_mod.verify(
-            raw, arch, high_water, now,
+            raw, arch, high_water, now, installed=installed_counter,
             signature_path=signature_file, manifest_path=manifest_file,
             public_key_path=trust_dir)
     else:

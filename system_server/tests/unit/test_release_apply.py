@@ -85,6 +85,23 @@ class TestSkippingUnchanged:
         got = a.versions_for(manifest(), 'x86', current={'backend': '1.97'})
         assert got[0] == '1.999'
 
+    def test_a_container_pinned_by_this_release_is_already_current(self):
+        """What every container reports after a release pinned it: its digest,
+        not a tag. Matched against the tag alone, the whole stack read as
+        changed and was recreated on the next run for nothing."""
+        doc = manifest()
+        digest = doc['images']['x86']['backend']['digest']
+        got = a.versions_for(doc, 'x86', current={'backend': digest})
+        assert got[0] == a.UP_TO_DATE
+
+    def test_a_component_with_no_known_version_is_still_upgraded(self):
+        """Absent means "not known to be current" - it must never match a
+        component whose manifest entry happens to carry no digest."""
+        doc = manifest()
+        del doc['images']['x86']['backend']['digest']
+        got = a.versions_for(doc, 'x86', current={})
+        assert got[0] == '1.999'
+
     def test_a_component_absent_from_the_release_is_skipped(self):
         """visiontools has no arm image. Asking for it would pull a tag that
         does not exist and fail the whole run."""

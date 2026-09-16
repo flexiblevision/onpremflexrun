@@ -294,7 +294,8 @@ _CLOUD_IMAGE_KEY = {
     'predictlite': 'predictlite',
     'vision': 'vision',
     'nodecreator': 'nodecreator',
-    'visiontools': 'visiontools'
+    'visiontools': 'visiontools',
+    'vernemq': 'vernemq'
 }
 
 

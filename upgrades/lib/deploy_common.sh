@@ -200,6 +200,19 @@ report_component() {
         --from "${3:-}" --to "${4:-}" --ref "${5:-}" >/dev/null 2>&1 || true
 }
 
+# vernemq_tag <environ>
+# 'local' and 'cloud' name a deployment environ, not a published image channel.
+# vernemq has no positional slot, so without a plan its version falls back to
+# $ENVIRON - and pulling :cloud, which is not published, failed the gate before
+# setup_mqtt.sh (which maps the same way) was ever reached, leaving the device
+# with no broker. Keep this in step with setup/mqtt/setup_mqtt.sh.
+vernemq_tag() {
+    case "$1" in
+        local|cloud|'') echo "${VERNEMQ_TAG:-dev}" ;;
+        *)              echo "$1" ;;
+    esac
+}
+
 # safe_pull <image>
 # Pull, reporting the image that failed. Both the install and the upgrade path
 # pull, so this lives here rather than in either one.

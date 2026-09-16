@@ -39,10 +39,11 @@ def bad_signature(manifest_path, signature_path, public_key_path):
 
 
 def call(raw_manifest, arch='x86', high_water=46, now=NOW,
-         verifier=good_signature):
+         verifier=good_signature, installed=None):
     return v.verify(raw_manifest, arch=arch, high_water=high_water,
                     now=now, signature_path='/tmp/sig', public_key_path='/tmp/key',
-                    manifest_path='/tmp/manifest.json', verifier=verifier)
+                    manifest_path='/tmp/manifest.json', verifier=verifier,
+                    installed=installed)
 
 
 def rollback(raw_manifest, arch='x86', known=(46, 47), now=NOW,
@@ -107,6 +108,20 @@ class TestAntiRollback:
         and allowing equality lets a replayed manifest look acceptable."""
         with pytest.raises(v.VerificationError, match='refusing a rollback'):
             call(raw(counter=46), high_water=46)
+
+    def test_the_release_already_installed_is_accepted_as_a_no_op(self):
+        """Pressing upgrade on an up-to-date device failed the whole run.
+
+        Nothing moves - the plan marks every component current - but the run
+        has to reach that point instead of erroring at verification.
+        """
+        assert call(raw(counter=46), high_water=46, installed=46)['counter'] == 46
+
+    def test_a_device_that_rolled_back_is_still_not_pushed_forward(self):
+        """installed below high_water is the deliberate rollback state, and it
+        is the case the equality allowance must not reopen."""
+        with pytest.raises(v.VerificationError, match='refusing a rollback'):
+            call(raw(counter=46), high_water=46, installed=40)
 
     def test_the_error_names_both_counters(self):
         with pytest.raises(v.VerificationError) as exc:
