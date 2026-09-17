@@ -152,6 +152,21 @@ def prune_versions(project_dir, keep_versions):
     return removed
 
 
+def newest(versions):
+    """
+    The version to bind, chosen by value rather than by arrival order.
+
+    The cloud's /models/versions sorts model_version DESCENDING, so the LAST
+    entry for a project is the oldest. Binding whichever version the loop
+    happened to finish on therefore pointed every device at the model a retrain
+    had just replaced - invisible until a project had two.
+    """
+    if not versions:
+        return None
+    numeric = [v for v in versions if str(v).isdigit()]
+    return max(numeric, key=int) if numeric else max(versions)
+
+
 def bind_devices(project_id, version, package_path):
     """
     Point every device on this project at the package that just landed.
@@ -212,9 +227,8 @@ def retrieve_waveform_models(data, token, cloud_domain=None):
                 completed += 1
                 update_job_progress(round((completed / total_versions) * 100))
                 record = synced.setdefault(project_name, {
-                    'project_id': project_id, 'versions': [], 'latest': None})
+                    'project_id': project_id, 'versions': []})
                 record['versions'].append(version)
-                record['latest'] = version
                 continue
 
             print('Syncing waveform model', project_name, 'version', version)
@@ -242,9 +256,8 @@ def retrieve_waveform_models(data, token, cloud_domain=None):
             update_job_progress(round((completed / total_versions) * 100))
 
             record = synced.setdefault(project_name, {
-                'project_id': project_id, 'versions': [], 'latest': None})
+                'project_id': project_id, 'versions': []})
             record['versions'].append(version)
-            record['latest'] = version
 
         if synced.get(project_name):
             prune_versions(project_dir, set(synced[project_name]['versions']))
@@ -260,7 +273,7 @@ def retrieve_waveform_models(data, token, cloud_domain=None):
     # The path the SERVICE sees, not the host's: it reads this from inside the
     # container, where the same directory is mounted at container_data.
     for project_name, record in synced.items():
-        latest = record['latest']
+        latest = newest(record['versions'])
         if not latest:
             continue
         bind_devices(record['project_id'], latest,

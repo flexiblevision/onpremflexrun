@@ -143,3 +143,28 @@ class TestPlan:
             {'models': {'p': {'_id': 'p1', 'name': 'wave1', 'models': [1]}},
              'exclude_models': []}, 'tok') is False
         assert any('method' in e for e in errors)
+
+
+class TestNewest:
+    # The cloud sorts model_version DESCENDING, so the last entry in a project's
+    # list is the OLDEST. Binding the one the loop finished on pointed every
+    # device at the model a retrain had just replaced.
+    def test_picks_the_newest_not_the_last_seen(self):
+        cloud_order = ['1789591585149', '1788460810109', '1787873409685']
+        assert w.newest(cloud_order) == '1789591585149'
+
+    def test_order_does_not_matter(self):
+        assert w.newest(['1787873409685', '1789591585149']) == '1789591585149'
+
+    def test_a_single_version_is_itself(self):
+        assert w.newest(['1789591585149']) == '1789591585149'
+
+    def test_nothing_synced_binds_nothing(self):
+        assert w.newest([]) is None
+
+    # Length-sorting a string would put '999' after '1789591585149'.
+    def test_compares_numerically_not_lexically(self):
+        assert w.newest(['999', '1789591585149']) == '1789591585149'
+
+    def test_non_numeric_versions_still_resolve(self):
+        assert w.newest(['v2', 'v1']) == 'v2'
