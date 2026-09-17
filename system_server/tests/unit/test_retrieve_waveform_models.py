@@ -102,9 +102,14 @@ class TestBinding:
                 seen['set'] = update['$set']
                 return type('R', (), {'modified_count': 2})()
 
+            def count_documents(self, query):
+                seen['held_query'] = query
+                return 0
+
         monkeypatch.setattr(w, 'device_collection', FakeDevices())
         assert w.bind_devices('proj-1', '17891', '/app/data/models/wave1/17891') == 2
-        assert seen['query'] == {'cloud_project.id': 'proj-1'}
+        assert seen['query'] == {'cloud_project.id': 'proj-1',
+                                 'classifier_pin': {'$exists': False}}
 
         bound = seen['set']['cloud_classifier']
         assert bound['model_version'] == '17891'
@@ -112,6 +117,26 @@ class TestBinding:
         # The path the SERVICE reads, inside the container — not the host side.
         assert bound['package_path'].startswith('/app/data/')
         assert isinstance(bound['bound_at'], int)
+
+    # A pin is the operator holding a unit on a known-good version, or
+    # deliberately unbound. A sync that overwrote it would make a rollback last
+    # until the next sync and no longer.
+    def test_a_pinned_device_is_left_alone(self, monkeypatch):
+        seen = {}
+
+        class FakeDevices:
+            def update_many(self, query, update):
+                seen['query'] = query
+                return type('R', (), {'modified_count': 0})()
+
+            def count_documents(self, query):
+                seen['held_query'] = query
+                return 1
+
+        monkeypatch.setattr(w, 'device_collection', FakeDevices())
+        assert w.bind_devices('proj-1', '17892', '/app/data/models/wave1/17892') == 0
+        assert seen['query']['classifier_pin'] == {'$exists': False}
+        assert seen['held_query']['classifier_pin'] == {'$exists': True}
 
 
 class TestDataDirs:

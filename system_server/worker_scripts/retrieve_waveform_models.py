@@ -169,22 +169,31 @@ def newest(versions):
 
 def bind_devices(project_id, version, package_path):
     """
-    Point every device on this project at the package that just landed.
+    Point this project's devices at the package that just landed.
 
     A package belongs to a project; the audio service serves per device. This is
     the join, and `cloud_classifier` is what the deploy gate requires - without
     it a synced model is inert.
+
+    A device carrying `classifier_pin` is left alone. The pin is the operator
+    holding a unit where it is - on a known-good version, or deliberately
+    unbound - and a retrain is exactly when that matters. Overwriting it here
+    would make a rollback last only until the next sync, which is no rollback at
+    all. Clearing the pin puts the device back on the newest package.
     """
     result = device_collection.update_many(
-        {'cloud_project.id': project_id},
+        {'cloud_project.id': project_id, 'classifier_pin': {'$exists': False}},
         {'$set': {'cloud_classifier': {
             'project_id':    project_id,
             'model_version': version,
             'package_path':  package_path,
             'bound_at':      int(datetime.datetime.utcnow().timestamp() * 1000),
         }}})
-    print('bound {} device(s) on project {} to version {}'.format(
-        result.modified_count, project_id, version))
+    held = device_collection.count_documents(
+        {'cloud_project.id': project_id, 'classifier_pin': {'$exists': True}})
+    print('bound {} device(s) on project {} to version {}{}'.format(
+        result.modified_count, project_id, version,
+        ', {} held by a pin'.format(held) if held else ''))
     return result.modified_count
 
 
