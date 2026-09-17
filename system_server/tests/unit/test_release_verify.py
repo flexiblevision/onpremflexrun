@@ -39,11 +39,11 @@ def bad_signature(manifest_path, signature_path, public_key_path):
 
 
 def call(raw_manifest, arch='x86', high_water=46, now=NOW,
-         verifier=good_signature, installed=None):
+         verifier=good_signature, installed=None, known_counters=None):
     return v.verify(raw_manifest, arch=arch, high_water=high_water,
                     now=now, signature_path='/tmp/sig', public_key_path='/tmp/key',
                     manifest_path='/tmp/manifest.json', verifier=verifier,
-                    installed=installed)
+                    installed=installed, known_counters=known_counters)
 
 
 def rollback(raw_manifest, arch='x86', known=(46, 47), now=NOW,
@@ -96,17 +96,19 @@ class TestSignature:
 
 class TestAntiRollback:
     """A signature stays valid forever, so freshness cannot come from it.
-    The comparison is against the HIGH WATER MARK, not what is running - or a
-    device that had rolled back could be pushed straight back down."""
 
-    def test_an_older_counter_is_refused(self):
-        with pytest.raises(v.VerificationError, match='refusing a rollback'):
+    The mark stops an UNSEEN release being replayed here. A release this device
+    has already run is not a replay - it was accepted once under the same
+    signature - so the rule is about novelty, not direction."""
+
+    def test_an_unseen_older_counter_is_refused(self):
+        with pytest.raises(v.VerificationError, match='never run here'):
             call(raw(counter=40), high_water=46)
 
-    def test_an_equal_counter_is_refused(self):
-        """Strictly greater: re-applying the same release is not an upgrade,
-        and allowing equality lets a replayed manifest look acceptable."""
-        with pytest.raises(v.VerificationError, match='refusing a rollback'):
+    def test_an_unseen_equal_counter_is_refused(self):
+        """Allowing equality outright would let a replayed manifest for a
+        release this device never ran look acceptable."""
+        with pytest.raises(v.VerificationError, match='never run here'):
             call(raw(counter=46), high_water=46)
 
     def test_the_release_already_installed_is_accepted_as_a_no_op(self):
@@ -117,16 +119,38 @@ class TestAntiRollback:
         """
         assert call(raw(counter=46), high_water=46, installed=46)['counter'] == 46
 
-    def test_a_device_that_rolled_back_is_still_not_pushed_forward(self):
-        """installed below high_water is the deliberate rollback state, and it
-        is the case the equality allowance must not reopen."""
-        with pytest.raises(v.VerificationError, match='refusing a rollback'):
-            call(raw(counter=46), high_water=46, installed=40)
+    # The case that stranded a rolled-back device: after 46 -> 40 the mark
+    # stays at 46, so 46 is no longer "newer" and the only way back up was a
+    # rollback to a release the device had never left.
+    def test_a_device_that_rolled_back_can_move_forward_again(self):
+        parsed = call(raw(counter=46), high_water=46, installed=40,
+                      known_counters=[40, 46])
+        assert parsed['counter'] == 46
+
+    def test_history_does_not_admit_a_release_never_run_here(self):
+        """The history is the whole allowance - it is not a general amnesty on
+        anything at or below the mark."""
+        with pytest.raises(v.VerificationError, match='never run here'):
+            call(raw(counter=44), high_water=46, installed=40,
+                 known_counters=[40, 46])
+
+    def test_going_back_down_to_a_release_in_history_is_allowed(self):
+        """Forward or backward: both are a return to a state seen here."""
+        assert call(raw(counter=40), high_water=46, installed=46,
+                    known_counters=[40, 46])['counter'] == 40
+
+    def test_a_newer_release_is_still_accepted_with_no_history(self):
+        assert call(raw(counter=47), high_water=46)['counter'] == 47
 
     def test_the_error_names_both_counters(self):
         with pytest.raises(v.VerificationError) as exc:
             call(raw(counter=40), high_water=46)
         assert '40' in str(exc.value) and '46' in str(exc.value)
+
+    def test_non_integer_history_is_refused(self):
+        """Silently dropping an unparsable history would widen the gate."""
+        with pytest.raises(v.VerificationError, match='known_counters must be'):
+            call(raw(counter=40), high_water=46, known_counters=['forty'])
 
     @pytest.mark.parametrize('bad', ['46', None, 1.5, True])
     def test_a_non_integer_installed_counter_is_refused(self, bad):
@@ -332,13 +356,19 @@ class TestOperatorRollback:
         with pytest.raises(v.VerificationError):
             rollback(raw(counter=46), known=(bad,))
 
-    def test_rollback_does_not_go_through_the_automatic_path(self):
-        """The whole point: the channel path still refuses the same manifest,
-        so a remote actor cannot use this to downgrade a device."""
-        old = raw(counter=46)
-        assert rollback(old, known=(46, 47))
-        with pytest.raises(v.VerificationError, match='refusing a rollback'):
-            call(old, high_water=47)
+    def test_the_automatic_path_refuses_what_this_device_never_ran(self):
+        """The property that survives letting history back in.
+
+        Both paths now accept a release this device has run - returning to one
+        reaches no state it has not already been in. What neither path will do
+        is take a device somewhere new and older, which is the downgrade a
+        remote actor would want.
+        """
+        unseen = raw(counter=46)
+        with pytest.raises(v.VerificationError, match='never run here'):
+            call(unseen, high_water=47, known_counters=[45, 47])
+        with pytest.raises(v.VerificationError, match='never run on this device'):
+            rollback(unseen, known=(45, 47))
 
 
 class TestHighWaterSemantics:

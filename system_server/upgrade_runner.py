@@ -315,6 +315,7 @@ def run_release(run_id, arch, channel='stable', counter=None,
     if counter is None:
         parsed = verify_mod.verify(
             raw, arch, high_water, now, installed=installed_counter,
+            known_counters=state_mod.known_counters(collection),
             signature_path=signature_file, manifest_path=manifest_file,
             public_key_path=trust_dir)
     else:
