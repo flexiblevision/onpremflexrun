@@ -9,6 +9,8 @@ The behaviours that matter: an image is enqueued exactly once, a file that is
 not an image is deleted rather than queued, and a re-uploaded file is not
 processed twice.
 """
+import threading
+
 import pytest
 from unittest.mock import patch, MagicMock, call
 
@@ -250,11 +252,21 @@ class TestMainLoop:
     def test_resets_the_queue_before_watching(self, main_thread_sleep):
         order = []
         ticks = []
+        sleeper = main_thread_sleep(ticks)
+
+        # patch() replaces time.sleep globally, so pymongo's and redis'
+        # background threads land here too. main_thread_sleep guards its own
+        # recording; this one has to guard its own, or a driver thread that
+        # happens to sleep mid-test appends to `order` and the assertion below
+        # fails under CI load and nowhere else.
+        def record_sleep(seconds):
+            if threading.current_thread() is threading.main_thread():
+                order.append('sleep')
+            return sleeper(seconds)
 
         with patch.object(fw, 'reset_queue', side_effect=lambda: order.append('reset')), \
-             patch('ftp_worker.time.sleep',
-                   side_effect=lambda s: (order.append('sleep'),
-                                          main_thread_sleep(ticks)(s))[1]), \
+             patch('ftp_worker.time.sleep',  # thread-aware-sleep
+                   side_effect=record_sleep), \
              patch.object(fw, 'scan_once'):
             with pytest.raises(KeyboardInterrupt):
                 fw.main()
