@@ -21,6 +21,12 @@ else
     TM_CPU_ARG="--cpus=2"
 fi
 
+# docker run reuses any local :prod and never asks the registry, so without an
+# explicit pull a redeploy restarts whatever image the device first installed.
+# A failed pull (offline line network) keeps the local image rather than
+# leaving the device with no time machine.
+docker pull fvonprem/x86-eventor:prod || echo "eventor pull failed; keeping the local image"
+
 #start eventor server
 docker stop eventor
 docker rm eventor
@@ -46,6 +52,7 @@ docker run -p 1934-1945:1934-1945 --network=host --name eventor -d \
 sh $HOME/flex-run/system_server/timemachine/ensure_tls_key.sh \
     $HOME/flex-run/system_server/timemachine
 
+sudo docker pull fvonprem/x86-rtspserver:prod || echo "rtsp-server pull failed; keeping the local image"
 sudo docker stop rtsp-server
 sudo docker rm rtsp-server
 sudo docker run --network=host --name rtsp-server -d --restart unless-stopped \

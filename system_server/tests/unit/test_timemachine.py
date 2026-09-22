@@ -45,6 +45,27 @@ class TestCloudInstall:
             assert installer.cloud_install() is None
 
 
+class TestLocalZipPushScript:
+    SCRIPT = os.path.join(os.path.dirname(installer.__file__), 'local_zip_push.sh')
+
+    @pytest.mark.unit
+    @pytest.mark.parametrize('image', ['fvonprem/x86-eventor:prod',
+                                       'fvonprem/x86-rtspserver:prod'])
+    def test_pulls_before_it_runs(self, image):
+        # docker run never refreshes an existing local tag, so a redeploy
+        # without the pull kept restarting the first image ever installed.
+        lines = open(self.SCRIPT).read().splitlines()
+        pull = next(i for i, l in enumerate(lines) if 'docker pull ' + image in l)
+        run = next(i for i, l in enumerate(lines) if l.strip().startswith('-t ' + image))
+        assert pull < run
+
+    @pytest.mark.unit
+    def test_a_failed_pull_does_not_stop_the_redeploy(self):
+        for line in open(self.SCRIPT).read().splitlines():
+            if 'docker pull ' in line:
+                assert '||' in line
+
+
 class TestLocalZipPushInstall:
     @pytest.mark.unit
     def test_retry_is_used_but_never_imported(self):
