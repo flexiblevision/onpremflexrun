@@ -121,6 +121,33 @@ class TestContainerBlock:
             schema.validate(descriptor(
                 container={'name': 'demo', 'default_tag': 'has space'}))
 
+    @pytest.mark.unit
+    def test_a_declared_device_passes(self):
+        schema.validate(descriptor(container={
+            'name': 'demo', 'devices': [{'host': '/dev/snd'}]}))
+
+    @pytest.mark.unit
+    def test_a_relative_device_path_is_refused(self):
+        with pytest.raises(schema.AddonError):
+            schema.validate(descriptor(container={
+                'name': 'demo', 'devices': [{'host': 'dev/snd'}]}))
+
+    @pytest.mark.unit
+    def test_a_device_without_a_host_path_is_refused(self):
+        with pytest.raises(schema.AddonError) as exc:
+            schema.validate(descriptor(container={
+                'name': 'demo', 'devices': [{'required': True}]}))
+        assert 'host' in str(exc.value)
+
+    @pytest.mark.unit
+    def test_a_non_boolean_required_is_refused(self):
+        # "required": "true" would be truthy and silently make every unit
+        # without the device refuse the addon.
+        with pytest.raises(schema.AddonError):
+            schema.validate(descriptor(container={
+                'name': 'demo',
+                'devices': [{'host': '/dev/snd', 'required': 'true'}]}))
+
 
 class TestHealth:
     @pytest.mark.unit

@@ -27,6 +27,12 @@
         "create": true
       }
     ],
+    "devices": [
+      {
+        "host": "/dev/snd",
+        "required": false
+      }
+    ],
     "log_opts": {"max-size": "50m", "max-file": "5"}
   },
   "health": {

@@ -99,6 +99,17 @@ class TestRunArgv:
         assert '--gpus' not in argv
 
     @pytest.mark.unit
+    def test_declared_devices_are_rendered(self):
+        argv = runtime.build_run_argv(registry.get('anomaly_audio'), 'img')
+        assert argv[argv.index('--device') + 1] == '/dev/snd'
+
+    @pytest.mark.unit
+    def test_no_device_flag_when_the_unit_has_none(self):
+        argv = runtime.build_run_argv(
+            registry.get('anomaly_audio'), 'img', devices=[])
+        assert '--device' not in argv
+
+    @pytest.mark.unit
     def test_values_are_passed_as_argv_not_shell(self):
         addon = dict(registry.get('ocr'))
         addon['container'] = dict(addon['container'], env={'K': 'a b"; rm -rf /'})
@@ -170,6 +181,57 @@ class TestDeploy:
         assert len(attempts) == 2
         assert '--gpus' in attempts[0]
         assert '--gpus' not in attempts[1]
+
+    @pytest.mark.unit
+    def test_a_device_the_unit_does_not_have_is_dropped(self, docker):
+        # A unit with no sound card still serves networked sensors, and
+        # `docker run --device` on a missing path refuses outright - so the
+        # whole addon would have been undeployable there.
+        with patch.object(runtime.os.path, 'exists', return_value=False), \
+             patch.object(runtime, '_ensure_volumes'):
+            runtime.deploy('anomaly_audio', arch='x86')
+
+        run_argv = [c[0][0] for c in docker.call_args_list
+                    if c[0][0][:2] == ['docker', 'run']][0]
+        assert '--device' not in run_argv
+
+    @pytest.mark.unit
+    def test_a_missing_required_device_refuses_before_pulling(self, docker):
+        addon = dict(registry.get('anomaly_audio'))
+        addon['container'] = dict(
+            addon['container'],
+            devices=[{'host': '/dev/snd', 'required': True}])
+
+        with patch.object(registry, 'get', return_value=addon), \
+             patch.object(runtime.os.path, 'exists', return_value=False), \
+             patch.object(runtime, '_ensure_volumes'):
+            with pytest.raises(runtime.DeployError) as exc:
+                runtime.deploy('anomaly_audio', arch='x86')
+
+        assert '/dev/snd' in str(exc.value)
+        docker.assert_not_called()
+
+    @pytest.mark.unit
+    def test_the_cpu_retry_keeps_the_device(self):
+        # The retry rebuilds the argv from scratch; dropping /dev/snd there
+        # would leave a GPU-less unit with a container that cannot hear.
+        attempts = []
+
+        def responses(argv, timeout=None):
+            if argv[:2] == ['docker', 'run']:
+                attempts.append(argv)
+                if '--gpus' in argv:
+                    return completed(125, stderr='could not select device driver')
+            return completed(0)
+
+        with patch.object(runtime, '_run', side_effect=responses), \
+             patch.object(runtime.os.path, 'exists', return_value=True), \
+             patch.object(runtime, '_ensure_volumes'):
+            runtime.deploy('anomaly_audio', arch='x86')
+
+        assert len(attempts) == 2
+        assert '--gpus' not in attempts[1]
+        assert attempts[1][attempts[1].index('--device') + 1] == '/dev/snd'
 
     @pytest.mark.unit
     def test_declared_volumes_are_created(self, docker, tmp_path):

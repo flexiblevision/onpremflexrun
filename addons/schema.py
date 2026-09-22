@@ -180,6 +180,21 @@ def _validate_container(container, fail):
             fail('container.volumes[].host must be an absolute path, got {!r}'
                  .format(volume['host']))
 
+    # A host device the image needs, e.g. /dev/snd for local audio capture.
+    # "required" says whether a unit without it can still run the image at all;
+    # the default, false, means deploy drops the flag rather than refusing.
+    for device in container.get('devices') or []:
+        if not isinstance(device, dict):
+            fail('each entry in container.devices must be an object')
+        if not device.get('host'):
+            fail('container.devices[] needs "host"')
+        if not str(device['host']).startswith('/'):
+            fail('container.devices[].host must be an absolute path, got {!r}'
+                 .format(device['host']))
+        if not isinstance(device.get('required', False), bool):
+            fail('container.devices[].required must be true or false, got {!r}'
+                 .format(device['required']))
+
     env = container.get('env') or {}
     if not isinstance(env, dict):
         fail('container.env must be an object of name -> value')

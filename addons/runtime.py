@@ -102,8 +102,13 @@ def resolve_reference(addon, arch, reference=None):
     return '{}:{}'.format(repository(arch, addon['component']), tag)
 
 
-def build_run_argv(addon, image, gpu=True):
-    """The full `docker run` argv. Built as argv, never a shell string."""
+def build_run_argv(addon, image, gpu=True, devices=None):
+    """The full `docker run` argv. Built as argv, never a shell string.
+
+    `devices` is the host device paths to pass through, defaulting to every one
+    the descriptor declares. deploy() narrows it to what the unit actually has -
+    kept a parameter so this stays a pure function of the descriptor.
+    """
     container = addon['container']
     argv = [DOCKER, 'run', '-d', '--name', container['name']]
 
@@ -116,6 +121,11 @@ def build_run_argv(addon, image, gpu=True):
 
     if gpu and container.get('gpu', 'none') != 'none':
         argv += ['--gpus', container.get('gpu_device', 'device=0')]
+
+    if devices is None:
+        devices = [d['host'] for d in container.get('devices') or []]
+    for path in devices:
+        argv += ['--device', path]
 
     for port in container.get('ports') or []:
         argv += ['-p', '{}:{}'.format(port['host'], port['container'])]
@@ -182,6 +192,30 @@ def _ensure_volumes(addon):
                   .format(volume['host'], addon['name'], error))
 
 
+def _present_devices(addon):
+    """The declared host devices this unit actually has.
+
+    `docker run --device` on a path that is not there refuses outright, which
+    would make one missing device deny the whole addon. The waveform image
+    serves networked sensors perfectly well on a unit with no sound card, so a
+    device that is merely absent is dropped and the run goes ahead without it.
+    Declare "required": true where the image is useless without one.
+    """
+    present = []
+    for device in addon['container'].get('devices') or []:
+        path = device['host']
+        if os.path.exists(path):
+            present.append(path)
+        elif device.get('required'):
+            raise DeployError(
+                '{} needs {} and this unit does not have it'
+                .format(addon['name'], path))
+        else:
+            print('{}: {} is not present, starting without it'
+                  .format(addon['name'], path))
+    return present
+
+
 def deploy(name, arch=None, reference=None):
     """Bring an addon up, replacing whatever is there. Returns the image."""
     addon = registry.get(name)
@@ -203,11 +237,13 @@ def deploy(name, arch=None, reference=None):
     container_name = addon['container']['name']
 
     _ensure_volumes(addon)
+    devices = _present_devices(addon)
     pull(image)
     remove_container(container_name)
 
     wants_gpu = addon['container'].get('gpu', 'none')
-    result = _run(build_run_argv(addon, image, gpu=wants_gpu != 'none'))
+    result = _run(build_run_argv(addon, image, gpu=wants_gpu != 'none',
+                                 devices=devices))
 
     # "optional" means the image runs on CPU too; without the retry a device
     # with no nvidia runtime could not enable the addon at all.
@@ -215,7 +251,7 @@ def deploy(name, arch=None, reference=None):
         print('{} failed to start with a GPU, retrying on CPU: {}'
               .format(container_name, (result.stderr or '').strip()[-300:]))
         remove_container(container_name)
-        result = _run(build_run_argv(addon, image, gpu=False))
+        result = _run(build_run_argv(addon, image, gpu=False, devices=devices))
 
     if result.returncode != 0:
         raise DeployError(
