@@ -9,7 +9,7 @@
       "vision": "1.1"
     },
     "x86": {
-      "backend": "1.1004",
+      "backend": "1.1006",
       "frontend": "1.1009",
       "nodecreator": "0.51",
       "prediction": "0.51",
