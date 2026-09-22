@@ -13,6 +13,7 @@ from rq import Queue, Retry
 from worker_scripts.job_manager import insert_job
 from timemachine.installer import local_zip_push_install, cloud_install, validate_account
 from timemachine.cleanup import cleanup_timemachine_records
+from addons import state as addon_state
 
 redis_con = Redis('localhost', 6379, password=None)
 job_queue = Queue('default', connection=redis_con)
@@ -62,6 +63,13 @@ class DisableTimemachine(Resource):
                 os.system('sh '+os.environ['HOME']+'/flex-run/system_server/timemachine/uninstaller.sh')
             else:
                 print('uninstall cloud timemachine')
+            # The other half of the record written by verify_local_install. Left
+            # out, a device would go on telling the cloud it does time_machine
+            # after the containers had been removed.
+            try:
+                addon_state.mark_disabled('timemachine')
+            except Exception as error:
+                print('could not clear timemachine addon state: {}'.format(error))
             return True, 200
         else:
             return 'missing type key. Type key must be passed',500
