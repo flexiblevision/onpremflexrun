@@ -9,13 +9,13 @@
       "vision": "1.1"
     },
     "x86": {
-      "backend": "1.1006",
-      "frontend": "1.1010",
+      "backend": "1.1007",
+      "frontend": "1.1011",
       "nodecreator": "0.51",
       "prediction": "0.51",
       "predictlite": "1.999",
       "vernemq": "dev",
-      "vision": "1.1005",
+      "vision": "1.1006",
       "visiontools": "1.999"
     }
   }
