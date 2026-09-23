@@ -17,7 +17,9 @@ utils_db          = client["fvonprem"]["utils"]
 dev_ref           = utils_db.find_one({'type':'device_id'})
 DEV_ID            =  None if not dev_ref else dev_ref['id']
 
-CLOUD_FUNCTIONS_BASE = settings.config['gcp_functions_domain'] if 'gcp_functions_domain' in settings.config else 'https://functions-proxy.flexiblevision.com/'
+PUSH_TIMEOUT = (15, 300)
+
+CLOUD_FUNCTIONS_BASE =settings.config['gcp_functions_domain'] if 'gcp_functions_domain' in settings.config else 'https://functions-proxy.flexiblevision.com/'
 
 def mark_as_processed(files, events):
     for pf, event in zip(files, events):
@@ -76,7 +78,9 @@ def push_event_records(cloud_domain, id_token, event_records):
         try:
             push_path = '{}TMEventIngest'.format(get_cloud_functions_base(CLOUD_FUNCTIONS_BASE))
             headers   = {'Authorization': 'Bearer '+id_token}
-            r = requests.post(push_path, headers=headers, files=files, timeout=30)
+            # (connect, per-socket-op): 30s failed every write of the 80-120MB zips
+            # on a line uplink, and a 2 minute clip can still be that large
+            r = requests.post(push_path, headers=headers, files=files, timeout=PUSH_TIMEOUT)
             if r.status_code <= 299:
                 mark_as_processed(files, events)
             else:

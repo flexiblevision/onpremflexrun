@@ -14,6 +14,7 @@ MONGODB_PORT = int(os.environ.get('MONGO_PORT', 27017))
 _client = MongoClient(host=MONGODB_HOST, port=MONGODB_PORT,
                       serverSelectionTimeoutMS=5000)
 analytics_coll = _client['fvonprem']['img_analytics']
+utils_coll     = _client['fvonprem']['utils']
 
 DOMAIN = 'time_machine'
 
@@ -34,6 +35,21 @@ def _iso_from_seconds(value):
         int(value), tz=datetime.timezone.utc).isoformat()
 
 
+def device_place():
+    """This device's placement from the device identity sync, or {}.
+
+    The cloud spine never resolves place itself (DEVICE_PLACEMENT.md): a record
+    without metadata.site_id is dropped as missing_station, which is how every
+    time machine clip was lost after a successful upload.
+    """
+    try:
+        doc = utils_coll.find_one({'type': 'device_place'}, {'_id': 0})
+        return (doc or {}).get('place') or {}
+    except Exception as error:
+        print('timemachine device place lookup failed: {}'.format(error))
+        return {}
+
+
 def build_record(event, device_id=None):
     """The analytics record for one pushed event, or None if unattributable."""
     event_id = event.get('id')
@@ -48,6 +64,8 @@ def build_record(event, device_id=None):
 
     ended = event.get('record_end_time')
     serial = event.get('serial_number')
+    # same mapping as inspection's prediction_caller._place_metadata
+    place = device_place()
 
     record = {
         'id': event_id,
@@ -60,11 +78,12 @@ def build_record(event, device_id=None):
         'filepath_mp4': event.get('filepath_mp4'),
         'filepath_webm': event.get('filepath_webm'),
         'camera': event.get('camera'),
-        'metadata': {
+        'metadata': {k: v for k, v in {
             'device_id': device_id or event.get('device_id'),
-            'workstation': event.get('workstation'),
-            'site_id': event.get('site_id'),
-        },
+            'workstation': event.get('workstation') or place.get('station_id'),
+            'line_id': event.get('line_id') or place.get('line_id'),
+            'site_id': event.get('site_id') or place.get('site_id'),
+        }.items() if v},
         'synced': False,
         'modified': _ms(),
     }

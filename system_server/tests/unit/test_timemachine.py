@@ -600,6 +600,15 @@ class TestMarkAsProcessed:
 class TestAnalyticsProducer:
     """The record that puts a time machine event on the analytics spine."""
 
+    PLACE = {'type': 'device_place', 'place': {
+        'site_id': 'site-1', 'line_id': 'line-1', 'station_id': 'st-1', 'site_name': 'HQ'}}
+
+    @pytest.fixture(autouse=True)
+    def _no_placement(self):
+        with patch.object(tm_analytics.utils_coll, 'find_one', return_value=None) as find:
+            self.find_place = find
+            yield
+
     def _event(self, **over):
         event = {'id': 'e1', 'record_start_time': 1789000000,
                  'zip_name': 'a.zip', 'zip_path': '/z/a.zip',
@@ -643,6 +652,35 @@ class TestAnalyticsProducer:
         record = tm_analytics.build_record(self._event(), device_id='dev-42')
 
         assert record['metadata']['device_id'] == 'dev-42'
+
+    @pytest.mark.unit
+    def test_the_device_placement_is_stamped_so_the_spine_keeps_it(self):
+        # The spine drops a record with no metadata.site_id (missing_station);
+        # every clip was lost that way after a successful upload.
+        self.find_place.return_value = self.PLACE
+        meta = tm_analytics.build_record(self._event(), device_id='dev-42')['metadata']
+
+        assert meta == {'device_id': 'dev-42', 'site_id': 'site-1',
+                        'line_id': 'line-1', 'workstation': 'st-1'}
+
+    @pytest.mark.unit
+    def test_a_place_on_the_event_itself_wins(self):
+        self.find_place.return_value = self.PLACE
+        meta = tm_analytics.build_record(self._event(site_id='site-9'))['metadata']
+
+        assert meta['site_id'] == 'site-9'
+
+    @pytest.mark.unit
+    def test_an_unplaced_device_claims_no_place(self):
+        meta = tm_analytics.build_record(self._event(), device_id='dev-42')['metadata']
+
+        assert meta == {'device_id': 'dev-42'}
+
+    @pytest.mark.unit
+    def test_a_failed_place_lookup_still_builds_the_record(self):
+        self.find_place.side_effect = RuntimeError('mongo down')
+
+        assert tm_analytics.build_record(self._event())['id'] == 'e1'
 
     @pytest.mark.unit
     @pytest.mark.parametrize('missing', ['id', 'record_start_time'])
@@ -704,7 +742,8 @@ class TestPushEventRecords:
 
         assert post.call_args[0][0] == 'https://fn/TMEventIngest'
         assert post.call_args[1]['headers'] == {'Authorization': 'Bearer tok'}
-        assert post.call_args[1]['timeout'] == 30
+        # a quick connect, but minutes for the body: 30s failed every large zip
+        assert post.call_args[1]['timeout'] == (15, 300)
 
     @pytest.mark.unit
     @pytest.mark.parametrize('status', [299, 200, 201])
