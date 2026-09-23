@@ -1,10 +1,9 @@
 """Time machine install, record cleanup and the zip-push upload path.
 
-Three of these functions do not run at all in their current form - Retry and
-ms_day are never imported or defined, and validate_account returns a bound
-method instead of calling it. Each is pinned with a test that names the defect,
-so the behaviour is recorded rather than assumed and a fix shows up as a
-deliberate test change.
+Two of these functions still do not run in their current form - ms_day is never
+defined, and validate_account returns a bound method instead of calling it. Each
+is pinned with a test that names the defect, so the behaviour is recorded rather
+than assumed and a fix shows up as a deliberate test change.
 """
 import datetime
 import json
@@ -68,23 +67,28 @@ class TestLocalZipPushScript:
 
 class TestLocalZipPushInstall:
     @pytest.mark.unit
-    def test_retry_is_used_but_never_imported(self):
-        # installer.py references Retry in the enqueue call and imports only
-        # Queue and Worker from rq. The function raises NameError before it
-        # ever queues the verification job, so a local time machine install
-        # never gets verified.
+    def test_it_queues_the_verification_job(self):
+        # Retry was used in the enqueue call and imported from rq nowhere, so
+        # this raised NameError on the line that queues the verification and a
+        # local install was never verified. rq then retried the whole job five
+        # times, tearing down and recreating the containers on each pass.
         with patch('time.sleep', new=thread_aware_sleep_mock()), patch('os.system'), \
-             patch.object(installer.job_queue, 'enqueue'), \
-             patch.object(installer, 'insert_job'):
-            with pytest.raises(NameError, match='Retry'):
-                installer.local_zip_push_install('local')
+             patch.object(installer.job_queue, 'enqueue',
+                          return_value=MagicMock(id='job-1')) as enqueue, \
+             patch.object(installer, 'insert_job') as insert:
+            assert installer.local_zip_push_install('local') is True
+
+        assert enqueue.call_args[0][0] is installer.verify_local_install
+        assert enqueue.call_args[1]['retry'].max == 5
+        insert.assert_called_once_with('job-1', 'verify timemachine install')
 
     @pytest.mark.unit
-    def test_the_install_script_still_runs_before_the_failure(self, home):
+    def test_the_install_script_runs_before_the_verification_is_queued(self, home):
         with patch('time.sleep', new=thread_aware_sleep_mock()), patch('os.system') as system, \
-             patch.object(installer.job_queue, 'enqueue'):
-            with pytest.raises(NameError):
-                installer.local_zip_push_install('zip_push')
+             patch.object(installer.job_queue, 'enqueue',
+                          return_value=MagicMock(id='job-1')), \
+             patch.object(installer, 'insert_job'):
+            installer.local_zip_push_install('zip_push')
 
         script = home + '/flex-run/system_server/timemachine/local_zip_push.sh'
         assert system.call_args_list == [call('chmod +x ' + script),
@@ -95,14 +99,20 @@ class TestLocalZipPushInstall:
         # The job runs immediately after the HTTP response; the delay lets the
         # request finish before docker starts churning.
         with patch('time.sleep', new=thread_aware_sleep_mock()) as sleep, patch('os.system'), \
-             patch.object(installer.job_queue, 'enqueue'):
-            with pytest.raises(NameError):
-                installer.local_zip_push_install('local')
+             patch.object(installer.job_queue, 'enqueue',
+                          return_value=MagicMock(id='job-1')), \
+             patch.object(installer, 'insert_job'):
+            installer.local_zip_push_install('local')
 
         sleep.assert_called_once_with(5)
 
 
 class TestVerifyLocalInstall:
+    @pytest.fixture(autouse=True)
+    def addon_state(self):
+        with patch.object(installer, 'addon_state') as state:
+            yield state
+
     @pytest.mark.unit
     def test_both_services_up_is_a_pass(self):
         with patch('requests.get', return_value=MagicMock(status_code=200)):
@@ -137,6 +147,53 @@ class TestVerifyLocalInstall:
 
         with patch('requests.get', side_effect=get):
             assert installer.verify_local_install() is False
+
+
+class TestVerifyLocalInstallRecordsTheAddon:
+    """Time machine is ui.manage 'custom', so addon_routes skips it and nothing
+    else writes its addon record. device_identity.reported_domains() builds the
+    domain list this device sends to the cloud from that collection, so without
+    these writes a device records clips while the console lists time_machine
+    under unavailable_domains."""
+
+    @pytest.fixture(autouse=True)
+    def addon_state(self):
+        with patch.object(installer, 'addon_state') as state:
+            yield state
+
+    @pytest.mark.unit
+    def test_a_pass_marks_the_addon_enabled(self, addon_state):
+        with patch('requests.get', return_value=MagicMock(status_code=200)):
+            installer.verify_local_install()
+
+        addon_state.mark_enabled.assert_called_once_with('timemachine')
+        addon_state.mark_failed.assert_not_called()
+
+    @pytest.mark.unit
+    def test_a_failure_records_why(self, addon_state):
+        with patch('requests.get', return_value=MagicMock(status_code=503)):
+            installer.verify_local_install()
+
+        addon_state.mark_enabled.assert_not_called()
+        assert addon_state.mark_failed.call_args[0][0] == 'timemachine'
+        assert 'services down' in addon_state.mark_failed.call_args[0][1]
+
+    @pytest.mark.unit
+    def test_the_record_is_written_under_the_name_device_identity_reads(self, addon_state):
+        # reported_domains() maps this exact key to the time_machine domain.
+        from worker_scripts.device_identity import ADDON_DOMAINS
+
+        with patch('requests.get', return_value=MagicMock(status_code=200)):
+            installer.verify_local_install()
+
+        assert addon_state.mark_enabled.call_args[0][0] in ADDON_DOMAINS
+
+    @pytest.mark.unit
+    def test_a_state_write_failure_does_not_change_the_verdict(self, addon_state):
+        # The install came up; a mongo blip must not report it as down.
+        addon_state.mark_enabled.side_effect = Exception('mongo is away')
+        with patch('requests.get', return_value=MagicMock(status_code=200)):
+            assert installer.verify_local_install() is True
 
 
 class TestValidateAccount:

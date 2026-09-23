@@ -288,6 +288,44 @@ class TestDisableTimemachine:
         system.assert_not_called()
 
 
+class TestDisableTimemachineClearsTheAddonRecord:
+    """The other half of the record verify_local_install writes. Without it a
+    device goes on reporting the time_machine domain to the cloud after the
+    containers have been removed."""
+
+    @pytest.fixture
+    def addon_state(self):
+        with patch.object(timemachine_routes, 'addon_state') as state:
+            yield state
+
+    @pytest.mark.integration
+    @pytest.mark.parametrize('tm_type', ['local', 'zip_push', 'cloud'])
+    def test_every_type_clears_the_record(self, tm_client, home, addon_state, tm_type):
+        with patch('os.system'):
+            response = tm_client.delete('/disable_timemachine', json={'type': tm_type})
+
+        assert response.status_code == 200
+        addon_state.mark_disabled.assert_called_once_with('timemachine')
+
+    @pytest.mark.integration
+    def test_a_rejected_request_leaves_the_record_alone(self, tm_client, home, addon_state):
+        with patch('os.system'):
+            response = tm_client.delete('/disable_timemachine', json={})
+
+        assert response.status_code == 500
+        addon_state.mark_disabled.assert_not_called()
+
+    @pytest.mark.integration
+    def test_a_state_write_failure_does_not_fail_the_uninstall(self, tm_client, home, addon_state):
+        # The containers are already gone by this point; a mongo blip must not
+        # report the uninstall as failed.
+        addon_state.mark_disabled.side_effect = Exception('mongo is away')
+        with patch('os.system'):
+            response = tm_client.delete('/disable_timemachine', json={'type': 'local'})
+
+        assert response.status_code == 200
+
+
 class TestCleanupTimemachine:
     @pytest.mark.integration
     def test_returns_the_cleanup_result(self, tm_client):

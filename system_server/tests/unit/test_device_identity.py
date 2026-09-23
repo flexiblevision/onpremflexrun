@@ -22,6 +22,14 @@ class TestReportedDomains:
             assert di.reported_domains() == ['waveform']
 
     @pytest.mark.unit
+    def test_timemachine_is_the_time_machine_domain(self):
+        # The addon name and the domain differ by an underscore. verify_local_install
+        # writes the record under the addon name; a device that records clips and
+        # reports no time_machine means that record was never written.
+        with patch.object(di.addon_state, 'enabled', return_value=['timemachine']):
+            assert di.reported_domains() == ['time_machine']
+
+    @pytest.mark.unit
     def test_inspection_is_never_reported(self):
         # Baseline: every node inspects, so the cloud supplies it, not the device.
         with patch.object(di.addon_state, 'enabled',
