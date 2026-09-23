@@ -1,14 +1,19 @@
+"""Time machine clips -> the device's bucket -> the analytics spine.
+
+The waveform path (FVKWS audio_anomaly/cloud.py): mint signed PUT links from
+/api/capture/devices/<device>/upload_links (kind time_machine, which lands under
+tm/<device>/ in the device's own bucket), PUT each mp4, then queue the analytics
+record naming that bucket and object so SiteViewer can open it.
+
+The zip to TMEventIngest is gone. The module keeps its name because rq jobs
+already queued name push_event_records by import path.
+"""
+import os
+from datetime import datetime
+
 import requests
 from pymongo import MongoClient
-from bson import json_util, ObjectId
-import datetime
-import json
-import os
-import time
-import pymongo
-from datetime import datetime
-import settings
-from cloud_env import get_cloud_functions_base
+
 from timemachine import analytics
 
 client            = MongoClient("172.17.0.1")
@@ -17,45 +22,34 @@ utils_db          = client["fvonprem"]["utils"]
 dev_ref           = utils_db.find_one({'type':'device_id'})
 DEV_ID            =  None if not dev_ref else dev_ref['id']
 
+UPLOAD_KIND = 'time_machine'
+CONTENT_TYPE = 'video/mp4'
+# the cloud mints at most this many links per request (devices.py MAX_UPLOAD_LINKS)
+LINK_BATCH = 10
+# eventor writes /Videos/... inside its container, mounted from here
+HOST_ROOT = '/home/visioncell'
+# (connect, per-socket-op): 30s failed every write of the old 80-120MB zips on a
+# line uplink, and a 2 minute clip can still be that large
 PUSH_TIMEOUT = (15, 300)
+MINT_TIMEOUT = 20
 
-CLOUD_FUNCTIONS_BASE =settings.config['gcp_functions_domain'] if 'gcp_functions_domain' in settings.config else 'https://functions-proxy.flexiblevision.com/'
 
-def mark_as_processed(files, events):
-    for pf, event in zip(files, events):
-        file_path = pf[1][1].name
-        tm_records_db.update_one({'id': event['id']}, {'$set': {'processed': True, 'processed_time': datetime.now().timestamp()}})
-        # Only now is the recording known to be in the cloud.
-        analytics.record_event(event, device_id=DEV_ID)
-        try:
-            os.remove(file_path)
-        except Exception as error:
-            print(error, ' ERROR REMOVE ZIP FILE')
+def mark_as_processed(event, upload):
+    tm_records_db.update_one({'id': event['id']}, {'$set': {
+        'processed': True, 'processed_time': datetime.now().timestamp(),
+        'cloud_bucket': upload['bucket'], 'cloud_path': upload['path']}})
+    # Only now is the recording known to be in the cloud.
+    analytics.record_event(event, device_id=DEV_ID, upload=upload)
 
 def mark_as_dequeued(events):
     for event in events:
         tm_records_db.update_one({'id': event['id']}, {'$set': {'queued': False}})
 
-def batch_and_process(events):
-    """[(files, events)] — the multipart POST, and the records to mark after it.
-
-    The field name is the *device* id, shared across a batch, so the upload
-    tuple alone cannot say which record to mark.
-    """
-    batch_limit = 5
-    batches     = []
-    files       = []
-    batch_events = []
-    for event in events:
-        if len(files) == batch_limit:
-            batches.append((files, batch_events))
-            files, batch_events = [], []
-
-        dev_id = DEV_ID if DEV_ID else event['id']
-        files.append((dev_id, (event['zip_name'], open('/home/visioncell'+event['zip_path'], 'rb'), 'application/zip')))
-        batch_events.append(event)
-    batches.append((files, batch_events)) #push remaining files
-    return batches
+def mark_as_unuploadable(event, reason):
+    # processed so it stops being retried every sync; the reason says why
+    print('time machine clip %s not uploaded: %s' % (event.get('id'), reason))
+    tm_records_db.update_one({'id': event['id']}, {'$set': {
+        'processed': True, 'processed_time': datetime.now().timestamp(), 'push_error': reason}})
 
 def get_unprocessed_events():
     event_records = tm_records_db.find({'processed': False, "$or":[ {'queued': { '$exists': 0 }}, {"queued": False}], 'storage_type': 'zip_push'})
@@ -69,24 +63,63 @@ def get_unprocessed_events():
 
     return {'count': len(events), 'events': events}
 
+def local_path(event):
+    path = event.get('filepath_mp4')
+    return HOST_ROOT + path if path else None
+
+def mint_links(cloud_domain, token, names):
+    """{name: url}, bucket and object prefix for one batch; raises on failure."""
+    url = '{}/api/capture/devices/{}/upload_links'.format(cloud_domain.rstrip('/'), DEV_ID)
+    res = requests.post(url, json={'kind': UPLOAD_KIND, 'names': names, 'content_type': CONTENT_TYPE},
+                        headers={'Authorization': 'Bearer ' + token}, timeout=MINT_TIMEOUT)
+    if res.status_code != 200:
+        raise RuntimeError('upload link mint failed: %s %s' % (res.status_code, res.text[:200]))
+    body = res.json() or {}
+    return body.get('links') or {}, body.get('bucket'), body.get('prefix')
+
+def put_clip(signed_url, path):
+    # no auth header: the signature is the authorisation, and the site token has
+    # no business going to the storage host
+    with open(path, 'rb') as handle:
+        res = requests.put(signed_url, data=handle, headers={'Content-Type': CONTENT_TYPE},
+                           timeout=PUSH_TIMEOUT)
+    if res.status_code >= 400:
+        raise RuntimeError('upload failed: %s %s' % (res.status_code, res.text[:200]))
+
 def push_event_records(cloud_domain, id_token, event_records):
-    #push the zip file and the event_record to an endpoint
-    batches = batch_and_process(event_records['events'])
-    for files, events in batches:
-        if not files:
-            continue
+    """Upload each clip's mp4 to the device's bucket and queue its analytics record."""
+    if not DEV_ID:
+        print('time machine push skipped: no device_id in fvonprem.utils')
+        mark_as_dequeued(event_records['events'])
+        return True
+
+    ready = []
+    for event in event_records['events']:
+        path = local_path(event)
+        if not path or not os.path.isfile(path):
+            mark_as_unuploadable(event, 'no mp4 on disk (%s)' % path)
+        else:
+            ready.append((event, path))
+
+    for start in range(0, len(ready), LINK_BATCH):
+        batch = ready[start:start + LINK_BATCH]
         try:
-            push_path = '{}TMEventIngest'.format(get_cloud_functions_base(CLOUD_FUNCTIONS_BASE))
-            headers   = {'Authorization': 'Bearer '+id_token}
-            # (connect, per-socket-op): 30s failed every write of the 80-120MB zips
-            # on a line uplink, and a 2 minute clip can still be that large
-            r = requests.post(push_path, headers=headers, files=files, timeout=PUSH_TIMEOUT)
-            if r.status_code <= 299:
-                mark_as_processed(files, events)
-            else:
-                mark_as_dequeued(events)
+            links, bucket, prefix = mint_links(
+                cloud_domain, id_token, [os.path.basename(p) for _, p in batch])
         except Exception as error:
-            mark_as_dequeued(events)
-            print(error, ' ERROR PUSHING ZIP FILE')
+            print(error, ' ERROR MINTING TIME MACHINE UPLOAD LINKS')
+            mark_as_dequeued([e for e, _ in batch])
+            continue
+
+        for event, path in batch:
+            name = os.path.basename(path)
+            try:
+                if name not in links:
+                    raise RuntimeError('no upload link returned for ' + name)
+                put_clip(links[name], path)
+                mark_as_processed(event, {'bucket': bucket, 'path': '%s/%s' % (prefix, name)})
+            except Exception as error:
+                print(error, ' ERROR UPLOADING TIME MACHINE CLIP')
+                mark_as_dequeued([event])
 
     return True

@@ -1,7 +1,8 @@
 """Time machine events -> the prediction sync -> a domain envelope.
 
 Writes a small record into `img_analytics` so the event rides the sync every
-other domain uses. The zip itself still goes via `zip_push` to TMEventIngest.
+other domain uses. The mp4 goes to the device's bucket first (zip_push); the
+record names that bucket and object so the envelope's media_ref resolves.
 """
 import datetime
 import os
@@ -50,8 +51,13 @@ def device_place():
         return {}
 
 
-def build_record(event, device_id=None):
-    """The analytics record for one pushed event, or None if unattributable."""
+def build_record(event, device_id=None, upload=None):
+    """The analytics record for one pushed event, or None if unattributable.
+
+    upload: {'bucket', 'path'} of the uploaded mp4. The spine builds media_ref
+    as gs://<bucket>/<filepath_mp4>, and falls back to the deployment-wide
+    bucket when there is none - the wrong bucket for a device's clip.
+    """
     event_id = event.get('id')
     if not event_id:
         _stats['skipped_no_id'] += 1
@@ -73,10 +79,11 @@ def build_record(event, device_id=None):
         'event_ts': _iso_from_seconds(started),
         'end_ts': _iso_from_seconds(ended) if ended else None,
         'serial_number': serial,
-        'zip_name': event.get('zip_name'),
-        'zip_path': event.get('zip_path'),
-        'filepath_mp4': event.get('filepath_mp4'),
-        'filepath_webm': event.get('filepath_webm'),
+        'bucket': (upload or {}).get('bucket'),
+        'filepath_mp4': (upload or {}).get('path') or event.get('filepath_mp4'),
+        'local_filepath_mp4': event.get('filepath_mp4') if upload else None,
+        'duration': event.get('duration'),
+        'triggers': event.get('triggers'),
         'camera': event.get('camera'),
         'metadata': {k: v for k, v in {
             'device_id': device_id or event.get('device_id'),
@@ -87,14 +94,13 @@ def build_record(event, device_id=None):
         'synced': False,
         'modified': _ms(),
     }
-    # No bucket: a recording lands in the device's, resolved cloud-side.
     return {k: v for k, v in record.items() if v is not None}
 
 
-def record_event(event, device_id=None):
+def record_event(event, device_id=None, upload=None):
     """Queue one pushed event for the sync. Idempotent on `id`; never raises."""
     try:
-        record = build_record(event, device_id)
+        record = build_record(event, device_id, upload)
         if record is None:
             return False
         analytics_coll.update_one({'id': record['id']}, {'$set': record},

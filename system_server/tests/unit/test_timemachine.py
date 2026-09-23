@@ -471,130 +471,34 @@ class TestGetUnprocessedEvents:
             assert zip_push.get_unprocessed_events() == {'count': 0, 'events': []}
 
 
-class TestBatchAndProcess:
-    def _events(self, n):
-        return [{'id': f'e{i}', 'zip_name': f'{i}.zip', 'zip_path': f'/z/{i}.zip'}
-                for i in range(n)]
-
-    @pytest.mark.unit
-    def test_batches_of_five(self):
-        with patch('builtins.open', mock_open(read_data=b'')):
-            batches = zip_push.batch_and_process(self._events(12))
-
-        assert [len(files) for files, _ in batches] == [5, 5, 2]
-
-    @pytest.mark.unit
-    def test_a_partial_batch_is_still_returned(self):
-        with patch('builtins.open', mock_open(read_data=b'')):
-            batches = zip_push.batch_and_process(self._events(3))
-
-        assert [len(files) for files, _ in batches] == [3]
-
-    @pytest.mark.unit
-    def test_no_events_still_yields_one_empty_batch(self):
-        # push_event_records skips an empty batch, so this stays a no-op rather
-        # than an error.
-        assert zip_push.batch_and_process([]) == [([], [])]
-
-    @pytest.mark.unit
-    def test_each_entry_is_a_multipart_file_tuple(self):
-        with patch('builtins.open', mock_open(read_data=b'')) as opener:
-            files, _ = zip_push.batch_and_process(self._events(1))[0]
-
-        device_id, (name, handle, content_type) = files[0]
-        assert name == '0.zip'
-        assert content_type == 'application/zip'
-        opener.assert_called_once_with('/home/visioncell/z/0.zip', 'rb')
-
-    @pytest.mark.unit
-    def test_each_upload_travels_with_its_record(self):
-        # The multipart field name is the device id, shared across the batch, so
-        # the record is what says which row to mark.
-        with patch.object(zip_push, 'DEV_ID', 'dev-42'), \
-             patch('builtins.open', mock_open(read_data=b'')):
-            files, events = zip_push.batch_and_process(self._events(3))[0]
-
-        assert [e['id'] for e in events] == ['e0', 'e1', 'e2']
-        assert [f[0] for f in files] == ['dev-42'] * 3
-
-    @pytest.mark.unit
-    def test_the_device_id_keys_each_upload(self):
-        with patch.object(zip_push, 'DEV_ID', 'dev-42'), \
-             patch('builtins.open', mock_open(read_data=b'')):
-            files, _ = zip_push.batch_and_process(self._events(1))[0]
-
-        assert files[0][0] == 'dev-42'
-
-    @pytest.mark.unit
-    def test_an_unregistered_device_falls_back_to_the_event_id(self):
-        with patch.object(zip_push, 'DEV_ID', None), \
-             patch('builtins.open', mock_open(read_data=b'')):
-            files, _ = zip_push.batch_and_process(self._events(1))[0]
-
-        assert files[0][0] == 'e0'
-
-
-def _files(n=1):
-    return [('dev-42', (f'{i}.zip', MagicMock(name=f'/tmp/{i}.zip'), 'application/zip'))
+def _records(n=1):
+    return [{'id': f'e{i}', 'filepath_mp4': f'/Videos/TimeMachine/c{i}.mp4',
+             'record_start_time': 1789000000 + i, 'storage_type': 'zip_push'}
             for i in range(n)]
 
 
-def _records(n=1):
-    return [{'id': f'e{i}', 'zip_name': f'{i}.zip', 'zip_path': f'/z/{i}.zip',
-             'record_start_time': 1789000000 + i} for i in range(n)]
-
-
-def _batch(n=1):
-    return (_files(n), _records(n))
-
-
 class TestMarkAsProcessed:
-    @pytest.mark.unit
-    def test_flags_the_record_and_deletes_the_archive(self):
-        files, events = _batch(2)
-        with patch.object(zip_push.tm_records_db, 'update_one') as update, \
-             patch.object(zip_push.analytics, 'record_event'), \
-             patch('os.remove') as remove:
-            zip_push.mark_as_processed(files, events)
-
-        assert update.call_count == 2
-        assert update.call_args[0][0] == {'id': 'e1'}
-        assert update.call_args[0][1]['$set']['processed'] is True
-        assert remove.call_count == 2
+    UPLOAD = {'bucket': 'dev-bkt', 'path': 'tm/dev-42/c0.mp4'}
 
     @pytest.mark.unit
-    def test_the_event_id_is_used_not_the_device_id(self):
-        # The upload tuple carries the device id; marking by it matched no row.
-        files, events = _batch(1)
+    def test_flags_the_record_with_where_the_clip_went(self):
         with patch.object(zip_push.tm_records_db, 'update_one') as update, \
-             patch.object(zip_push.analytics, 'record_event'), \
-             patch('os.remove'):
-            zip_push.mark_as_processed(files, events)
+             patch.object(zip_push.analytics, 'record_event'):
+            zip_push.mark_as_processed(_records(1)[0], self.UPLOAD)
 
         assert update.call_args[0][0] == {'id': 'e0'}
+        fields = update.call_args[0][1]['$set']
+        assert fields['processed'] is True
+        assert (fields['cloud_bucket'], fields['cloud_path']) == ('dev-bkt', 'tm/dev-42/c0.mp4')
 
     @pytest.mark.unit
-    def test_a_delivered_event_joins_the_analytics_spine(self):
-        files, events = _batch(2)
+    def test_a_delivered_clip_joins_the_analytics_spine_with_its_object(self):
         with patch.object(zip_push.tm_records_db, 'update_one'), \
-             patch.object(zip_push.analytics, 'record_event') as record, \
-             patch('os.remove'):
-            zip_push.mark_as_processed(files, events)
+             patch.object(zip_push.analytics, 'record_event') as record:
+            zip_push.mark_as_processed(_records(1)[0], self.UPLOAD)
 
-        assert record.call_count == 2
-        assert record.call_args[0][0]['id'] == 'e1'
-
-    @pytest.mark.unit
-    def test_an_already_deleted_archive_does_not_stop_the_batch(self, capsys):
-        files, events = _batch(2)
-        with patch.object(zip_push.tm_records_db, 'update_one') as update, \
-             patch.object(zip_push.analytics, 'record_event'), \
-             patch('os.remove', side_effect=OSError('gone')):
-            zip_push.mark_as_processed(files, events)
-
-        # Both records are still marked processed - the upload succeeded, and
-        # a stuck local file must not make the device re-push it forever.
-        assert update.call_count == 2
+        assert record.call_args[0][0]['id'] == 'e0'
+        assert record.call_args[1]['upload'] == self.UPLOAD
 
 
 class TestAnalyticsProducer:
@@ -646,6 +550,24 @@ class TestAnalyticsProducer:
         record = tm_analytics.build_record(self._event())
 
         assert 'bucket' not in record
+
+    @pytest.mark.unit
+    def test_an_uploaded_clip_names_its_bucket_and_object(self):
+        # The spine makes media_ref gs://<bucket>/<filepath_mp4>; with no bucket it
+        # falls back to the deployment-wide one, the wrong bucket for a device clip.
+        record = tm_analytics.build_record(
+            self._event(), upload={'bucket': 'dev-bkt', 'path': 'tm/dev-42/a.mp4'})
+
+        assert record['bucket'] == 'dev-bkt'
+        assert record['filepath_mp4'] == 'tm/dev-42/a.mp4'
+        assert record['local_filepath_mp4'] == '/b/a.mp4'
+
+    @pytest.mark.unit
+    def test_record_event_passes_the_upload_through(self):
+        with patch.object(tm_analytics.analytics_coll, 'update_one') as update:
+            tm_analytics.record_event(self._event(), upload={'bucket': 'b', 'path': 'tm/d/a.mp4'})
+
+        assert update.call_args[0][1]['$set']['bucket'] == 'b'
 
     @pytest.mark.unit
     def test_the_device_is_carried_for_place_resolution(self):
@@ -717,74 +639,116 @@ class TestMarkAsDequeued:
 
 
 class TestPushEventRecords:
+    """Each clip's mp4 goes to the device's bucket through a signed link, as waveform clips do."""
+
     @pytest.fixture
-    def batches(self):
-        with patch.object(zip_push, 'batch_and_process', return_value=[_batch(2)]) as b:
-            yield b
+    def clips(self, tmp_path):
+        (tmp_path / 'Videos' / 'TimeMachine').mkdir(parents=True)
+        def make(n):
+            events = _records(n)
+            for e in events:
+                (tmp_path / e['filepath_mp4'].lstrip('/')).write_bytes(b'mp4')
+            return {'events': events}
+        with patch.object(zip_push, 'HOST_ROOT', str(tmp_path)), \
+             patch.object(zip_push, 'DEV_ID', 'dev-42'), \
+             patch.object(zip_push.tm_records_db, 'update_one') as update, \
+             patch.object(zip_push.analytics, 'record_event') as record:
+            self.update, self.record = update, record
+            yield make
+
+    @staticmethod
+    def _mint(names_to_links=None, status=200):
+        def post(url, json=None, headers=None, timeout=None):
+            links = {n: 'https://store/' + n for n in json['names']}
+            return MagicMock(status_code=status, text='nope', json=lambda: {
+                'links': links, 'bucket': 'dev-bkt', 'prefix': 'tm/dev-42'})
+        return post
+
+    def _processed(self):
+        return [c[0][0]['id'] for c in self.update.call_args_list
+                if c[0][1]['$set'].get('processed') is True and 'cloud_path' in c[0][1]['$set']]
+
+    def _dequeued(self):
+        return [c[0][0]['id'] for c in self.update.call_args_list
+                if c[0][1] == {'$set': {'queued': False}}]
 
     @pytest.mark.unit
-    def test_a_successful_push_marks_the_batch_processed(self, batches):
-        with patch('requests.post', return_value=MagicMock(status_code=200)), \
-             patch.object(zip_push, 'mark_as_processed') as processed, \
-             patch.object(zip_push, 'mark_as_dequeued') as dequeued, \
-             patch.object(zip_push, 'get_cloud_functions_base', return_value='https://fn/'):
-            assert zip_push.push_event_records('https://c', 'tok', {'events': []}) is True
+    def test_links_are_minted_for_the_time_machine_kind(self, clips):
+        with patch.object(zip_push.requests, 'post', side_effect=self._mint()) as post, \
+             patch.object(zip_push.requests, 'put', return_value=MagicMock(status_code=200)):
+            zip_push.push_event_records('https://cloud/', 'tok', clips(2))
 
-        processed.assert_called_once()
-        dequeued.assert_not_called()
-
-    @pytest.mark.unit
-    def test_the_token_and_endpoint_are_set(self, batches):
-        with patch('requests.post', return_value=MagicMock(status_code=200)) as post, \
-             patch.object(zip_push, 'mark_as_processed'), \
-             patch.object(zip_push, 'get_cloud_functions_base', return_value='https://fn/'):
-            zip_push.push_event_records('https://c', 'tok', {'events': []})
-
-        assert post.call_args[0][0] == 'https://fn/TMEventIngest'
+        url, = post.call_args[0]
+        assert url == 'https://cloud/api/capture/devices/dev-42/upload_links'
+        assert post.call_args[1]['json'] == {'kind': 'time_machine', 'names': ['c0.mp4', 'c1.mp4'],
+                                             'content_type': 'video/mp4'}
         assert post.call_args[1]['headers'] == {'Authorization': 'Bearer tok'}
-        # a quick connect, but minutes for the body: 30s failed every large zip
-        assert post.call_args[1]['timeout'] == (15, 300)
 
     @pytest.mark.unit
-    @pytest.mark.parametrize('status', [299, 200, 201])
-    def test_any_2xx_counts_as_delivered(self, batches, status):
-        with patch('requests.post', return_value=MagicMock(status_code=status)), \
-             patch.object(zip_push, 'mark_as_processed') as processed, \
-             patch.object(zip_push, 'get_cloud_functions_base', return_value='https://fn/'):
-            zip_push.push_event_records('https://c', 'tok', {'events': []})
+    def test_each_clip_is_put_to_its_link_without_the_site_token(self, clips):
+        with patch.object(zip_push.requests, 'post', side_effect=self._mint()), \
+             patch.object(zip_push.requests, 'put', return_value=MagicMock(status_code=200)) as put:
+            zip_push.push_event_records('https://cloud', 'tok', clips(2))
 
-        processed.assert_called_once()
-
-    @pytest.mark.unit
-    def test_a_rejected_push_is_requeued_not_dropped(self, batches):
-        with patch('requests.post', return_value=MagicMock(status_code=500)), \
-             patch.object(zip_push, 'mark_as_processed') as processed, \
-             patch.object(zip_push, 'mark_as_dequeued') as dequeued, \
-             patch.object(zip_push, 'get_cloud_functions_base', return_value='https://fn/'):
-            zip_push.push_event_records('https://c', 'tok', {'events': []})
-
-        processed.assert_not_called()
-        dequeued.assert_called_once()
+        assert [c[0][0] for c in put.call_args_list] == ['https://store/c0.mp4', 'https://store/c1.mp4']
+        assert put.call_args[1]['headers'] == {'Content-Type': 'video/mp4'}
+        # a quick connect, but minutes for the body: 30s failed every large upload
+        assert put.call_args[1]['timeout'] == (15, 300)
 
     @pytest.mark.unit
-    def test_an_unreachable_cloud_requeues_the_batch(self, batches):
-        with patch('requests.post', side_effect=ConnectionError('offline')), \
-             patch.object(zip_push, 'mark_as_dequeued') as dequeued, \
-             patch.object(zip_push, 'get_cloud_functions_base', return_value='https://fn/'):
-            assert zip_push.push_event_records('https://c', 'tok', {'events': []}) is True
+    def test_an_uploaded_clip_is_processed_with_its_object_path(self, clips):
+        with patch.object(zip_push.requests, 'post', side_effect=self._mint()), \
+             patch.object(zip_push.requests, 'put', return_value=MagicMock(status_code=200)):
+            zip_push.push_event_records('https://cloud', 'tok', clips(1))
 
-        dequeued.assert_called_once()
+        assert self._processed() == ['e0']
+        assert self.record.call_args[1]['upload'] == {'bucket': 'dev-bkt', 'path': 'tm/dev-42/c0.mp4'}
 
     @pytest.mark.unit
-    def test_one_failed_batch_does_not_stop_the_others(self):
-        responses = [MagicMock(status_code=500), MagicMock(status_code=200)]
-        with patch.object(zip_push, 'batch_and_process',
-                          return_value=[_batch(1), _batch(1)]), \
-             patch('requests.post', side_effect=responses), \
-             patch.object(zip_push, 'mark_as_processed') as processed, \
-             patch.object(zip_push, 'mark_as_dequeued') as dequeued, \
-             patch.object(zip_push, 'get_cloud_functions_base', return_value='https://fn/'):
-            zip_push.push_event_records('https://c', 'tok', {'events': []})
+    def test_a_failed_mint_requeues_the_batch_and_uploads_nothing(self, clips):
+        with patch.object(zip_push.requests, 'post', side_effect=self._mint(status=501)), \
+             patch.object(zip_push.requests, 'put') as put:
+            assert zip_push.push_event_records('https://cloud', 'tok', clips(2)) is True
 
-        assert processed.call_count == 1
-        assert dequeued.call_count == 1
+        put.assert_not_called()
+        assert self._dequeued() == ['e0', 'e1']
+
+    @pytest.mark.unit
+    def test_one_failed_upload_requeues_only_that_clip(self, clips):
+        responses = [MagicMock(status_code=403, text='expired'), MagicMock(status_code=200)]
+        with patch.object(zip_push.requests, 'post', side_effect=self._mint()), \
+             patch.object(zip_push.requests, 'put', side_effect=responses):
+            zip_push.push_event_records('https://cloud', 'tok', clips(2))
+
+        assert self._dequeued() == ['e0']
+        assert self._processed() == ['e1']
+
+    @pytest.mark.unit
+    def test_a_clip_missing_from_disk_stops_being_retried(self, clips):
+        events = clips(1)
+        events['events'][0]['filepath_mp4'] = '/Videos/TimeMachine/gone.mp4'
+        with patch.object(zip_push.requests, 'post') as post:
+            zip_push.push_event_records('https://cloud', 'tok', events)
+
+        post.assert_not_called()
+        fields = self.update.call_args[0][1]['$set']
+        assert fields['processed'] is True and 'no mp4 on disk' in fields['push_error']
+
+    @pytest.mark.unit
+    def test_links_are_minted_ten_at_a_time(self, clips):
+        with patch.object(zip_push.requests, 'post', side_effect=self._mint()) as post, \
+             patch.object(zip_push.requests, 'put', return_value=MagicMock(status_code=200)):
+            zip_push.push_event_records('https://cloud', 'tok', clips(12))
+
+        assert [len(c[1]['json']['names']) for c in post.call_args_list] == [10, 2]
+        assert len(self._processed()) == 12
+
+    @pytest.mark.unit
+    def test_an_unregistered_device_requeues_everything(self, clips):
+        events = clips(2)
+        with patch.object(zip_push, 'DEV_ID', None), \
+             patch.object(zip_push.requests, 'post') as post:
+            zip_push.push_event_records('https://cloud', 'tok', events)
+
+        post.assert_not_called()
+        assert self._dequeued() == ['e0', 'e1']
