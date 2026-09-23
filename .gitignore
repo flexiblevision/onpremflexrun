@@ -10,6 +10,9 @@ __pycache__/
 # Test and build output. These were tracked, so every test run - local or CI -
 # produced a binary diff in the working tree.
 .coverage
+# pytest-cov writes .coverage.<host>.<pid>.<rand> per subprocess and combines
+# them at the end; an interrupted run leaves them behind
+.coverage.*
 coverage.xml
 htmlcov/
 .pytest_cache/
