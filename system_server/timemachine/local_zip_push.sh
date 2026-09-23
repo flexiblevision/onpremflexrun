@@ -66,7 +66,12 @@ sudo docker run --network=host --name rtsp-server -d --restart unless-stopped \
 # start filesystem servers
 chmod +x $HOME/flex-run/scripts/filesystem_server.sh
 chmod +x $HOME/flex-run/scripts/mediasystem_server.sh
-(sudo crontab -l; echo '@reboot sudo sh '$HOME'/flex-run/scripts/filesystem_server.sh') | sudo crontab -
-(sudo crontab -l; echo '@reboot sudo sh '$HOME'/flex-run/scripts/mediasystem_server.sh') | sudo crontab -
+# every install used to append these again; add each only once
+for s in filesystem_server mediasystem_server; do
+    line="@reboot sudo sh $HOME/flex-run/scripts/$s.sh"
+    sudo crontab -l 2>/dev/null | grep -qxF "$line" || \
+        (sudo crontab -l 2>/dev/null; echo "$line") | sudo crontab -
+done
+# both are idempotent: they only restart a server that is missing or not answering
 sh $HOME/flex-run/scripts/filesystem_server.sh
 sh $HOME/flex-run/scripts/mediasystem_server.sh

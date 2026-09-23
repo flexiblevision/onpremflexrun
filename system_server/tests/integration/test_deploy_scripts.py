@@ -943,7 +943,10 @@ class TestInstallCrontab:
         self._install(cron)
         text = cron.live.read_text()
         assert text.count('start_ftp_server.sh') == 1
-        assert text.count('filesystem_server.sh') == 1
+        # the block also runs it every 5 minutes as a watchdog; only @reboot may not repeat
+        reboot = [l for l in text.splitlines()
+                  if l.startswith('@reboot') and 'filesystem_server.sh' in l]
+        assert len(reboot) == 1
 
     def test_a_stale_managed_block_is_replaced_not_duplicated(self, cron):
         cron.live.write_text(
