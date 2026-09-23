@@ -3,12 +3,13 @@ import getopt, sys
 from datetime import datetime
 import os
 from redis import Redis
-from rq import Queue, Worker
+from rq import Queue, Worker, Retry
 from rq.job import Job
 from worker_scripts.job_manager import insert_job
 import time
 import settings
 from cloud_env import get_cloud_domain
+from addons import state as addon_state
 
 redis_con   = Redis('localhost', 6379, password=None)
 job_queue   = Queue('default', connection=redis_con)
@@ -55,7 +56,25 @@ def verify_local_install():
         print(error)
         did_install.append(False)
 
-    return all(did_install)
+    ok = all(did_install)
+
+    # Time Machine is ui.manage 'custom', so addon_routes leaves it alone and
+    # its own enable route installs it. Nothing then wrote an addon record,
+    # and device_identity.reported_domains() builds what this device tells the
+    # cloud it can do from exactly that collection - so a cell could be
+    # recording happily while the console listed time_machine under
+    # unavailable_domains. This is the one place that knows whether the
+    # install actually came up, which is why the record is written here and
+    # not in the route that queues the job.
+    try:
+        if ok:
+            addon_state.mark_enabled('timemachine')
+        else:
+            addon_state.mark_failed('timemachine', 'verify_local_install found the services down')
+    except Exception as error:
+        print('could not record timemachine addon state: {}'.format(error))
+
+    return ok
 
 def validate_account(service, access_token):
     is_valid = True #TESTING ONLY
