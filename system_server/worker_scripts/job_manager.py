@@ -1,4 +1,4 @@
-from pymongo import MongoClient, ASCENDING
+from pymongo import MongoClient, ASCENDING, DESCENDING
 import datetime
 import string
 import requests
@@ -227,8 +227,41 @@ def mark_as_processing(record_id):
     analytics_coll.update_one({"id": record_id},
         {"$set": {"synced": "processing", "modified": time_now_ms()}}, True)
 
+# How many synced inspections stay on the device. They are kept so the most
+# recent work is still there to look at after it has gone to the cloud; the
+# interval purge in capdev (default 5 days) still ages them out from there.
+KEEP_SYNCED_ANALYTICS = 50
+
 def mark_as_synced(record_id):
-    analytics_coll.delete_one({"id": record_id})
+    """Mark the record synced. It used to be deleted outright, which meant a
+    successful sync left nothing behind to look at on the device."""
+    analytics_coll.update_one({"id": record_id},
+        {"$set": {"synced": True, "modified": time_now_ms()}})
+
+def prune_synced_analytics():
+    """Drop synced records beyond the newest KEEP_SYNCED_ANALYTICS.
+
+    Without this, not deleting on sync would simply let the collection grow
+    until the purge interval came round - and these records carry images.
+    Records still waiting to sync are never touched: only synced: True is
+    considered, so nothing is dropped before it has reached the cloud.
+    """
+    newest = list(
+        analytics_coll.find({"synced": True}, {"prediction_end_time": 1})
+        .sort("prediction_end_time", DESCENDING)
+        .limit(KEEP_SYNCED_ANALYTICS)
+    )
+    if len(newest) < KEEP_SYNCED_ANALYTICS:
+        return
+
+    cutoff = newest[-1].get("prediction_end_time")
+    if cutoff is None:
+        # Nothing sensible to compare against, so keep everything rather than
+        # guess - the interval purge will still clear it out.
+        return
+
+    analytics_coll.delete_many(
+        {"synced": True, "prediction_end_time": {"$lt": cutoff}})
 
 def cloud_call(url, analytics, headers):
     if not analytics:
@@ -246,6 +279,10 @@ def cloud_call(url, analytics, headers):
                 if sync_tracker:
                     did = i.get('did', 'unknown')
                     update_sync_tracker(did, success=True, record_id=i['id'])
+            # Once per batch, not once per record: the cap is a property of the
+            # collection, and pruning inside the loop would run it 1000 times
+            # for a full batch to reach the same end state.
+            prune_synced_analytics()
         else:
             # Track failed syncs and mark for retry
             for i in analytics:
