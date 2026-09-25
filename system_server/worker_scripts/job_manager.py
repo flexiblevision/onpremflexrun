@@ -246,22 +246,19 @@ def prune_synced_analytics():
     Records still waiting to sync are never touched: only synced: True is
     considered, so nothing is dropped before it has reached the cloud.
     """
+    # _id, not prediction_end_time: Time Machine and audio records carry no
+    # prediction_end_time, and a missing value sorted last would become the
+    # cutoff and stop every prune. Every record has an ObjectId, in insert order.
     newest = list(
-        analytics_coll.find({"synced": True}, {"prediction_end_time": 1})
-        .sort("prediction_end_time", DESCENDING)
+        analytics_coll.find({"synced": True}, {"_id": 1})
+        .sort("_id", DESCENDING)
         .limit(KEEP_SYNCED_ANALYTICS)
     )
     if len(newest) < KEEP_SYNCED_ANALYTICS:
         return
 
-    cutoff = newest[-1].get("prediction_end_time")
-    if cutoff is None:
-        # Nothing sensible to compare against, so keep everything rather than
-        # guess - the interval purge will still clear it out.
-        return
-
     analytics_coll.delete_many(
-        {"synced": True, "prediction_end_time": {"$lt": cutoff}})
+        {"synced": True, "_id": {"$lt": newest[-1]["_id"]}})
 
 def cloud_call(url, analytics, headers):
     if not analytics:
@@ -281,8 +278,13 @@ def cloud_call(url, analytics, headers):
                     update_sync_tracker(did, success=True, record_id=i['id'])
             # Once per batch, not once per record: the cap is a property of the
             # collection, and pruning inside the loop would run it 1000 times
-            # for a full batch to reach the same end state.
-            prune_synced_analytics()
+            # for a full batch to reach the same end state. Its own try: the
+            # batch is already accepted, and failing into the handler below
+            # would mark it unsynced and upload it again.
+            try:
+                prune_synced_analytics()
+            except Exception as e:
+                print(f'prune_synced_analytics failed: {e}')
         else:
             # Track failed syncs and mark for retry
             for i in analytics:
