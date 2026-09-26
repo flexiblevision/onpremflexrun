@@ -17,6 +17,43 @@ class MacId(Resource):
     def get(self):
         return get_mac_id()
 
+
+def _release_identity():
+    """What this device is running and where it takes it from.
+
+    Three answers support asks for in the same breath as the serial, so they
+    ride along with it rather than costing three more calls. Each is resolved
+    independently and each degrades to None: device_info is read by the
+    hotspot page and the cloud, and none of them should lose an IP address
+    because mongo is down.
+    """
+    identity = {'release': None, 'release_channel': None, 'cloud': None}
+
+    try:
+        import upgrade_runner
+        identity['release_channel'] = upgrade_runner._device_channel()
+    except Exception as e:
+        print('could not resolve the release channel: {}'.format(e))
+
+    try:
+        import cloud_env
+        identity['cloud'] = cloud_env.cloud_name(cloud_env.get_cloud_domain())
+    except Exception as e:
+        print('could not resolve the cloud: {}'.format(e))
+
+    try:
+        from pymongo import MongoClient
+        from release import state as release_state
+        client = MongoClient(os.environ.get('MONGO_SERVER', '172.17.0.1'),
+                             int(os.environ.get('MONGO_PORT', 27017)),
+                             serverSelectionTimeoutMS=5000)
+        installed = release_state.read(client['fvonprem']['utils']).get('installed')
+        identity['release'] = (installed or {}).get('release')
+    except Exception as e:
+        print('could not read the installed release: {}'.format(e))
+
+    return identity
+
 class DeviceInfo(Resource):
     def get(self):
         info = {}
@@ -71,6 +108,7 @@ class DeviceInfo(Resource):
                 pass
 
         info['presets'] = get_presets()
+        info.update(_release_identity())
 
         return info
 

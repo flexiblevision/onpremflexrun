@@ -23,8 +23,12 @@ SYNC_COMPLETION_THRESHOLD = 74
 TRACKER_COLLECTION_NAME = "sync_tracker"  # Separate collection for tracking data
 
 
-MONGODB_HOST = "172.17.0.1"  # Should move to config/environment variable
-MONGODB_PORT = 27017
+# Defaults are the docker bridge address used on devices; overridable so this
+# module can be imported where that address does not exist (CI, a dev box).
+# It pings at import and exits on failure, so an unreachable host takes the
+# whole process down rather than failing a single call.
+MONGODB_HOST = os.environ.get('MONGO_SERVER', "172.17.0.1")
+MONGODB_PORT = int(os.environ.get('MONGO_PORT', 27017))
 MONGODB_TIMEOUT_MS = 5000  # 5 second timeout
 MONGODB_MAX_POOL_SIZE = 50
 MONGODB_SERVER_SELECTION_TIMEOUT_MS = 5000
@@ -53,6 +57,8 @@ use_aws           = False
 aws_client        = None
 config            = settings.config
 BATCH_SIZE        = 10
+# A whole batch is published as one Pub/Sub message, which caps at 10MB.
+MAX_BATCH_BYTES   = int(os.environ.get('MAX_BATCH_BYTES', 8 * 1024 * 1024))
 LB_DOMAIN         = "https://functions-proxy.flexiblevision.com"
 BQ_INGEST_PATH    = "https://data-ingest-queue-172198548516.us-central1.run.app"
 if config['latest_stable_ref'] == 'latest_stable_version':
@@ -235,9 +241,11 @@ def cloud_call(url, analytics, headers):
         return True
     try:
         for a in analytics: a['synced'] = True
-        res = requests.post(url, json=analytics, headers=headers, timeout=20)
-        bq_res = requests.post(BQ_INGEST_PATH, json=analytics, headers=headers, timeout=20)
-        print(res, bq_res)
+        if config.get('environ') == 'local':
+            res = requests.post(url, json=analytics, headers=headers, timeout=20)
+        else:
+            res = requests.post(BQ_INGEST_PATH, json=analytics, headers=headers, timeout=20)
+        print(res)
         print('--------------------------------------')
         success = res.status_code == 200
         if success:
@@ -340,20 +348,33 @@ def kinesis_call(analytics):
 
         return False
 
+def batch_records(records, max_records=BATCH_SIZE, max_bytes=MAX_BATCH_BYTES):
+    """Slice by record count *and* serialized size.
+
+    An oversized record still goes alone rather than being dropped.
+    """
+    batch, size = [], 0
+    for record in records:
+        weight = len(json.dumps(record, default=str)) + 1
+        if batch and (len(batch) >= max_records or size + weight > max_bytes):
+            yield batch
+            batch, size = [], 0
+        batch.append(record)
+        size += weight
+    if batch:
+        yield batch
+
+
 def push_analytics_to_cloud(domain, access_token):
     headers = {"Authorization": "Bearer "+access_token, 'Content-Type': 'application/json'}
     url     = domain+"/api/capture/devices/upload_prediction"
 
     latest_analytics = get_unsynced_records()
-    num_analytics = len(latest_analytics)
 
-    if num_analytics == 0:
+    if not latest_analytics:
         return True
 
-    for i in range(0, num_analytics, BATCH_SIZE):
-        analytics = latest_analytics[i:i+BATCH_SIZE]
-        if not analytics: break
-
+    for analytics in batch_records(latest_analytics):
         print('#Analytics: ', len(analytics))
         if use_aws:
             j_push = job_queue.enqueue(
@@ -379,6 +400,22 @@ def push_analytics_to_cloud(domain, access_token):
     return True
 
 
+# Deploying an addon now happens in addons.jobs.enable_addon, driven by the
+# descriptor in addons/catalog/<name>/. These three remain only because rq
+# serialises a job by import path: a job queued before the upgrade still names
+# one of them, and deleting them would strand it.
+def _enable_addon(name):
+    from addons.jobs import enable_addon
+    return enable_addon(name)
+
+
 def enable_ocr():
-    install_file = f"{os.environ['HOME']}/flex-run/helpers/install_ocr.sh"
-    os.system(f"sudo sh {install_file}")
+    return _enable_addon('ocr')
+
+
+def enable_assembly_guidance():
+    return _enable_addon('assembly')
+
+
+def enable_audio():
+    return _enable_addon('anomaly_audio')

@@ -1,8 +1,13 @@
 import os
+import re
 import subprocess
+import sys
+import time
+import uuid
 from flask import render_template, make_response
 from flask_restx import Resource
 import auth
+import upgrade_runner
 from version_check import is_container_uptodate, get_current_container_version
 from setup.management import generate_environment_config
 
@@ -39,52 +44,111 @@ class Restart(Resource):
         print('restarting system')
         os.system("reboot")
 
+VISION_API = 'http://172.17.0.1:5555/api/vision/vision'
+# The endpoint system_setup.sh smoke-tests capdev on: it answers only once
+# gunicorn is serving, which is what a caller means by "capdev is back".
+CAPDEV_READY_URL = 'http://172.17.0.1:5000/api/capture/auth/jwks'
+
+
+def _wait_for_cameras(max_wait=120, poll_interval=5):
+    """Poll vision until it reports cameras. True if they turned up.
+
+    A single poll can block for its whole timeout - listCameras runs
+    synchronously on the first /cameras call - so the time it spent counts
+    against the budget. Charging only poll_interval turned this 120s wait into
+    24 * 35s of capdev downtime whenever vision was slow to answer.
+    """
+    import requests
+
+    elapsed = 0
+    while elapsed < max_wait:
+        time.sleep(poll_interval)
+        started = time.monotonic()
+        try:
+            resp = requests.get(VISION_API + '/cameras', timeout=30)
+            if resp.status_code == 200:
+                cameras = resp.json()
+                if len(cameras) > 0:
+                    print('vision: {} cameras discovered and connected ({}s)'.format(
+                        len(cameras), int(elapsed)))
+                    return True
+        except Exception:
+            print('waiting for vision... ({}s)'.format(int(elapsed)))
+        elapsed += poll_interval + (time.monotonic() - started)
+
+    return False
+
+
+def _wait_for_capdev(max_wait=90, poll_interval=5):
+    """True once capdev is answering again."""
+    import requests
+
+    elapsed = 0
+    while elapsed < max_wait:
+        started = time.monotonic()
+        try:
+            if requests.get(CAPDEV_READY_URL, timeout=10).status_code == 200:
+                print('capdev is answering ({}s)'.format(int(elapsed)))
+                return True
+        except Exception:
+            pass
+        elapsed += poll_interval + (time.monotonic() - started)
+        if elapsed < max_wait:
+            time.sleep(poll_interval)
+
+    print('warning: capdev did not answer after being started')
+    return False
+
+
+def _start_capdev(attempts=3, retry_delay=2):
+    """Start capdev, retrying, then confirm it is serving.
+
+    A failed start does not heal on its own: capdev was stopped by hand, and
+    unless-stopped will not bring back a container stopped that way - not in
+    the background, and not across a reboot. Leaving the exit status unchecked
+    is what turned one bad start into a device that stays dark.
+    """
+    for attempt in range(1, attempts + 1):
+        print('starting capdev (attempt {}/{})...'.format(attempt, attempts))
+        if os.system("docker start capdev") == 0:
+            return _wait_for_capdev()
+        print('docker start capdev failed')
+        time.sleep(retry_delay)
+
+    return False
+
+
 class RestartBackend(Resource):
     @auth.requires_auth
     def get(self):
-        import time
         import requests
 
-        vision_base = 'http://172.17.0.1:5555'
-        vision_api = vision_base + '/api/vision/vision'
-
+        # capdev stays down for the whole vision restart. It holds camera
+        # streams open against vision and none of its calls into vision carry
+        # a timeout, so a capdev left running while vision goes away hangs
+        # every one of its 8 gunicorn threads and never answers again. Only
+        # bracketing the restart - stop, then start - keeps it out of that.
         print('stopping capdev to release camera locks...')
-        os.system("docker restart capdev")
+        os.system("docker stop capdev")
 
-        # Release cameras and restart vision
-        try:
-            requests.get(vision_api + '/releaseAll', timeout=5)
-        except Exception as e:
-            print('releaseAll:', e)
-
-        print('restarting vision...')
-        os.system("docker restart vision")
-
-        # Wait for vision to finish camera discovery (listCameras runs synchronously on first /cameras call)
-        max_wait = 120
-        poll_interval = 5
-        elapsed = 0
         cameras_ready = False
-
-        while elapsed < max_wait:
-            time.sleep(poll_interval)
-            elapsed += poll_interval
+        try:
             try:
-                resp = requests.get(vision_api + '/cameras', timeout=30)
-                if resp.status_code == 200:
-                    cameras = resp.json()
-                    if len(cameras) > 0:
-                        print(f'vision: {len(cameras)} cameras discovered and connected ({elapsed}s)')
-                        cameras_ready = True
-                        break
+                requests.get(VISION_API + '/releaseAll', timeout=5)
             except Exception as e:
-                print(f'waiting for vision... ({elapsed}s)')
+                print('releaseAll:', e)
 
-        if not cameras_ready:
-            print('warning: vision not ready, starting capdev anyway')
+            print('restarting vision...')
+            os.system("docker restart vision")
 
-        print('starting capdev...')
-        os.system("docker start capdev")
+            cameras_ready = _wait_for_cameras()
+            if not cameras_ready:
+                print('warning: vision not ready, starting capdev anyway')
+        finally:
+            # However the vision half went, capdev is never left stopped.
+            capdev_ready = _start_capdev()
+
+        return {'cameras_ready': cameras_ready, 'capdev_ready': capdev_ready}
 
 class ListServices(Resource):
     def get(self):
@@ -113,46 +177,89 @@ class ListServices(Resource):
 
 class Upgrade(Resource):
     @auth.requires_auth
+    def post(self):
+        return self._start()
+
+    @auth.requires_auth
     def get(self):
+        # Deprecated in favour of POST. Kept because captureui is versioned and
+        # upgraded independently of flex-run: if GET stopped working, a device
+        # running an older UI could no longer start the upgrade that would fix
+        # it. Retire once the fleet's UI is known to POST.
+        return self._start()
+
+    def _start(self):
         # Verify user is logged into Docker
         result = subprocess.run(['docker', 'info'], capture_output=True, text=True)
         if result.returncode != 0 or 'Username' not in result.stdout:
             return {'error': 'Not logged into Docker. Please run docker login first.'}, 403
 
-        cap_uptd = is_container_uptodate('backend')[1]
-        capui_uptd = is_container_uptodate('frontend')[1]
-        predict_uptd = is_container_uptodate('prediction')[1]
-        predictlite_uptd = is_container_uptodate('predictlite')[1]
-        vision_uptd = is_container_uptodate('vision')[1]
-        creator_uptd = is_container_uptodate('nodecreator')[1]
-        visiontools_uptd = is_container_uptodate('visiontools')[1]
+        holder = upgrade_runner.lock_holder()
+        if holder is not None:
+            return {'error': 'An upgrade is already running on this device',
+                    'pid': holder}, 409
 
         try:
             import requests
-            host = 'http://172.17.0.1'
-            port = '5555'
-            path = '/api/vision/releaseAll'
-            url = host+':'+port+path
-            resp = requests.get(url)
+            requests.get('http://172.17.0.1:5555/api/vision/releaseAll', timeout=10)
         except Exception as e:
             print(e)
 
         generate_environment_config()
         home = os.environ['HOME']
-        subprocess.run(["chmod", "+x", home+"/flex-run/upgrades/upgrade_flex_run.sh"])
-        subprocess.run(["sh", home+"/flex-run/upgrades/upgrade_flex_run.sh"])
+        runner = os.path.join(home, 'flex-run', 'system_server', 'upgrade_runner.py')
+        run_id = str(uuid.uuid4())
 
-        subprocess.run(["chmod", "+x", home+"/flex-run/system_server/upgrade_system.sh"])
-        subprocess.run(["sh", home+"/flex-run/system_server/upgrade_system.sh",
-                        cap_uptd, capui_uptd, predict_uptd, predictlite_uptd,
-                        vision_uptd, creator_uptd, visiontools_uptd])
+        # Detached: the upgrade outlives this request, and its final step stops
+        # and restarts this very server. start_new_session keeps it out of the
+        # process group that gets killed.
+        log = upgrade_runner.log_path(run_id)
+        try:
+            handle = open(log, 'ab', 0) if log else subprocess.DEVNULL
+        except IOError:
+            handle, log = subprocess.DEVNULL, None
+
+        # --release prefers a signed manifest and falls back to the version
+        # endpoint when none can be obtained, so a device is never stranded by
+        # an unreachable release service. No versions are passed: the runner
+        # computes them for the fallback, so it upgrades to what is current
+        # when the upgrade runs rather than when the request arrived.
+        try:
+            subprocess.Popen([sys.executable, runner, '--release', run_id],
+                             stdout=handle, stderr=subprocess.STDOUT,
+                             stdin=subprocess.DEVNULL,
+                             start_new_session=True,
+                             close_fds=True)
+        except Exception as e:
+            return {'error': 'Could not start the upgrade',
+                    'detail': str(e)}, 500
+        finally:
+            if handle is not subprocess.DEVNULL:
+                handle.close()
+
+        return {'status': 'upgrade started', 'id': run_id, 'log': log,
+                'poll': '/upgrade_status'}, 202
+
+
+class UpgradeStatus(Resource):
+    def get(self):
+        return upgrade_runner.status()
 
 class UpgradeFlexRun(Resource):
     @auth.requires_auth
     def get(self):
         home = os.environ['HOME']
         subprocess.run(["chmod", "+x", home+"/flex-run/upgrades/upgrade_flex_run.sh"])
-        subprocess.run(["sh", home+"/flex-run/upgrades/upgrade_flex_run.sh"])
+        flex_run = subprocess.run(["sh", home+"/flex-run/upgrades/upgrade_flex_run.sh"],
+                                  capture_output=True, text=True)
+        print(flex_run.stdout, flex_run.stderr)
+
+        if flex_run.returncode != 0:
+            return {'error': upgrade_runner.flex_run_error(flex_run.returncode),
+                    'exit_code': flex_run.returncode,
+                    'detail': (flex_run.stderr or '').strip()[-500:]}, 500
+
+        return {'status': 'flex-run updated'}
 
 class SystemVersions(Resource):
     def get(self):
@@ -170,8 +277,209 @@ class SystemVersions(Resource):
                 'predictlite_version': predictlite_version,
                 'vision_version': vision_version,
                 'creator_version': creator_version,
-                'visiontools_version': vision_version
+                'visiontools_version': visiontools_version
                 }
+
+
+def _release_collection():
+    """The utils collection release state lives in."""
+    from pymongo import MongoClient
+    client = MongoClient(os.environ.get('MONGO_SERVER', '172.17.0.1'),
+                         int(os.environ.get('MONGO_PORT', 27017)),
+                         serverSelectionTimeoutMS=5000)
+    return client['fvonprem']['utils']
+
+
+# The settings screen is the only place a person sees which release their
+# device would take, so asking the channel what it offers has to happen here.
+# Four seconds, not fetch's default thirty: this sits in front of the settings
+# screen, and a factory network that is not answering has to render "could not
+# check" rather than hang the page.
+OFFER_TIMEOUT = 4
+
+
+def _channel_offer(high_water):
+    """What this device's channel is offering, and which channel that is.
+
+    Resolved through upgrade_runner's own helpers rather than re-read from the
+    config here: the answer shown on the screen has to be the answer the
+    upgrade will use, and two implementations of that would drift. Never
+    raises - "could not check" is a state to display, not an error.
+    """
+    channel = None
+    try:
+        import upgrade_runner
+        from release import fetch as fetch_mod
+        channel = upgrade_runner._device_channel()
+        offer = fetch_mod.available(
+            upgrade_runner._device_arch(), high_water,
+            channel=channel, timeout=OFFER_TIMEOUT)
+    except Exception as e:
+        offer = {'reachable': False, 'detail': str(e)}
+    return offer, channel
+
+
+class Releases(Resource):
+    """What release is running, what is offered, and what it can go back to.
+
+    One call, because the settings screen needs all of it at once and three
+    round trips over a factory network is three chances to render half a state.
+    """
+    def get(self):
+        try:
+            from release import state as release_state
+            collection = _release_collection()
+            offer, channel = _channel_offer(
+                release_state.read(collection)['high_water'])
+            summary = release_state.summary(collection, available=offer)
+            summary['channel'] = channel
+        except Exception as e:
+            # A device that predates release tracking has no state; say so
+            # rather than 500ing the whole settings screen.
+            summary = {'installed': None, 'high_water': 0, 'history': [],
+                       'rollback_targets': [], 'available': None,
+                       'update_available': False, 'rolled_back_from': None,
+                       'channel': None, 'unavailable': str(e)}
+
+        # Which keys this device trusts. Reported so a rotation can be tracked
+        # across the fleet: you cannot safely retire a key until every device
+        # shows the replacement.
+        try:
+            from release import trust as release_trust
+            summary['trust'] = release_trust.summary(
+                os.environ.get('FLEXRUN_TRUST_DIR', release_trust.DEFAULT_TRUST_DIR))
+        except Exception as e:
+            summary['trust'] = {'count': 0, 'keys': [], 'unavailable': str(e)}
+
+        return summary
+
+
+class ReleaseChannel(Resource):
+    """Which channel this device takes releases from, and whether it may move.
+
+    GET is open, like the rest of the release state. PUT is authenticated and
+    goes through cloud_env, which refuses the write anywhere the release plane
+    is not honoured: mongo on 172.17.0.1 takes no credentials, and a write
+    there must not be able to walk a customer device onto pre-release
+    software. The refusal is reported rather than hidden so the screen can say
+    why the control is disabled.
+    """
+    def get(self):
+        try:
+            import cloud_env
+            domain = cloud_env.get_cloud_domain()
+            return {'channel': upgrade_runner._device_channel(),
+                    'changeable': cloud_env.release_override_allowed(),
+                    'choices': list(cloud_env.CHANNELS),
+                    'cloud_domain': domain,
+                    'cloud': cloud_env.cloud_name(domain),
+                    'cloud_choices': sorted(cloud_env.CLOUD_DOMAINS)}
+        except Exception as e:
+            return {'channel': None, 'changeable': False, 'choices': [],
+                    'cloud_domain': None, 'cloud': None, 'cloud_choices': [],
+                    'unavailable': str(e)}
+
+    @auth.requires_auth
+    def put(self):
+        from flask import request
+        import cloud_env
+
+        body = request.get_json(silent=True) or {}
+        channel = body.get('channel')
+        if channel not in cloud_env.CHANNELS:
+            return {'error': 'channel must be one of {}'.format(
+                ', '.join(cloud_env.CHANNELS))}, 400
+
+        # stable is prod, and that is enforced here rather than only hidden in
+        # the UI: a device left pointing at dev while taking fleet releases
+        # would read its projects and models from the cloud those releases are
+        # tested against, which is not a state anyone would choose on purpose.
+        cloud = body.get('cloud')
+        if channel == 'stable':
+            cloud = cloud_env.STABLE_CLOUD
+        elif cloud is None:
+            cloud = cloud_env.cloud_name(cloud_env.get_cloud_domain())
+
+        if cloud is not None and cloud not in cloud_env.CLOUD_DOMAINS:
+            return {'error': 'cloud must be one of {}'.format(
+                ', '.join(sorted(cloud_env.CLOUD_DOMAINS)))}, 400
+
+        values = {'release_channel': channel}
+        if cloud is not None:
+            values['cloud_domain'] = cloud_env.CLOUD_DOMAINS[cloud]
+
+        try:
+            cloud_env.set_override(values)
+        except cloud_env.CloudEnvError as e:
+            # Not a server fault - this device is not allowed to move.
+            return {'error': str(e)}, 403
+        except Exception as e:
+            return {'error': str(e)}, 500
+
+        domain = cloud_env.get_cloud_domain()
+        return {'channel': upgrade_runner._device_channel(),
+                'cloud_domain': domain, 'cloud': cloud_env.cloud_name(domain)}
+
+
+class Rollback(Resource):
+    """Return this device to a release it has previously run.
+
+    POST, and deliberately not exposed as GET: it swaps containers.
+    """
+    @auth.requires_auth
+    def post(self):
+        from flask import request
+        from release import state as release_state
+
+        body = request.get_json(silent=True) or {}
+        target = body.get('counter')
+        if not isinstance(target, int) or isinstance(target, bool):
+            return {'error': 'a numeric release counter is required'}, 400
+
+        holder = upgrade_runner.lock_holder()
+        if holder is not None:
+            return {'error': 'an upgrade is already running on this device',
+                    'pid': holder}, 409
+
+        try:
+            known = release_state.known_counters(_release_collection())
+        except Exception as e:
+            return {'error': 'could not read release history',
+                    'detail': str(e)}, 500
+
+        if target not in known:
+            return {'error': 'release {} has never run on this device'.format(target),
+                    'available': sorted(known)}, 400
+
+        # Detached for the same reason /upgrade is: a rollback swaps every
+        # container and restarts this server, so nothing is left to answer the
+        # request it came in on.
+        home = os.environ['HOME']
+        runner = os.path.join(home, 'flex-run', 'system_server',
+                              'upgrade_runner.py')
+        run_id = str(uuid.uuid4())
+        log = upgrade_runner.log_path(run_id)
+        try:
+            handle = open(log, 'ab', 0) if log else subprocess.DEVNULL
+        except IOError:
+            handle, log = subprocess.DEVNULL, None
+
+        try:
+            subprocess.Popen([sys.executable, runner, '--rollback', run_id,
+                              str(target)],
+                             stdout=handle, stderr=subprocess.STDOUT,
+                             stdin=subprocess.DEVNULL,
+                             start_new_session=True, close_fds=True)
+        except Exception as e:
+            return {'error': 'Could not start the rollback',
+                    'detail': str(e)}, 500
+        finally:
+            if handle is not subprocess.DEVNULL:
+                handle.close()
+
+        return {'started': True, 'run_id': run_id, 'target': target,
+                'log': log}, 202
+
 
 class SystemIsUptodate(Resource):
     def get(self):
@@ -194,19 +502,157 @@ class RestartFO(Resource):
             print("Error restarting FO server:", e)
             return "Error restarting FO server", 500
 
+TEAMVIEWER_SERVICE = 'teamviewerd'
+TEAMVIEWER_START_TIMEOUT = 15
+TEAMVIEWER_CMD_TIMEOUT = 15
+TEAMVIEWER_GUI_TIMEOUT = 25
+TEAMVIEWER_DBUS_NAME = 'com.teamviewer.TeamViewer'
+
+
+def _run_cmd(cmd, timeout=30):
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+        return result.returncode, (result.stdout or '').strip(), (result.stderr or '').strip()
+    except Exception as e:
+        return -1, '', str(e)
+
+
+def _priv(cmd):
+    return cmd if os.geteuid() == 0 else ['sudo', '-n'] + cmd
+
+
+def _teamviewer_running():
+    _, out, _ = _run_cmd(['systemctl', 'is-active', TEAMVIEWER_SERVICE], timeout=10)
+    if out == 'active':
+        return True
+    code, out, _ = _run_cmd(_priv(['teamviewer', '--daemon', 'status']), timeout=10)
+    return code == 0 and 'not running' not in out.lower()
+
+
+def _wait_for_teamviewer(timeout=TEAMVIEWER_START_TIMEOUT):
+    deadline = time.time() + timeout
+    while True:
+        if _teamviewer_running():
+            return True
+        if time.time() >= deadline:
+            return False
+        time.sleep(1)
+
+
+def _graphical_session():
+    code, out, _ = _run_cmd(['loginctl', 'list-sessions', '--no-legend'], timeout=10)
+    if code != 0:
+        return None
+
+    for line in out.splitlines():
+        parts = line.split()
+        if not parts:
+            continue
+        _, props, _ = _run_cmd(
+            ['loginctl', 'show-session', parts[0],
+             '-p', 'Name', '-p', 'User', '-p', 'Type', '-p', 'Active'],
+            timeout=10)
+        p = dict(l.split('=', 1) for l in props.splitlines() if '=' in l)
+        if p.get('Active') == 'yes' and p.get('Type') in ('x11', 'wayland'):
+            return {'user': p.get('Name'), 'uid': p.get('User'), 'type': p.get('Type')}
+    return None
+
+
+def _teamviewer_gui_running():
+    code, _, _ = _run_cmd(['pgrep', '-x', 'TeamViewer'], timeout=10)
+    return code == 0
+
+
+def _wait_for_teamviewer_gui(timeout=TEAMVIEWER_GUI_TIMEOUT):
+    deadline = time.time() + timeout
+    while True:
+        if _teamviewer_gui_running():
+            return True
+        if time.time() >= deadline:
+            return False
+        time.sleep(1)
+
+
+def _launch_teamviewer_gui():
+    if _teamviewer_gui_running():
+        return True, 'already running'
+
+    session = _graphical_session()
+    if not session:
+        return False, 'no active graphical session'
+
+    uid = session['uid']
+    env = ['DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/{}/bus'.format(uid),
+           'XDG_RUNTIME_DIR=/run/user/{}'.format(uid)]
+    activate = ['dbus-send', '--session', '--dest=org.freedesktop.DBus',
+                '--type=method_call', '--print-reply', '/org/freedesktop/DBus',
+                'org.freedesktop.DBus.StartServiceByName',
+                'string:' + TEAMVIEWER_DBUS_NAME, 'uint32:0']
+
+    cmd = ['runuser', '-u', session['user'], '--', 'env'] + env + activate
+    if os.geteuid() != 0:
+        cmd = ['env'] + env + activate
+
+    code, out, err = _run_cmd(cmd, timeout=TEAMVIEWER_CMD_TIMEOUT)
+    if code != 0:
+        return False, 'dbus activation failed: {}'.format(err or out or 'exit {}'.format(code))
+
+    if not _wait_for_teamviewer_gui():
+        return False, 'dbus activation returned but the GUI did not start'
+
+    return True, 'activated in {} session for user {}'.format(session['type'], session['user'])
+
+
+def _teamviewer_id():
+    code, out, _ = _run_cmd(_priv(['teamviewer', 'info']), timeout=10)
+    if code != 0:
+        return None
+    for line in out.splitlines():
+        if 'TeamViewer ID' in line:
+            raw = line.split(':')[-1].strip()
+            return re.sub(r'\x1b\[[0-9;]*m', '', raw).strip()
+    return None
+
+
+def _start_teamviewer_daemon():
+    if _teamviewer_running():
+        return True, 'already_running', ''
+
+    _run_cmd(_priv(['systemctl', 'unmask', TEAMVIEWER_SERVICE]), timeout=10)
+
+    errors = []
+    for cmd in (_priv(['systemctl', 'enable', '--now', TEAMVIEWER_SERVICE]),
+                _priv(['teamviewer', '--daemon', 'start'])):
+        code, out, err = _run_cmd(cmd, timeout=TEAMVIEWER_CMD_TIMEOUT)
+        if code == 0 and _wait_for_teamviewer():
+            return True, 'started', ''
+        errors.append('{}: {}'.format(' '.join(cmd), err or out or 'exit {}'.format(code)))
+
+    return False, 'failed', ' | '.join(errors)
+
+
 class StartTeamviewer(Resource):
     def get(self):
         try:
-            result = subprocess.run(
-                ['sudo', 'systemctl', 'restart', 'teamviewerd'],
-                capture_output=True, text=True, timeout=30
-            )
-            if result.returncode == 0:
-                return 'TeamViewer started', 200
-            else:
-                return f'Failed to start TeamViewer: {result.stderr}', 500
+            ok, status, detail = _start_teamviewer_daemon()
+            if not ok:
+                print('Failed to start TeamViewer daemon: ' + detail)
+                return {'success': False, 'status': status, 'error': detail}, 500
+
+            gui_ok, gui_detail = _launch_teamviewer_gui()
+            body = {'success': gui_ok, 'status': status, 'daemon': 'running',
+                    'gui': gui_detail, 'teamviewer_id': _teamviewer_id()}
+
+            if not gui_ok:
+                body['error'] = ('daemon is running but the GUI could not be started, '
+                                 'so the device will stay offline: ' + gui_detail)
+                print('TeamViewer GUI not started: ' + gui_detail)
+                return body, 503
+
+            return body, 200
         except Exception as e:
-            return f'Error starting TeamViewer: {e}', 500
+            print('Error starting TeamViewer:', e)
+            return {'success': False, 'status': 'error', 'error': str(e)}, 500
 
 
 def register_routes(api):
@@ -215,7 +661,11 @@ def register_routes(api):
     api.add_resource(RestartBackend, '/refresh_backend')
     api.add_resource(ListServices, '/list_services')
     api.add_resource(Upgrade, '/upgrade')
+    api.add_resource(UpgradeStatus, '/upgrade_status')
     api.add_resource(UpgradeFlexRun, '/upgrade_flex_run')
     api.add_resource(SystemVersions, '/system_versions')
+    api.add_resource(Releases, '/releases')
+    api.add_resource(ReleaseChannel, '/release_channel')
+    api.add_resource(Rollback, '/rollback')
     api.add_resource(SystemIsUptodate, '/system_uptodate')
     api.add_resource(StartTeamviewer, '/start_teamviewer')

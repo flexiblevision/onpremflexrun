@@ -9,14 +9,15 @@ CLOUD = {
     "auth0_domain": "auth.flexiblevision.com",
     "cloud_domain": "https://v1.cloud.flexiblevision.com",
     "branch": "master",
-    "gcp_functions_domain": "https://us-central1-flexible-vision-staging.cloudfunctions.net/",
-    "container_check_domain": "https://us-central1-flexible-vision-staging.cloudfunctions.net/",
+    "gcp_functions_domain": "https://functions-proxy.flexiblevision.com/",
+    "container_check_domain": "https://functions-proxy.flexiblevision.com/",
     "interface_name": "enp0s31f6",
     "latest_stable_ref": "latest_stable_version",
     "static_ip": "192.168.10.35",
     "system_user": "visioncell",
     "jwt_secret_key": "123",
     "auth_alg": "RS256",
+    "use_mqtt": False,
     "fire_operator": {"db_name": "pod-inspection", "document": "", "trigger_dest": "http://172.17.0.1:1880/trigger"}
 }
 
@@ -28,19 +29,64 @@ LOCAL = {
     "cloud_domain": "http://localhost",
     "branch": "master",
     "gcp_functions_domain": "http://localhost/api/capture/functions/",
-    "container_check_domain": "https://us-central1-flexible-vision-staging.cloudfunctions.net/",
+    "container_check_domain": "https://functions-proxy.flexiblevision.com/",
     "interface_name": "enp0s31f6",
     "latest_stable_ref": "latest_stable_version",
     "static_ip": "192.168.10.35",
     "system_user": "visioncell",
     "auth_alg": "HS256",
-    "jwt_secret_key": "123"
+    "jwt_secret_key": "123",
+    "use_mqtt": False
 }
 
-def generate_environment_config(environment='cloud', override=False):
-    config = CLOUD
+# Which cloud a device talks to, and which release channel it follows.
+#
+# dev points at clouddeploy and follows the beta channel, so a device under
+# test takes a release before the fleet does. prod is the default because an
+# unattended install must not opt itself into pre-release software.
+RELEASE_TRACKS = {
+    'prod': {
+        'latest_stable_ref': 'latest_stable_version',
+        'release_channel': 'stable',
+    },
+    'dev': {
+        'cloud_domain': 'https://clouddeploy.api.flexiblevision.com',
+        'latest_stable_ref': 'latest_stable_version_check_dev',
+        'release_channel': 'beta',
+    },
+}
+
+
+# What a track means once it is resolved against the base config, which is
+# what a runtime override has to write: cloud_domain alone would leave the
+# device fetching releases from the channel and ref of the track it left.
+TRACK_SETTINGS_KEYS = ('cloud_domain', 'gcp_functions_domain',
+                       'latest_stable_ref', 'release_channel')
+
+
+def track_settings(release_track, environment='cloud'):
+    if release_track not in RELEASE_TRACKS:
+        raise ValueError(
+            'unknown release track {!r} - expected one of {}'.format(
+                release_track, ', '.join(sorted(RELEASE_TRACKS))))
+
+    merged = dict(LOCAL if environment == 'local' else CLOUD)
+    merged.update(RELEASE_TRACKS[release_track])
+    return {key: merged[key] for key in TRACK_SETTINGS_KEYS if key in merged}
+
+
+def generate_environment_config(environment='cloud', override=False,
+                                release_track='prod'):
+    config = dict(CLOUD)
     if environment == 'local':
-        config = LOCAL
+        config = dict(LOCAL)
+
+    if release_track not in RELEASE_TRACKS:
+        raise ValueError(
+            'unknown release track {!r} - expected one of {}'.format(
+                release_track, ', '.join(sorted(RELEASE_TRACKS))))
+    config.update(RELEASE_TRACKS[release_track])
+    config['release_track'] = release_track
 
     PATH = os.environ['HOME']+'/fvconfig.json'
     if os.path.exists(PATH) and not override:

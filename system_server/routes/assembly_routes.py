@@ -1,3 +1,10 @@
+"""Assembly content upload and media serving.
+
+The enable/disable toggle and the status probe moved to addon_routes.py, which
+drives them from addons/catalog/assembly/addon.json. What is left here is the
+part that is genuinely specific to assembly: receiving a content ZIP and serving
+the media out of it.
+"""
 import os
 import io
 import json

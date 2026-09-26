@@ -1,495 +1,350 @@
+"""The AWS fire-operator HTTP surface.
+
+/decommission and PUT /aws_warehouse_zone both rewrite fvconfig.json and
+repoint the kiosk browser. A decommission that writes the config but leaves the
+kiosk on the splash page strands the machine with no way to re-register it.
 """
-Unit tests for fo_server.py Flask application
-"""
-import pytest
+import importlib.util
 import json
 import os
-from unittest.mock import Mock, patch, MagicMock, mock_open
+import sys
+import pytest
+from unittest.mock import patch, MagicMock, call
 
 
-class TestUpdateConfig:
-    """Tests for update_config function"""
+REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', '..'))
+AWS_DIR = os.path.join(REPO, 'aws')
+
+DESKTOP_PATH = '/home/visioncell/.config/autostart/launchpad.html.desktop'
+
+
+def _load_fo_server():
+    """fo_server does a bare `from FireOperator import FireOperator`."""
+    path = os.path.join(AWS_DIR, 'fo_server.py')
+    spec = importlib.util.spec_from_file_location('_fo_server_under_test', path)
+    module = importlib.util.module_from_spec(spec)
+
+    sys.path.insert(0, AWS_DIR)
+    sys.modules['_fo_server_under_test'] = module
+    try:
+        spec.loader.exec_module(module)
+    finally:
+        sys.path.pop(0)
+        sys.modules.pop('_fo_server_under_test', None)
+    return module
+
+
+fo = _load_fo_server()
+
+
+@pytest.fixture
+def client():
+    fo.app.config['TESTING'] = True
+    return fo.app.test_client()
+
+
+@pytest.fixture
+def operator():
+    """settings.FireOperator, as the routes see it."""
+    import settings
+    previous = settings.FireOperator
+    settings.FireOperator = MagicMock()
+    yield settings.FireOperator
+    settings.FireOperator = previous
+
+
+@pytest.fixture
+def no_operator():
+    import settings
+    previous = settings.FireOperator
+    settings.FireOperator = None
+    yield
+    settings.FireOperator = previous
+
+
+@pytest.fixture
+def home(tmp_path, monkeypatch):
+    monkeypatch.setenv('HOME', str(tmp_path))
+    return tmp_path
+
+
+class TestGrpcResolver:
+    @pytest.mark.unit
+    def test_the_native_dns_resolver_is_selected_at_import(self):
+        # The default c-ares resolver fails on these devices' DNS setup, and
+        # the override has to be in place before grpc is imported.
+        assert os.environ['GRPC_DNS_RESOLVER'] == 'native'
+
+
+class TestInspectionStatus:
+    @pytest.mark.unit
+    def test_get_returns_the_operator_status(self, client, operator):
+        operator.get_status.return_value = {'state': 'idle'}
+
+        response = client.get('/inspection_status')
+
+        assert response.status_code == 200
+        assert response.get_json() == {'state': 'idle'}
 
     @pytest.mark.unit
-    @patch('builtins.open', new_callable=mock_open)
-    @patch('os.path.exists')
-    @patch('json.dump')
-    def test_update_config_file_exists(self, mock_json_dump, mock_exists, mock_file):
-        """Test update_config when file exists"""
-        mock_exists.return_value = True
+    def test_get_without_an_operator_is_a_404(self, client, no_operator):
+        response = client.get('/inspection_status')
 
-        # Replicate update_config logic
-        def update_config(config, home_path):
-            PATH = home_path + '/fvconfig.json'
-            if os.path.exists(PATH):
-                with open(PATH, 'w') as outfile:
-                    json.dump(config, outfile, indent=4, sort_keys=True)
-
-        test_config = {'key': 'value', 'number': 42}
-        update_config(test_config, '/test/home')
-
-        mock_file.assert_called_once_with('/test/home/fvconfig.json', 'w')
-        mock_json_dump.assert_called_once_with(
-            test_config,
-            mock_file(),
-            indent=4,
-            sort_keys=True
-        )
+        assert response.status_code == 404
+        assert b'Operator not running' in response.data
 
     @pytest.mark.unit
-    @patch('builtins.open', new_callable=mock_open)
-    @patch('os.path.exists')
-    def test_update_config_file_not_exists(self, mock_exists, mock_file):
-        """Test update_config when file doesn't exist"""
-        mock_exists.return_value = False
+    def test_post_forwards_the_update(self, client, operator):
+        response = client.post('/inspection_status', json={'state': 'running'})
 
-        def update_config(config, home_path):
-            PATH = home_path + '/fvconfig.json'
-            if os.path.exists(PATH):
-                with open(PATH, 'w') as outfile:
-                    json.dump(config, outfile, indent=4, sort_keys=True)
-
-        test_config = {'key': 'value'}
-        update_config(test_config, '/test/home')
-
-        mock_file.assert_not_called()
-
-
-class TestGetStatus:
-    """Tests for /inspection_status GET endpoint"""
+        assert response.status_code == 200
+        operator.update_status.assert_called_once_with({'state': 'running'})
 
     @pytest.mark.unit
-    def test_get_status_operator_running(self):
-        """Test GET /inspection_status when FireOperator is running"""
-        mock_fire_operator = MagicMock()
-        mock_fire_operator.get_status.return_value = {'status': 'active', 'count': 5}
-
-        # Replicate get_status route logic
-        def get_status(fire_operator):
-            if fire_operator:
-                data = fire_operator.get_status()
-                return data, 200
-            else:
-                return 'Operator not running', 404
-
-        result, status_code = get_status(mock_fire_operator)
-
-        assert status_code == 200
-        assert result == {'status': 'active', 'count': 5}
-        mock_fire_operator.get_status.assert_called_once()
-
-    @pytest.mark.unit
-    def test_get_status_operator_not_running(self):
-        """Test GET /inspection_status when FireOperator is not running"""
-        def get_status(fire_operator):
-            if fire_operator:
-                data = fire_operator.get_status()
-                return data, 200
-            else:
-                return 'Operator not running', 404
-
-        result, status_code = get_status(None)
-
-        assert status_code == 404
-        assert result == 'Operator not running'
-
-
-class TestUpdateStatus:
-    """Tests for /inspection_status POST endpoint"""
-
-    @pytest.mark.unit
-    def test_update_status_operator_running(self):
-        """Test POST /inspection_status when FireOperator is running"""
-        mock_fire_operator = MagicMock()
-
-        # Replicate update_status route logic
-        def update_status(data, fire_operator):
-            if fire_operator:
-                fire_operator.update_status(data)
-                return 'Updated', 200
-            else:
-                return 'Operator not running', 404
-
-        test_data = {'status': 'processing', 'message': 'Running inspection'}
-        result, status_code = update_status(test_data, mock_fire_operator)
-
-        assert status_code == 200
-        assert result == 'Updated'
-        mock_fire_operator.update_status.assert_called_once_with(test_data)
-
-    @pytest.mark.unit
-    def test_update_status_operator_not_running(self):
-        """Test POST /inspection_status when FireOperator is not running"""
-        def update_status(data, fire_operator):
-            if fire_operator:
-                fire_operator.update_status(data)
-                return 'Updated', 200
-            else:
-                return 'Operator not running', 404
-
-        result, status_code = update_status({'status': 'test'}, None)
-
-        assert status_code == 404
-        assert result == 'Operator not running'
+    def test_post_without_an_operator_is_a_404(self, client, no_operator):
+        response = client.post('/inspection_status', json={'state': 'running'})
+        assert response.status_code == 404
 
 
 class TestGetZone:
-    """Tests for /aws_warehouse_zone GET endpoint"""
+    @pytest.mark.unit
+    def test_splits_the_document_key_into_warehouse_and_zone(self, client):
+        config = {'fire_operator': {'document': 'WH1_ZONE3'}}
+        with patch('settings.config', config):
+            assert client.get('/aws_warehouse_zone').get_json() == \
+                {'warehouse': 'WH1', 'zone': 'ZONE3'}
 
     @pytest.mark.unit
-    def test_get_zone_valid_format(self):
-        """Test GET /aws_warehouse_zone with valid warehouse_zone format"""
-        # Replicate get_zone route logic
-        def get_zone(document):
-            results = {'warehouse': "", 'zone': ""}
-            station = document
-            wz = station.split('_')
-            if len(wz) == 2:
-                results['warehouse'] = wz[0]
-                results['zone'] = wz[1]
-            return results
-
-        result = get_zone('warehouse1_zoneA')
-
-        assert result['warehouse'] == 'warehouse1'
-        assert result['zone'] == 'zoneA'
+    def test_a_decommissioned_device_reports_empty_fields(self, client):
+        # '_' is what /decommission writes; it splits into two empty halves.
+        with patch('settings.config', {'fire_operator': {'document': '_'}}):
+            assert client.get('/aws_warehouse_zone').get_json() == \
+                {'warehouse': '', 'zone': ''}
 
     @pytest.mark.unit
-    def test_get_zone_invalid_format(self):
-        """Test GET /aws_warehouse_zone with invalid format"""
-        def get_zone(document):
-            results = {'warehouse': "", 'zone': ""}
-            station = document
-            wz = station.split('_')
-            if len(wz) == 2:
-                results['warehouse'] = wz[0]
-                results['zone'] = wz[1]
-            return results
-
-        result = get_zone('invalid_format_with_extra')
-
-        # Should return empty strings when format doesn't match
-        assert result['warehouse'] == ""
-        assert result['zone'] == ""
+    def test_an_unset_document_reports_empty_fields(self, client):
+        with patch('settings.config', {'fire_operator': {'document': ''}}):
+            assert client.get('/aws_warehouse_zone').get_json() == \
+                {'warehouse': '', 'zone': ''}
 
     @pytest.mark.unit
-    def test_get_zone_no_underscore(self):
-        """Test GET /aws_warehouse_zone with no underscore"""
-        def get_zone(document):
-            results = {'warehouse': "", 'zone': ""}
-            station = document
-            wz = station.split('_')
-            if len(wz) == 2:
-                results['warehouse'] = wz[0]
-                results['zone'] = wz[1]
-            return results
+    def test_a_malformed_document_key_reports_empty_fields(self, client):
+        with patch('settings.config', {'fire_operator': {'document': 'WH1_Z_EXTRA'}}):
+            assert client.get('/aws_warehouse_zone').get_json() == \
+                {'warehouse': '', 'zone': ''}
 
-        result = get_zone('nounderscorehere')
 
-        assert result['warehouse'] == ""
-        assert result['zone'] == ""
+class TestUpdateConfig:
+    @pytest.mark.unit
+    def test_writes_the_config(self, home):
+        (home / 'fvconfig.json').write_text('{}')
+
+        fo.update_config({'environ': 'cloud', 'use_aws': True})
+
+        assert json.loads((home / 'fvconfig.json').read_text()) == \
+            {'environ': 'cloud', 'use_aws': True}
+
+    @pytest.mark.unit
+    def test_does_nothing_when_there_is_no_config(self, home):
+        fo.update_config({'environ': 'cloud'})
+        assert not (home / 'fvconfig.json').exists()
+
+
+def _desktop(tmp_path, monkeypatch, lines):
+    path = tmp_path / 'launchpad.html.desktop'
+    path.write_text(''.join(lines))
+    monkeypatch.setattr(os.path, 'expanduser', lambda p: str(path))
+    return path
+
+
+DESKTOP_LINES = ['[Desktop Entry]\n', 'Type=Application\n',
+                 'Exec=google-chrome http://localhost:3013/setup &\n',
+                 'Name=launchpad\n']
+
+
+class TestSetLaunchpad:
+    @pytest.mark.unit
+    def test_points_the_kiosk_at_the_splash_page(self, tmp_path, monkeypatch):
+        path = _desktop(tmp_path, monkeypatch, DESKTOP_LINES)
+
+        fo.set_launchpad()
+
+        content = path.read_text()
+        assert 'fv_splash.html' in content
+        assert 'http://localhost:3013/setup' not in content
+
+    @pytest.mark.unit
+    def test_the_other_entries_are_preserved(self, tmp_path, monkeypatch):
+        path = _desktop(tmp_path, monkeypatch, DESKTOP_LINES)
+
+        fo.set_launchpad()
+
+        content = path.read_text()
+        assert '[Desktop Entry]\n' in content
+        assert 'Name=launchpad\n' in content
+
+    @pytest.mark.unit
+    def test_the_kiosk_flags_are_set(self, tmp_path, monkeypatch):
+        path = _desktop(tmp_path, monkeypatch, DESKTOP_LINES)
+
+        fo.set_launchpad()
+
+        exec_line = [l for l in path.read_text().splitlines()
+                     if l.startswith('Exec=')][0]
+        assert '-kiosk' in exec_line
+        assert '--incognito' in exec_line
+
+    @pytest.mark.unit
+    def test_a_missing_desktop_file_is_not_an_error(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(os.path, 'expanduser',
+                            lambda p: str(tmp_path / 'absent.desktop'))
+        fo.set_launchpad()
+
+
+class TestEnableSetup:
+    @pytest.mark.unit
+    def test_points_the_kiosk_at_the_setup_page(self, tmp_path, monkeypatch):
+        lines = ['[Desktop Entry]\n', 'Exec=google-chrome file:///splash.html &\n']
+        path = _desktop(tmp_path, monkeypatch, lines)
+
+        fo.enable_setup()
+
+        content = path.read_text()
+        assert 'http://localhost:3013/setup' in content
+        assert 'splash.html' not in content
+
+    @pytest.mark.unit
+    def test_a_missing_desktop_file_is_not_an_error(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(os.path, 'expanduser',
+                            lambda p: str(tmp_path / 'absent.desktop'))
+        fo.enable_setup()
+
+
+class TestDecommission:
+    @pytest.mark.unit
+    def test_clears_the_station_and_returns_the_kiosk_to_setup(self, client, home):
+        (home / 'fvconfig.json').write_text('{}')
+        config = {'fire_operator': {'document': 'WH1_ZONE3'}}
+
+        with patch('settings.config', config), \
+             patch.object(fo, 'enable_setup') as setup:
+            response = client.get('/decommission')
+
+        assert response.status_code == 200
+        assert config['fire_operator']['document'] == '_'
+        setup.assert_called_once()
+
+    @pytest.mark.unit
+    def test_the_cleared_station_is_persisted(self, client, home):
+        (home / 'fvconfig.json').write_text('{}')
+        config = {'fire_operator': {'document': 'WH1_ZONE3'}}
+
+        with patch('settings.config', config), patch.object(fo, 'enable_setup'):
+            client.get('/decommission')
+
+        written = json.loads((home / 'fvconfig.json').read_text())
+        assert written['fire_operator']['document'] == '_'
 
 
 class TestUpdateZone:
-    """Tests for /aws_warehouse_zone PUT endpoint"""
+    @pytest.mark.unit
+    def test_records_the_station_and_restarts(self, client, home):
+        (home / 'fvconfig.json').write_text('{}')
+        config = {'fire_operator': {'document': ''}}
+
+        with patch('settings.config', config), \
+             patch.object(fo, 'set_launchpad') as launchpad, \
+             patch('threading.Timer') as timer:
+            response = client.put('/aws_warehouse_zone',
+                                  json={'warehouse': 'WH1', 'zone': 'ZONE3'})
+
+        assert response.status_code == 200
+        assert config['fire_operator']['document'] == 'WH1_ZONE3'
+        launchpad.assert_called_once()
 
     @pytest.mark.unit
-    @patch('os.system')
-    def test_update_zone_valid_data(self, mock_os_system):
-        """Test PUT /aws_warehouse_zone with valid data"""
-        mock_config = {
-            'fire_operator': {
-                'document': 'old_warehouse_old_zone'
-            }
-        }
+    def test_the_restart_is_deferred_so_the_response_is_delivered(self, client, home):
+        # Restarting inline would kill the process before the caller gets its
+        # 200 and the UI would report the commissioning as failed.
+        (home / 'fvconfig.json').write_text('{}')
 
-        # Replicate update_zone route logic
-        def update_zone(data, config, home_path):
-            if 'warehouse' in data and 'zone' in data:
-                doc_key = f"{data['warehouse']}_{data['zone']}"
-                config['fire_operator']['document'] = doc_key
-                # update_config(config) would be called here
-                mock_os_system(f"forever restart {home_path}/flex-run/aws/fo_server.py")
-                return 'Updated', 200
-            return 'Missing data', 400
+        with patch('settings.config', {'fire_operator': {'document': ''}}), \
+             patch.object(fo, 'set_launchpad'), \
+             patch('threading.Timer') as timer:
+            client.put('/aws_warehouse_zone',
+                       json={'warehouse': 'WH1', 'zone': 'ZONE3'})
 
-        test_data = {'warehouse': 'new_warehouse', 'zone': 'new_zone'}
-        result, status_code = update_zone(test_data, mock_config, '/test/home')
-
-        assert status_code == 200
-        assert result == 'Updated'
-        assert mock_config['fire_operator']['document'] == 'new_warehouse_new_zone'
-        mock_os_system.assert_called_once_with(
-            'forever restart /test/home/flex-run/aws/fo_server.py'
-        )
+        assert timer.call_args[0][0] == 2.0
+        assert timer.call_args[0][1] is fo.restart_server
+        timer.return_value.start.assert_called_once()
 
     @pytest.mark.unit
-    def test_update_zone_missing_warehouse(self):
-        """Test PUT /aws_warehouse_zone with missing warehouse"""
-        mock_config = {'fire_operator': {'document': 'test'}}
+    @pytest.mark.parametrize('payload', [{'warehouse': 'WH1'}, {'zone': 'Z3'}, {}])
+    def test_an_incomplete_payload_changes_nothing(self, client, home, payload):
+        config = {'fire_operator': {'document': 'ORIGINAL'}}
 
-        def update_zone(data, config, home_path):
-            if 'warehouse' in data and 'zone' in data:
-                return 'Updated', 200
-            return 'Missing data', 400
+        # The guard falls off the end of the function with no return, so Flask
+        # cannot build a response. In production that surfaces as a 500 where a
+        # 400 belongs: the device is unharmed, but the commissioning UI cannot
+        # tell a rejected request from a broken server. Under TESTING the test
+        # client re-raises instead of rendering the 500.
+        with patch('settings.config', config), \
+             patch.object(fo, 'set_launchpad') as launchpad, \
+             patch('threading.Timer') as timer:
+            with pytest.raises(TypeError, match='did not return a valid response'):
+                client.put('/aws_warehouse_zone', json=payload)
 
-        test_data = {'zone': 'zone1'}  # Missing warehouse
-        result, status_code = update_zone(test_data, mock_config, '/test/home')
-
-        assert status_code == 400
-        assert result == 'Missing data'
-
-    @pytest.mark.unit
-    def test_update_zone_missing_zone(self):
-        """Test PUT /aws_warehouse_zone with missing zone"""
-        mock_config = {'fire_operator': {'document': 'test'}}
-
-        def update_zone(data, config, home_path):
-            if 'warehouse' in data and 'zone' in data:
-                return 'Updated', 200
-            return 'Missing data', 400
-
-        test_data = {'warehouse': 'warehouse1'}  # Missing zone
-        result, status_code = update_zone(test_data, mock_config, '/test/home')
-
-        assert status_code == 400
-        assert result == 'Missing data'
-
-
-class TestDocumentKeyFormat:
-    """Tests for document key formatting"""
+        assert config['fire_operator']['document'] == 'ORIGINAL'
+        launchpad.assert_not_called()
+        timer.assert_not_called()
 
     @pytest.mark.unit
-    def test_document_key_format(self):
-        """Test document key formatting"""
-        warehouse = 'warehouse1'
-        zone = 'zoneA'
-        doc_key = f"{warehouse}_{zone}"
+    def test_a_body_that_is_not_json_is_rejected(self, client, home):
+        response = client.put('/aws_warehouse_zone', data='not json',
+                              content_type='application/json')
 
-        assert doc_key == 'warehouse1_zoneA'
-        assert '_' in doc_key
+        assert response.status_code >= 400
 
     @pytest.mark.unit
-    def test_document_key_parse(self):
-        """Test parsing document key"""
-        doc_key = 'warehouse2_zoneB'
-        parts = doc_key.split('_')
+    def test_the_station_is_persisted(self, client, home):
+        (home / 'fvconfig.json').write_text('{}')
+        config = {'fire_operator': {'document': ''}}
 
-        assert len(parts) == 2
-        assert parts[0] == 'warehouse2'
-        assert parts[1] == 'zoneB'
+        with patch('settings.config', config), \
+             patch.object(fo, 'set_launchpad'), \
+             patch('threading.Timer'):
+            client.put('/aws_warehouse_zone',
+                       json={'warehouse': 'WH1', 'zone': 'ZONE3'})
+
+        written = json.loads((home / 'fvconfig.json').read_text())
+        assert written['fire_operator']['document'] == 'WH1_ZONE3'
+
+
+class TestRestartServer:
+    @pytest.mark.unit
+    def test_restarts_itself_through_forever(self, home):
+        with patch('os.system') as system:
+            fo.restart_server()
+
+        system.assert_called_once_with(
+            f'forever restart {home}/flex-run/aws/fo_server.py')
+
+
+class TestRoutes:
+    @pytest.mark.unit
+    def test_every_documented_route_is_registered(self, client):
+        rules = {(r.rule, tuple(sorted(r.methods - {'HEAD', 'OPTIONS'})))
+                 for r in fo.app.url_map.iter_rules()}
+
+        assert ('/inspection_status', ('GET',)) in rules
+        assert ('/inspection_status', ('POST',)) in rules
+        assert ('/aws_warehouse_zone', ('GET',)) in rules
+        assert ('/aws_warehouse_zone', ('PUT',)) in rules
+        assert ('/decommission', ('GET',)) in rules
 
     @pytest.mark.unit
-    def test_document_key_various_formats(self):
-        """Test various document key formats"""
-        test_cases = [
-            ('w1', 'z1', 'w1_z1'),
-            ('main-warehouse', 'zone-alpha', 'main-warehouse_zone-alpha'),
-            ('W123', 'Z456', 'W123_Z456'),
-        ]
-
-        for warehouse, zone, expected in test_cases:
-            doc_key = f"{warehouse}_{zone}"
-            assert doc_key == expected
-
-
-class TestFlaskAppConfiguration:
-    """Tests for Flask app configuration"""
-
-    @pytest.mark.unit
-    def test_flask_app_host_port(self):
-        """Test Flask app runs on correct host and port"""
-        # Expected configuration
-        host = '0.0.0.0'
-        port = 5012
-
-        assert host == '0.0.0.0'
-        assert port == 5012
-        assert isinstance(port, int)
-
-
-class TestForeverRestart:
-    """Tests for forever restart command"""
-
-    @pytest.mark.unit
-    @patch('os.system')
-    def test_forever_restart_command(self, mock_os_system):
-        """Test forever restart command format"""
-        home_path = '/home/user'
-        script_path = f"{home_path}/flex-run/aws/fo_server.py"
-
-        mock_os_system(f"forever restart {script_path}")
-
-        expected_cmd = 'forever restart /home/user/flex-run/aws/fo_server.py'
-        mock_os_system.assert_called_once_with(expected_cmd)
-
-    @pytest.mark.unit
-    @patch('os.system')
-    def test_forever_restart_with_env_var(self, mock_os_system):
-        """Test forever restart with environment variable"""
-        with patch.dict('os.environ', {'HOME': '/test/home'}):
-            home_path = os.environ['HOME']
-            script_path = f"{home_path}/flex-run/aws/fo_server.py"
-
-            mock_os_system(f"forever restart {script_path}")
-
-            expected_cmd = 'forever restart /test/home/flex-run/aws/fo_server.py'
-            mock_os_system.assert_called_once_with(expected_cmd)
-
-
-class TestJSONDumping:
-    """Tests for JSON dump configuration"""
-
-    @pytest.mark.unit
-    def test_json_dump_with_indent_and_sort(self):
-        """Test JSON dump with indent and sort_keys"""
-        test_data = {'z_key': 'last', 'a_key': 'first', 'nested': {'b': 2, 'a': 1}}
-
-        output = json.dumps(test_data, indent=4, sort_keys=True)
-
-        # Check formatting
-        assert '\n' in output
-        assert '    ' in output  # 4-space indent
-
-        # Parse back and verify
-        parsed = json.loads(output)
-        assert parsed == test_data
-
-    @pytest.mark.unit
-    def test_json_dump_sorted_keys(self):
-        """Test that keys are sorted"""
-        test_data = {'zebra': 1, 'apple': 2, 'banana': 3}
-
-        output = json.dumps(test_data, sort_keys=True)
-
-        # Keys should be in alphabetical order
-        assert output.index('apple') < output.index('banana')
-        assert output.index('banana') < output.index('zebra')
-
-
-class TestRouteMethods:
-    """Tests for route HTTP methods"""
-
-    @pytest.mark.unit
-    def test_inspection_status_get_method(self):
-        """Test /inspection_status accepts GET"""
-        allowed_methods = ['GET']
-
-        assert 'GET' in allowed_methods
-
-    @pytest.mark.unit
-    def test_inspection_status_post_method(self):
-        """Test /inspection_status accepts POST"""
-        allowed_methods = ['POST']
-
-        assert 'POST' in allowed_methods
-
-    @pytest.mark.unit
-    def test_aws_warehouse_zone_get_method(self):
-        """Test /aws_warehouse_zone accepts GET"""
-        allowed_methods = ['GET']
-
-        assert 'GET' in allowed_methods
-
-    @pytest.mark.unit
-    def test_aws_warehouse_zone_put_method(self):
-        """Test /aws_warehouse_zone accepts PUT"""
-        allowed_methods = ['PUT']
-
-        assert 'PUT' in allowed_methods
-
-
-class TestResponseFormats:
-    """Tests for response format handling"""
-
-    @pytest.mark.unit
-    def test_success_response_format(self):
-        """Test success response format"""
-        response = 'Updated'
-        status_code = 200
-
-        assert isinstance(response, str)
-        assert status_code == 200
-
-    @pytest.mark.unit
-    def test_error_response_format(self):
-        """Test error response format"""
-        response = 'Operator not running'
-        status_code = 404
-
-        assert isinstance(response, str)
-        assert status_code == 404
-
-    @pytest.mark.unit
-    def test_json_response_format(self):
-        """Test JSON response format"""
-        response = {'warehouse': 'w1', 'zone': 'z1'}
-
-        assert isinstance(response, dict)
-        assert 'warehouse' in response
-        assert 'zone' in response
-
-
-class TestConfigPath:
-    """Tests for config file path construction"""
-
-    @pytest.mark.unit
-    def test_config_path_construction(self):
-        """Test config file path construction"""
-        home = '/home/user'
-        path = home + '/fvconfig.json'
-
-        assert path == '/home/user/fvconfig.json'
-        assert path.endswith('.json')
-
-    @pytest.mark.unit
-    @patch.dict('os.environ', {'HOME': '/test/home'})
-    def test_config_path_with_env_var(self):
-        """Test config path using environment variable"""
-        path = os.environ['HOME'] + '/fvconfig.json'
-
-        assert path == '/test/home/fvconfig.json'
-
-
-class TestSettingsPath:
-    """Tests for settings path construction"""
-
-    @pytest.mark.unit
-    @patch.dict('os.environ', {'HOME': '/home/user'})
-    def test_settings_path_construction(self):
-        """Test settings path construction"""
-        settings_path = os.environ['HOME'] + '/flex-run'
-
-        assert settings_path == '/home/user/flex-run'
-
-    @pytest.mark.unit
-    def test_settings_path_in_sys_path(self):
-        """Test that settings path would be added to sys.path"""
-        import sys
-
-        test_path = '/test/flex-run'
-        if test_path not in sys.path:
-            sys.path.append(test_path)
-
-        assert test_path in sys.path
-
-        # Cleanup
-        sys.path.remove(test_path)
-
-
-class TestFireOperatorInstantiation:
-    """Tests for FireOperator instantiation"""
-
-    @pytest.mark.unit
-    def test_fire_operator_initialization_in_main(self):
-        """Test FireOperator is initialized in main"""
-        # Simulate main block logic
-        mock_fire_operator_class = MagicMock()
-        mock_instance = MagicMock()
-        mock_fire_operator_class.return_value = mock_instance
-
-        # In main: settings.FireOperator = FireOperator()
-        fire_operator = mock_fire_operator_class()
-
-        assert fire_operator == mock_instance
-        mock_fire_operator_class.assert_called_once()
+    def test_importing_does_not_start_the_server(self):
+        # The bind lives behind __main__; importing must stay inert.
+        with patch('flask.Flask.run') as run:
+            _load_fo_server()
+        run.assert_not_called()

@@ -476,9 +476,11 @@ class TestAssignPresetToLatestVersion:
         versions = ['v1', 'v3', 'v2']  # Unsorted
         assign_preset_to_latest_version('test_model', versions, 'versions')
 
-        # Should update preset to use v3 (latest after sorting)
-        mock_presets_collection.update.assert_called()
-        update_call = mock_presets_collection.update.call_args
+        # Should update preset to use v3 (latest after sorting).
+        # update_one, not update: the latter is gone in pymongo 4 and the
+        # caller swallows the failure, so the bump would silently stop working.
+        mock_presets_collection.update_one.assert_called()
+        update_call = mock_presets_collection.update_one.call_args
         assert 'v3' in str(update_call)
 
     @pytest.mark.unit
@@ -496,7 +498,27 @@ class TestAssignPresetToLatestVersion:
         assign_preset_to_latest_version('test_model', versions, 'versions')
 
         # Should update all presets
-        assert mock_presets_collection.update.call_count == 2
+        assert mock_presets_collection.update_one.call_count == 2
+
+
+class TestAnomalyPresetType:
+    """anomaly is a preset model type like high_accuracy and high_speed."""
+
+    @pytest.mark.unit
+    @patch('worker_scripts.retrieve_models.presets_collection')
+    def test_anomaly_presets_are_bumped(self, mock_presets_collection):
+        """Without 'anomaly' in type_map this raised KeyError into a bare
+        except, so an anomaly preset silently never tracked the latest
+        version."""
+        from worker_scripts.retrieve_models import assign_preset_to_latest_version
+
+        mock_presets_collection.find.return_value = [{'presetId': 1}]
+        assign_preset_to_latest_version('test_anomaly',
+                                        [1787951809790, 1787957450461], 'anomaly')
+
+        mock_presets_collection.find.assert_called_with(
+            {'modelName': 'test_anomaly', 'modelType': 'anomaly'})
+        assert '1787957450461' in str(mock_presets_collection.update_one.call_args)
 
 
 class TestModelTypeMapping:
@@ -608,16 +630,32 @@ class TestZipFileExtraction:
             'exclude_models': {}
         }
 
+        # builtins.open must be patched too: the download writes
+        # <model_folder>/model.zip, and without this the test writes to a real
+        # /models path and fails before it reaches the zipfile handling.
         with patch('requests.get'), \
+             patch('builtins.open', new_callable=mock_open), \
              patch('zipfile.ZipFile') as mock_zipfile:
 
             # Simulate bad zipfile
             mock_zipfile.side_effect = zipfile.BadZipfile('Bad zip')
 
+            # A corrupt download must be skipped, not raised: one bad model
+            # cannot be allowed to abort the whole sync.
             result = retrieve_models(data, 'token123')
 
-            # Should still complete but skip the bad file
-            # The function continues despite bad zipfile
+        # Reaching here at all is the main assertion: BadZipfile is caught, not
+        # propagated, so one corrupt download cannot abort the whole sync.
+        assert mock_zipfile.called, 'the zipfile path was never exercised'
+
+        # Nothing synced, so the documented False is correct here.
+        assert result is False
+
+        # The corrupt archive must be removed, or it is retried forever and
+        # eventually fills the disk.
+        removals = [str(c) for c in mock_os_system.call_args_list if 'rm -rf' in str(c)]
+        assert any('model.zip' in c for c in removals), \
+            'corrupt model.zip was left on disk: %s' % removals
 
 
 class TestDockerIntegration:
@@ -658,8 +696,120 @@ class TestDockerIntegration:
             docker_calls = [str(call) for call in mock_os_system.call_args_list
                            if 'docker' in str(call)]
 
-            # Should exec rm, cp, and restart localprediction
-            assert any('localprediction' in call for call in docker_calls)
-            assert any('docker exec' in call for call in docker_calls)
-            assert any('docker cp' in call for call in docker_calls)
-            assert any('docker restart' in call for call in docker_calls)
+            # localprediction bind-mounts the host models directory, so a sync
+            # must NOT copy into the container - and must NOT rm inside it,
+            # which would delete the host's models through the mount.
+            assert any('docker restart localprediction' in call
+                       for call in docker_calls)
+            assert not [c for c in docker_calls
+                        if 'docker cp' in c and 'localprediction' in c]
+            assert not [c for c in docker_calls
+                        if 'docker exec' in c and 'localprediction' in c]
+
+
+class TestModelTypeIsNeverGuessed:
+    """retrieve_models refuses types it cannot install."""
+
+    @pytest.mark.unit
+    @pytest.mark.parametrize('model_type', ['anomaly', 'waveform', 'something_new'])
+    @patch('worker_scripts.retrieve_models.record_job_error')
+    @patch('worker_scripts.retrieve_models.save_models_versions')
+    @patch('os.system')
+    def test_refuses_a_type_it_cannot_install(self, mock_system, mock_save,
+                                              mock_error, model_type):
+        from worker_scripts.retrieve_models import retrieve_models
+
+        data = {
+            'model_type': model_type,
+            'models': {'m1': {'_id': 'p1', 'name': 'Test', 'models': ['v1']}},
+            'exclude_models': {},
+        }
+
+        assert retrieve_models(data, 'token') is False
+        mock_save.assert_not_called()
+        mock_error.assert_called_once()
+        assert model_type in str(mock_error.call_args)
+
+    @pytest.mark.unit
+    def test_the_bucket_for_each_type_it_does_install(self):
+        from utils import model_types
+
+        assert model_types.bucket_for('high_accuracy') == 'versions'
+        assert model_types.bucket_for('high_speed') == 'high_speed'
+        assert model_types.bucket_for('ocr') == 'ocr'
+        assert model_types.resolve(None) == 'high_accuracy'
+        assert model_types.handled_by_retrieve_models(None) is True
+        assert model_types.handled_by_retrieve_models('anomaly') is False
+        assert model_types.handled_by_retrieve_models('waveform') is False
+
+
+class TestSaveModelsVersionsKeepsOtherTypes:
+    """A sync clears only its own bucket."""
+
+    @pytest.mark.unit
+    @patch('worker_scripts.retrieve_models.presets_collection')
+    @patch('worker_scripts.retrieve_models.models_collection')
+    def test_an_anomaly_sync_keeps_a_detection_model(self, mock_models, mock_presets):
+        from worker_scripts.retrieve_models import save_models_versions
+
+        mock_models.find.return_value = [
+            {'type': 'UniversalPodInspection', 'versions': [3, 2, 1]},
+            {'type': 'test_anomaly', 'anomaly': [1787951809790]},
+        ]
+        mock_presets.find.return_value = []
+
+        save_models_versions([{'type': 'test_anomaly', 'anomaly': [1787957450461]}],
+                             'anomaly')
+
+        deleted = [c[0][0]['type'] for c in mock_models.delete_one.call_args_list]
+        assert 'UniversalPodInspection' not in deleted
+
+    @pytest.mark.unit
+    @patch('worker_scripts.retrieve_models.presets_collection')
+    @patch('worker_scripts.retrieve_models.models_collection')
+    def test_a_model_with_nothing_left_still_goes(self, mock_models, mock_presets):
+        from worker_scripts.retrieve_models import save_models_versions
+
+        mock_models.find.return_value = [
+            {'type': 'gone', 'versions': [], 'high_speed': []},
+            {'type': 'kept', 'versions': [1]},
+        ]
+        mock_presets.find.return_value = []
+
+        save_models_versions([{'type': 'kept', 'anomaly': [9]}], 'anomaly')
+
+        deleted = [c[0][0]['type'] for c in mock_models.delete_one.call_args_list]
+        assert deleted == ['gone']
+
+    @pytest.mark.unit
+    @patch('worker_scripts.retrieve_models.presets_collection')
+    @patch('worker_scripts.retrieve_models.models_collection')
+    def test_a_model_this_sync_is_about_to_fill_is_kept(self, mock_models, mock_presets):
+        from worker_scripts.retrieve_models import save_models_versions
+
+        mock_models.find.return_value = [{'type': 'fresh', 'anomaly': []}]
+        mock_presets.find.return_value = []
+
+        save_models_versions([{'type': 'fresh', 'anomaly': [1787957450461]}], 'anomaly')
+
+        mock_models.delete_one.assert_not_called()
+
+
+class TestWaveformIsAKnownType:
+    """Known type, no worker: refused by name rather than filed as detection."""
+
+    @pytest.mark.unit
+    def test_it_has_a_bucket_and_a_cloud_key(self):
+        from utils import model_types
+
+        assert model_types.is_known('waveform') is True
+        assert model_types.bucket_for('waveform') == 'waveform'
+        assert model_types.CLOUD_KEY['waveform'] == 'waveform'
+
+    @pytest.mark.unit
+    def test_presets_bump_for_every_type(self):
+        from utils import model_types
+
+        for wire, bucket in model_types.DEVICE_BUCKET.items():
+            assert bucket is not None
+            assert model_types.bucket_for(wire) == bucket

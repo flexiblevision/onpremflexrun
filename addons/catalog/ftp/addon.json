@@ -1,0 +1,30 @@
+{
+  "schema": "flexrun.addon/v1",
+  "name": "ftp",
+  "label": "FTP Server",
+  "description": "vsftpd server for image drop and retrieval, with per-line accounts.",
+  "tier": "included",
+  "entitlement": null,
+  "kind": "host_service",
+  "arches": ["x86", "arm"],
+  "hooks": "hooks.py",
+  "service": {
+    "unit": "vsftpd",
+    "setup_script": "setup/ftp_server_setup.sh"
+  },
+  "health": {
+    "type": "systemd",
+    "unit": "vsftpd"
+  },
+  "ui": {
+    "icon": "Storage",
+    "order": 50,
+    "manage": "custom"
+  },
+  "legacy_routes": {
+    "enable": "/enable_ftp",
+    "add_user": "/add_ftp_user",
+    "delete_user": "/delete_ftp_user",
+    "update_port": "/update_ftp_port"
+  }
+}
