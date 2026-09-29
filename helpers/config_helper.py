@@ -3,6 +3,7 @@ import settings
 import os
 import json 
 import subprocess
+import ipaddress
 from pymongo import MongoClient, ASCENDING
 from bson import json_util, ObjectId
 
@@ -36,6 +37,56 @@ def write_interfaces_config(interfaces):
     with open(path, 'w') as filetowrite:
         filetowrite.write(body)
 
+# Where a port's pool starts and ends, counted from the network address. On a
+# /24 this is the .50 to .150 the hardcoded version produced, so existing rigs
+# keep the range they have always had.
+POOL_FIRST_OFFSET = 50
+POOL_LAST_OFFSET  = 150
+
+
+def subnet_block(entry):
+    """One dhcpd subnet block for an interface, or None if its address cannot
+    be read.
+
+    The address is taken as written, rather than assuming 192.168.x.0/24. The
+    previous version read only the third octet and rebuilt the rest from a
+    literal "192.168.", so a port set to 10.0.5.10 was served a pool on
+    192.168.5.0 - a network the port is not on, which hands cameras addresses
+    they cannot be reached at.
+    """
+    raw = str(entry.get('ip') or '').strip()
+    if not raw:
+        return None
+    try:
+        # Stored with the prefix, as "192.168.9.10/24". A bare address is
+        # treated as /24, which is what every rig uses today.
+        iface = ipaddress.ip_interface(raw if '/' in raw else raw + '/24')
+    except ValueError:
+        return None
+
+    net = iface.network
+    # Leave room for the network and broadcast addresses at either end; a
+    # prefix shorter than the offsets would otherwise run past the subnet.
+    usable = int(net.num_addresses) - 2
+    if usable < 2:
+        return None
+
+    first_off = min(POOL_FIRST_OFFSET, usable)
+    last_off  = min(POOL_LAST_OFFSET, usable)
+    if last_off <= first_off:
+        first_off, last_off = 1, usable
+
+    base  = int(net.network_address)
+    first = ipaddress.ip_address(base + first_off)
+    last  = ipaddress.ip_address(base + last_off)
+
+    return (
+        "subnet {} netmask {} {{\n"
+        "  range {} {};\n"
+        "}}\n"
+    ).format(net.network_address, net.netmask, first, last)
+
+
 def setup_port_subnets(interfaces):
     body  = "# dhcpd.conf\n\n"
     body += "option domain-name \"example.org\";\n"
@@ -45,36 +96,73 @@ def setup_port_subnets(interfaces):
     body += "ddns-update-style none;\n"
     body += "authoritative;\n\n"
 
-    for idx, p in enumerate(interfaces):
-        subnet = p['ip'].split(".")[2]
-        body += "subnet 192.168."+ str(subnet) +".0 netmask 255.255.255.0 {\n"
-        body += "  range 192.168.{}.50 192.168.{}.150;\n".format(subnet, subnet)
-        body += "}"
+    for entry in interfaces:
+        block = subnet_block(entry)
+        # A port whose address will not parse is skipped rather than written
+        # as a broken block: one bad entry used to be enough to stop dhcpd
+        # reading the file at all.
+        if block:
+            body += block
 
-    path='/etc/dhcp/dhcpd.conf' 
+    path='/etc/dhcp/dhcpd.conf'
     with open(path, 'w') as filetowrite:
         filetowrite.write(body)
 
 def restart_service():
-    status = subprocess.check_output("systemctl restart isc-dhcp-server.service", shell=True)
-    return status
+    # check_output raises on a non-zero exit, so a service that would not start
+    # became an exception in the middle of applying network settings - by which
+    # point the address had already been changed.
+    return subprocess.run(['systemctl', 'restart', 'isc-dhcp-server.service'],
+                          capture_output=True, text=True).returncode == 0
 
 def stop_service():
-    status = subprocess.check_output("systemctl stop isc-dhcp-server.service", shell=True)
-    return status
+    ok = subprocess.run(['systemctl', 'stop', 'isc-dhcp-server.service'],
+                        capture_output=True, text=True).returncode == 0
+    # A unit that previously failed to start stays "failed" after being
+    # stopped, which reads as a fault on a machine that simply has no wired
+    # port to serve. Clearing it leaves the honest state, "inactive".
+    subprocess.run(['systemctl', 'reset-failed', 'isc-dhcp-server.service'],
+                   capture_output=True, text=True)
+    return ok
+
+def interface_is_up(name):
+    """Whether the kernel reports this port as up - for ethernet, whether a
+    cable is in it. dhcpd refuses to start unless at least one port it is given
+    is up: it exits with "Not configured to listen on any interfaces!", which
+    takes DHCP down for the ports that are connected too."""
+    try:
+        with open('/sys/class/net/{}/operstate'.format(name)) as f:
+            return f.read().strip() == 'up'
+    except OSError:
+        return False
+
 
 def set_dhcp():
     res = interfaces_db.find({'dhcp': True})
     interfaces = json.loads(json_util.dumps(res))
 
-    # /etc/default/isc-dhcp-server
-    add_ports_to_env(interfaces)
-    # /etc/network/interfaces
-    write_interfaces_config(interfaces)
-    # /etc/dhcp/dhcpd.conf
-    setup_port_subnets(interfaces)
+    # The stored setting is left alone: a port keeps "serve DHCP here" while
+    # its cable is out, and serves again when it is plugged back in. Only what
+    # is handed to dhcpd is filtered, because a port that is down cannot be
+    # listened on and its presence stops the whole service starting.
+    serving = [i for i in interfaces if interface_is_up(i.get('iname', ''))]
 
-    if interfaces:
+    skipped = [i.get('iname') for i in interfaces if i not in serving]
+    if skipped:
+        print('dhcp: not serving {} - port(s) down'.format(', '.join(skipped)))
+
+    # /etc/default/isc-dhcp-server
+    add_ports_to_env(serving)
+    # /etc/network/interfaces
+    write_interfaces_config(serving)
+    # /etc/dhcp/dhcpd.conf
+    setup_port_subnets(serving)
+
+    if serving:
         restart_service()
     else:
+        # Stopping is the honest end state. Restarting into a unit that cannot
+        # bind leaves it "failed", which reads as a fault rather than as an
+        # unplugged cable.
+        print('dhcp: no connected ports configured to serve, stopping')
         stop_service()
