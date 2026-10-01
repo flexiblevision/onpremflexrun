@@ -1195,20 +1195,66 @@ class TestDhcpFileGeneration:
 class TestServiceControl:
     @pytest.mark.unit
     def test_restart_invokes_systemctl(self, config_helper):
-        with patch('subprocess.check_output', return_value=b'') as run:
-            config_helper.restart_service()
-        run.assert_called_once_with(
-            'systemctl restart isc-dhcp-server.service', shell=True)
+        with patch('subprocess.run', return_value=MagicMock(returncode=0)) as run:
+            assert config_helper.restart_service() is True
+        run.assert_called_once_with(['systemctl', 'restart', 'isc-dhcp-server.service'],
+                                    capture_output=True, text=True)
 
     @pytest.mark.unit
-    def test_stop_invokes_systemctl(self, config_helper):
-        with patch('subprocess.check_output', return_value=b'') as run:
-            config_helper.stop_service()
-        run.assert_called_once_with(
-            'systemctl stop isc-dhcp-server.service', shell=True)
+    def test_a_failed_restart_is_reported_not_raised(self, config_helper):
+        # Raising here used to abort network settings after the address changed.
+        with patch('subprocess.run', return_value=MagicMock(returncode=1)):
+            assert config_helper.restart_service() is False
+
+    @pytest.mark.unit
+    def test_stop_invokes_systemctl_and_clears_the_failed_state(self, config_helper):
+        with patch('subprocess.run', return_value=MagicMock(returncode=0)) as run:
+            assert config_helper.stop_service() is True
+        assert [c.args[0] for c in run.call_args_list] == [
+            ['systemctl', 'stop', 'isc-dhcp-server.service'],
+            ['systemctl', 'reset-failed', 'isc-dhcp-server.service'],
+        ]
 
 
 class TestSetDhcp:
+    @pytest.fixture(autouse=True)
+    def ports_up(self, config_helper):
+        # Otherwise the result depends on this machine's /sys/class/net.
+        with patch.object(config_helper, 'interface_is_up', return_value=True):
+            yield
+
+    @pytest.mark.unit
+    def test_a_port_that_is_down_is_not_handed_to_dhcpd(self, config_helper):
+        up = {'iname': 'enp1s0', 'ip': '192.168.20.1'}
+        down = {'iname': 'enp2s0', 'ip': '192.168.30.1'}
+        with patch.object(config_helper.interfaces_db, 'find', return_value=[up, down]), \
+             patch.object(config_helper, 'interface_is_up', side_effect=lambda n: n == 'enp1s0'), \
+             patch.object(config_helper, 'add_ports_to_env') as env, \
+             patch.object(config_helper, 'write_interfaces_config'), \
+             patch.object(config_helper, 'setup_port_subnets') as subnets, \
+             patch.object(config_helper, 'restart_service') as restart, \
+             patch.object(config_helper, 'stop_service'):
+            config_helper.set_dhcp()
+
+        env.assert_called_once_with([up])
+        subnets.assert_called_once_with([up])
+        restart.assert_called_once()
+
+    @pytest.mark.unit
+    def test_all_ports_down_stops_rather_than_restarts(self, config_helper):
+        with patch.object(config_helper.interfaces_db, 'find',
+                          return_value=[{'iname': 'enp1s0', 'ip': '192.168.20.1'}]), \
+             patch.object(config_helper, 'interface_is_up', return_value=False), \
+             patch.object(config_helper, 'add_ports_to_env'), \
+             patch.object(config_helper, 'write_interfaces_config'), \
+             patch.object(config_helper, 'setup_port_subnets'), \
+             patch.object(config_helper, 'restart_service') as restart, \
+             patch.object(config_helper, 'stop_service') as stop:
+            config_helper.set_dhcp()
+
+        stop.assert_called_once()
+        restart.assert_not_called()
+
     @pytest.mark.unit
     def test_writes_all_three_files_then_restarts(self, config_helper):
         interfaces = [{'iname': 'enp1s0', 'ip': '192.168.20.1'}]
