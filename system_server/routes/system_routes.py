@@ -50,19 +50,25 @@ VISION_API = 'http://172.17.0.1:5555/api/vision/vision'
 CAPDEV_READY_URL = 'http://172.17.0.1:5000/api/capture/auth/jwks'
 
 
-def _wait_for_cameras(max_wait=120, poll_interval=5):
+def _wait_for_cameras(max_wait=120, poll_interval=2):
     """Poll vision until it reports cameras. True if they turned up.
 
     A single poll can block for its whole timeout - listCameras runs
     synchronously on the first /cameras call - so the time it spent counts
     against the budget. Charging only poll_interval turned this 120s wait into
     24 * 35s of capdev downtime whenever vision was slow to answer.
+
+    Asks before it sleeps, the same shape as _wait_for_capdev. Sleeping first
+    meant the earliest a camera could be reported was one whole interval after
+    vision came up, and capdev stayed down for it. Discovery itself takes about
+    a second; measured on the bench the wait was 12s, of which 10s was this
+    function sleeping. A refused connection while vision is still booting costs
+    nothing, so there is no reason to wait before the first ask.
     """
     import requests
 
     elapsed = 0
     while elapsed < max_wait:
-        time.sleep(poll_interval)
         started = time.monotonic()
         try:
             resp = requests.get(VISION_API + '/cameras', timeout=30)
@@ -74,7 +80,10 @@ def _wait_for_cameras(max_wait=120, poll_interval=5):
                     return True
         except Exception:
             print('waiting for vision... ({}s)'.format(int(elapsed)))
-        elapsed += poll_interval + (time.monotonic() - started)
+        elapsed += time.monotonic() - started
+        if elapsed < max_wait:
+            time.sleep(poll_interval)
+            elapsed += poll_interval
 
     return False
 
@@ -138,8 +147,15 @@ class RestartBackend(Resource):
             except Exception as e:
                 print('releaseAll:', e)
 
+            # stop -t 2, not restart. vision does not act on SIGTERM - its
+            # workers sit in camera grabs - so docker waits out the whole 10s
+            # grace and SIGKILLs it regardless. Measured on the bench, stopping
+            # vision took 10.1s against 4.1s for capdev, which does exit on the
+            # signal. Shortening the grace gives up no graceful shutdown,
+            # because there is not one; it only stops waiting for it.
             print('restarting vision...')
-            os.system("docker restart vision")
+            os.system("docker stop -t 2 vision")
+            os.system("docker start vision")
 
             cameras_ready = _wait_for_cameras()
             if not cameras_ready:
