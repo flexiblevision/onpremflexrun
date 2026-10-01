@@ -196,19 +196,65 @@ class TestMarkAsSynced:
 
     @pytest.mark.unit
     @patch('worker_scripts.job_manager.analytics_coll')
-    def test_mark_as_synced(self, mock_analytics_coll):
-        """Test marking a record as synced (removes it)"""
+    @patch('worker_scripts.job_manager.time_now_ms', return_value=1234567890)
+    def test_mark_as_synced(self, mock_time, mock_analytics_coll):
+        """Test marking a record as synced keeps it on the device"""
         from worker_scripts.job_manager import mark_as_synced
 
         record_id = 'test-record-456'
 
         mark_as_synced(record_id)
 
-        mock_analytics_coll.delete_one.assert_called_once_with({"id": record_id})
+        mock_analytics_coll.update_one.assert_called_once_with(
+            {"id": record_id},
+            {"$set": {"synced": True, "modified": 1234567890}}
+        )
+        mock_analytics_coll.delete_one.assert_not_called()
+
+
+class TestPruneSyncedAnalytics:
+    """Tests for prune_synced_analytics function"""
+
+    @staticmethod
+    def _found(mock_coll, docs):
+        mock_coll.find.return_value.sort.return_value.limit.return_value = docs
+
+    @pytest.mark.unit
+    @patch('worker_scripts.job_manager.analytics_coll')
+    def test_prunes_below_the_50th_newest_by_id(self, mock_analytics_coll):
+        from worker_scripts.job_manager import prune_synced_analytics, DESCENDING
+
+        # Time Machine and audio records have no prediction_end_time; _id
+        # must still give a cutoff.
+        docs = [{'_id': n} for n in range(100, 50, -1)]
+        self._found(mock_analytics_coll, docs)
+
+        prune_synced_analytics()
+
+        mock_analytics_coll.find.return_value.sort.assert_called_once_with('_id', DESCENDING)
+        mock_analytics_coll.delete_many.assert_called_once_with(
+            {"synced": True, "_id": {"$lt": 51}})
+
+    @pytest.mark.unit
+    @patch('worker_scripts.job_manager.analytics_coll')
+    def test_keeps_everything_under_50(self, mock_analytics_coll):
+        from worker_scripts.job_manager import prune_synced_analytics
+
+        self._found(mock_analytics_coll, [{'_id': n} for n in range(49)])
+
+        prune_synced_analytics()
+
+        mock_analytics_coll.delete_many.assert_not_called()
 
 
 class TestCloudCall:
     """Tests for cloud_call function"""
+
+    @pytest.fixture(autouse=True)
+    def no_real_prune(self):
+        # analytics_coll is a live client at import; an unstubbed prune deletes from the real collection.
+        with patch('worker_scripts.job_manager.prune_synced_analytics'):
+            yield
 
     @pytest.mark.unit
     @patch('worker_scripts.job_manager.mark_as_synced')
@@ -266,6 +312,26 @@ class TestCloudCall:
             cloud_call('http://master.local/api', [{'id': 'rec1'}], {})
 
         assert mock_post.call_args[0][0] == 'http://master.local/api'
+
+    @pytest.mark.unit
+    @patch('worker_scripts.job_manager.analytics_coll')
+    @patch('worker_scripts.job_manager.prune_synced_analytics',
+           side_effect=Exception('socket timeout'))
+    @patch('worker_scripts.job_manager.mark_as_synced')
+    @patch('requests.post')
+    @patch('time.sleep', new_callable=thread_aware_sleep_mock)
+    def test_cloud_call_prune_failure_keeps_batch_synced(
+            self, mock_sleep, mock_post, mock_mark_synced, mock_prune, mock_analytics_coll):
+        """A failed prune must not send an accepted batch back for re-upload"""
+        from worker_scripts.job_manager import cloud_call
+
+        mock_post.return_value = MagicMock(status_code=200)
+
+        result = cloud_call('http://test.com/api', [{'id': 'rec1'}], {})
+
+        assert result is True
+        mock_prune.assert_called_once()
+        mock_analytics_coll.update_one.assert_not_called()
 
     @pytest.mark.unit
     @patch('requests.post')
