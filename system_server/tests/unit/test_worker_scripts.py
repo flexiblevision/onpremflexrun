@@ -658,6 +658,90 @@ class TestGetAuthToken:
             with pytest.raises(TypeError):
                 sync_worker.get_auth_token()
 
+    @pytest.mark.unit
+    def test_a_failed_early_refresh_keeps_the_still_working_pair(self, stored_tokens):
+        # Inside the refresh margin but not yet expired
+        with patch.object(sync_worker, 'token_is_valid',
+                          side_effect=lambda token, margin=300: margin == 0), \
+             patch.object(sync_worker, 'refresh_tokens', return_value=False):
+            assert sync_worker.get_auth_token() == \
+                {'access_token': 'access-token', 'id_token': 'id-token'}
+
+
+class TestRefreshMargin:
+    @pytest.mark.unit
+    def test_a_token_about_to_lapse_is_refreshed_early(self):
+        import datetime
+        soon = datetime.datetime.now().timestamp() + 60
+        assert sync_worker.token_is_valid(_jwt_with_exp(soon)) is False
+        assert sync_worker.token_is_valid(_jwt_with_exp(soon), 0) is True
+
+
+class TestCheckAccess:
+    TOKENS = {'id_token': 'id', 'access_token': 'acc'}
+
+    @pytest.fixture(autouse=True)
+    def fresh_state(self):
+        sync_worker.last_access_version = None
+        sync_worker.last_refresh_attempt = 0
+
+    def _version(self, version):
+        response = MagicMock()
+        response.json.return_value = {'version': version}
+        return response
+
+    @pytest.mark.unit
+    def test_a_moved_version_forces_a_refresh(self):
+        with patch.object(sync_worker, 'get_auth_token', return_value=self.TOKENS), \
+             patch.object(sync_worker.s, 'get', return_value=self._version(4)) as get, \
+             patch.object(sync_worker, 'refresh_tokens', return_value=self.TOKENS) as refresh:
+            sync_worker.check_access()
+        refresh.assert_called_once()
+        assert get.call_args[0][0].endswith('/api/capture/system/access_version')
+        assert sync_worker.last_access_version == 4
+
+    @pytest.mark.unit
+    def test_an_unchanged_version_leaves_the_token_alone(self):
+        sync_worker.last_access_version = 4
+        with patch.object(sync_worker, 'get_auth_token', return_value=self.TOKENS), \
+             patch.object(sync_worker.s, 'get', return_value=self._version(4)), \
+             patch.object(sync_worker, 'refresh_tokens') as refresh:
+            sync_worker.check_access()
+        refresh.assert_not_called()
+
+    @pytest.mark.unit
+    def test_a_cloud_without_the_counter_changes_nothing(self):
+        with patch.object(sync_worker, 'get_auth_token', return_value=self.TOKENS), \
+             patch.object(sync_worker.s, 'get', return_value=self._version(None)), \
+             patch.object(sync_worker, 'refresh_tokens') as refresh:
+            sync_worker.check_access()
+        refresh.assert_not_called()
+
+    @pytest.mark.unit
+    def test_a_failing_refresh_is_retried_at_most_once_a_minute(self):
+        with patch.object(sync_worker, 'get_auth_token', return_value=self.TOKENS), \
+             patch.object(sync_worker.s, 'get', return_value=self._version(4)), \
+             patch.object(sync_worker, 'refresh_tokens', return_value=False) as refresh:
+            sync_worker.check_access()
+            sync_worker.check_access()
+        refresh.assert_called_once()
+        assert sync_worker.last_access_version is None
+
+    @pytest.mark.unit
+    def test_a_malformed_stored_token_is_not_raised(self):
+        with patch.object(sync_worker, 'get_auth_token', side_effect=TypeError('bad token')), \
+             patch.object(sync_worker, 'refresh_tokens') as refresh:
+            sync_worker.check_access()
+        refresh.assert_not_called()
+
+    @pytest.mark.unit
+    def test_an_unreachable_backend_is_reported_not_raised(self):
+        with patch.object(sync_worker, 'get_auth_token', return_value=self.TOKENS), \
+             patch.object(sync_worker.s, 'get', side_effect=ConnectionError('x')), \
+             patch.object(sync_worker, 'refresh_tokens') as refresh:
+            sync_worker.check_access()
+        refresh.assert_not_called()
+
 
 class TestCanSync:
     @pytest.mark.unit
