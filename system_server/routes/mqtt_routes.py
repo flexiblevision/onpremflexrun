@@ -34,6 +34,9 @@ utils_db = client["fvonprem"]["utils"]
 # VerneMQ container name
 VERNEMQ_CONTAINER = "vernemq"
 
+# Written by build.sh --allow-placeholder / shown in the README.
+PLACEHOLDER_PASSWORDS = {"your-bridge-secret", "your-bridge-password"}
+
 
 def get_access_token():
     """Get the current access token from MongoDB"""
@@ -204,6 +207,19 @@ def _is_local_bridge() -> bool:
         return False
 
 
+def _has_placeholder_credentials() -> bool:
+    """True while the cloud bridge still carries build.sh's placeholder password."""
+    try:
+        with open("/root/flex-run/setup/mqtt/vernemq-local.conf") as f:
+            for line in f:
+                m = re.match(r'\s*vmq_bridge\.ssl\.gke\.password\s*=\s*(\S*)', line)
+                if m:
+                    return m.group(1) in PLACEHOLDER_PASSWORDS
+    except Exception:
+        pass
+    return False
+
+
 def check_tcp_connection_to_cloud() -> bool:
     """Check for an established TCP connection to the configured bridge endpoint."""
     port = get_bridge_port()
@@ -250,6 +266,11 @@ def is_bridge_healthy() -> tuple:
         # treat 'configured' as healthy and skip the probe/auto-refresh.
         if _is_local_bridge():
             return True, "Bridge configured (local-cloud tcp)"
+
+        # The cloud broker holds the socket open even for a bad password, so
+        # the TCP probe alone would call this healthy and never inject the token.
+        if _has_placeholder_credentials():
+            return False, "Bridge using placeholder credentials"
 
         # Check for actual TCP connection to the bridge endpoint
         has_tcp_conn = check_tcp_connection_to_cloud()
@@ -322,6 +343,10 @@ def _health_monitor_loop():
 
     consecutive_failures = 0
     max_failures_before_refresh = 2  # Refresh after 2 consecutive failures
+
+    if _has_placeholder_credentials():
+        log.warning("[Bridge Health] Placeholder bridge credentials, injecting token")
+        _do_bridge_refresh()
 
     while _health_monitor_running:
         try:

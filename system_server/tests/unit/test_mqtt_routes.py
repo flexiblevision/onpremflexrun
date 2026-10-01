@@ -33,6 +33,16 @@ vmq_bridge.tcp.gke.topic.1 = devices/+/system/update_software in 0
 """
 
 
+_real_has_placeholder_credentials = mq._has_placeholder_credentials
+
+
+@pytest.fixture(autouse=True)
+def no_placeholder_credentials():
+    # Otherwise a run on a device reads the live config and may restart VerneMQ.
+    with patch.object(mq, '_has_placeholder_credentials', return_value=False):
+        yield
+
+
 @pytest.fixture(autouse=True)
 def reset_monitor_state():
     """The module keeps monitor and metrics state in globals."""
@@ -324,6 +334,31 @@ class TestIsLocalBridge:
             assert mq._is_local_bridge() is False
 
 
+class TestHasPlaceholderCredentials:
+    @pytest.mark.unit
+    @pytest.mark.parametrize('password', ['your-bridge-secret', 'your-bridge-password'])
+    def test_placeholder_password_is_detected(self, password):
+        config = SSL_CONFIG.replace('old-token', password)
+        with patch('builtins.open', mock_open(read_data=config)):
+            assert _real_has_placeholder_credentials() is True
+
+    @pytest.mark.unit
+    def test_a_real_token_is_not_a_placeholder(self):
+        with patch('builtins.open', mock_open(read_data=SSL_CONFIG)):
+            assert _real_has_placeholder_credentials() is False
+
+    @pytest.mark.unit
+    def test_local_tcp_bridge_is_not_a_placeholder(self):
+        config = TCP_CONFIG + 'vmq_bridge.tcp.gke.password = your-bridge-secret\n'
+        with patch('builtins.open', mock_open(read_data=config)):
+            assert _real_has_placeholder_credentials() is False
+
+    @pytest.mark.unit
+    def test_unreadable_config_is_not_a_placeholder(self):
+        with patch('builtins.open', side_effect=PermissionError):
+            assert _real_has_placeholder_credentials() is False
+
+
 class TestCheckTcpConnectionToCloud:
     @pytest.mark.unit
     def test_established_beam_connection_on_the_bridge_port(self):
@@ -409,6 +444,17 @@ class TestIsBridgeHealthy:
         assert healthy is True
         assert reason == 'Bridge configured (local-cloud tcp)'
         probe.assert_not_called()
+
+    @pytest.mark.unit
+    def test_placeholder_credentials_are_unhealthy_despite_a_connection(self):
+        with patch.object(mq, 'get_bridge_status', return_value={'success': True, 'status': 'gke'}), \
+             patch.object(mq, '_is_local_bridge', return_value=False), \
+             patch.object(mq, '_has_placeholder_credentials', return_value=True), \
+             patch.object(mq, 'check_tcp_connection_to_cloud', return_value=True):
+            healthy, reason = mq.is_bridge_healthy()
+
+        assert healthy is False
+        assert reason == 'Bridge using placeholder credentials'
 
     @pytest.mark.unit
     def test_no_tcp_connection_is_unhealthy(self):
@@ -578,6 +624,18 @@ class TestHealthMonitorLoop:
     @pytest.mark.unit
     def test_a_healthy_bridge_is_never_refreshed(self):
         _, refresh = self._run_loop(lambda: (True, 'ok'))
+        refresh.assert_not_called()
+
+    @pytest.mark.unit
+    def test_placeholder_credentials_are_replaced_on_start(self):
+        # One healthy check: any refresh must have come from the startup path.
+        with patch.object(mq, '_has_placeholder_credentials', return_value=True):
+            _, refresh = self._run_loop(lambda: (True, 'ok'), checks=1)
+        refresh.assert_called_once()
+
+    @pytest.mark.unit
+    def test_real_credentials_are_not_refreshed_on_start(self):
+        _, refresh = self._run_loop(lambda: (True, 'ok'), checks=1)
         refresh.assert_not_called()
 
     @pytest.mark.unit
