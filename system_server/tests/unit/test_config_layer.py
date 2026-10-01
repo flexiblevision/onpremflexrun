@@ -79,7 +79,7 @@ class TestGenerateEnvironmentConfig:
         assert config['auth0_domain'] == 'auth.flexiblevision.com'
         assert config['auth_alg'] == 'RS256'
         assert config['use_aws'] is False
-        assert config['use_mqtt'] is False
+        assert config['use_mqtt'] is True
 
     @pytest.mark.unit
     def test_the_local_profile_points_at_localhost(self, home):

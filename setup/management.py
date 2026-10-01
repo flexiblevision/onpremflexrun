@@ -17,7 +17,7 @@ CLOUD = {
     "system_user": "visioncell",
     "jwt_secret_key": "123",
     "auth_alg": "RS256",
-    "use_mqtt": False,
+    "use_mqtt": True,
     "fire_operator": {"db_name": "pod-inspection", "document": "", "trigger_dest": "http://172.17.0.1:1880/trigger"}
 }
 
@@ -36,7 +36,7 @@ LOCAL = {
     "system_user": "visioncell",
     "auth_alg": "HS256",
     "jwt_secret_key": "123",
-    "use_mqtt": False
+    "use_mqtt": True
 }
 
 # Which cloud a device talks to, and which release channel it follows.
