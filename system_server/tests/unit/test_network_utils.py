@@ -216,6 +216,15 @@ class TestStoreNetplanSettings:
         mock_db.update_one.assert_called_once()
 
     @pytest.mark.unit
+    @patch('utils.network_utils.interfaces_db')
+    def test_store_netplan_settings_defaults_dhcp_on(self, mock_db):
+        from utils.network_utils import store_netplan_settings
+
+        store_netplan_settings({'lanPort': 'enp0s31f6', 'ip': '192.168.1.100'})
+
+        assert mock_db.update_one.call_args[0][1]['$set']['dhcp'] is True
+
+    @pytest.mark.unit
     @patch('pymongo.MongoClient')
     def test_store_netplan_settings_invalid_ip(self, mock_mongo):
         """Test storing netplan settings with invalid IP"""

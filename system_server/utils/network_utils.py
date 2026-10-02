@@ -101,7 +101,7 @@ def build_set_netplan():
 
 def store_netplan_settings(i_config):
     try:
-        iname, ip, dhcp = i_config['lanPort'], i_config['ip'], i_config['dhcp']
+        iname, ip, dhcp = i_config['lanPort'], i_config['ip'], i_config.get('dhcp', True)
 
         ips = []
         if is_valid_ip(ip):
@@ -152,10 +152,12 @@ def get_lan_ips():
         lanIps['ip'] = 'not assigned'
         lanIps['port'] = eth
         lanIps['name'] = lan_port
-        lanIps['dhcp'] = False
         interface = subprocess.Popen(['ifconfig', eth], stdout=subprocess.PIPE).communicate()[0].decode('utf-8')
         i_entry = interfaces_db.find_one({'iname': eth})
-        if i_entry: lanIps['dhcp'] = i_entry['dhcp']
+        # `dhcp` is the setting, on until the operator turns it off. dhcpd only
+        # serves ports with a stored entry, so `dhcp_serving` is what is real.
+        lanIps['dhcp'] = i_entry.get('dhcp', True) if i_entry else True
+        lanIps['dhcp_serving'] = bool(i_entry and i_entry.get('dhcp', True))
 
         ip6 = None
         ip = 'LAN IP not assigned'
@@ -167,7 +169,7 @@ def get_lan_ips():
             if idx > 2:
                 if not i_entry:
                     ip = '192.168.{}.10'.format(5+idx)
-                    data = {'ip': ip, 'lanPort': eth, 'dhcp': False}
+                    data = {'ip': ip, 'lanPort': eth, 'dhcp': True}
                     if data['ip'] != '' and is_valid_ip(data['ip']):
                         set_ips(data)
                         os.system('sudo ifconfig ' + eth + ' ' + data['ip'] + ' netmask 255.255.255.0')

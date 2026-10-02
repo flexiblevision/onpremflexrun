@@ -196,16 +196,33 @@ class TestGetLanIps:
              patch.object(nu.interfaces_db, 'find_one',
                           return_value={'iname': 'enp1s0', 'dhcp': True}), \
              patch('os.system'):
-            assert nu.get_lan_ips()[0]['dhcp'] is True
+            lan = nu.get_lan_ips()[0]
+        assert lan['dhcp'] is True
+        assert lan['dhcp_serving'] is True
 
     @pytest.mark.unit
-    def test_dhcp_defaults_to_false_for_an_unknown_port(self):
+    def test_a_port_with_dhcp_turned_off_is_not_serving(self):
+        output = 'inet 192.168.20.1  netmask 255.255.255.0\n'
+        with patch.object(nu, 'get_eth_port_names', return_value=['enp1s0']), \
+             patch('subprocess.Popen', return_value=self._ifconfig(output)), \
+             patch.object(nu.interfaces_db, 'find_one',
+                          return_value={'iname': 'enp1s0', 'dhcp': False}), \
+             patch('os.system'):
+            lan = nu.get_lan_ips()[0]
+        assert lan['dhcp'] is False
+        assert lan['dhcp_serving'] is False
+
+    @pytest.mark.unit
+    def test_dhcp_defaults_to_on_for_an_unknown_port_but_is_not_yet_serving(self):
+        # Nothing is handed to dhcpd until the port has a stored entry.
         with patch.object(nu, 'get_eth_port_names', return_value=['enp1s0']), \
              patch('subprocess.Popen',
                    return_value=self._ifconfig('inet 10.0.0.1  x\n')), \
              patch.object(nu.interfaces_db, 'find_one', return_value=None), \
              patch('os.system'):
-            assert nu.get_lan_ips()[0]['dhcp'] is False
+            lan = nu.get_lan_ips()[0]
+        assert lan['dhcp'] is True
+        assert lan['dhcp_serving'] is False
 
     @pytest.mark.unit
     def test_an_unconfigured_port_reports_no_address(self):
@@ -242,7 +259,7 @@ class TestGetLanIps:
 
         assert lans[2]['ip'] == '192.168.8.10'
         set_ips.assert_called_once_with(
-            {'ip': '192.168.8.10', 'lanPort': 'enp3s0', 'dhcp': False})
+            {'ip': '192.168.8.10', 'lanPort': 'enp3s0', 'dhcp': True})
         assert 'sudo ifconfig enp3s0 192.168.8.10' in system.call_args[0][0]
 
     @pytest.mark.unit
