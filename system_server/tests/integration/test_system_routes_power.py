@@ -27,7 +27,7 @@ def client():
 
 @pytest.fixture
 def no_sleep():
-    """RestartBackend polls on a 5s interval; tests must not actually wait."""
+    """RestartBackend polls on a 2s interval; tests must not actually wait."""
     with patch('time.sleep', new=thread_aware_sleep_mock()) as sleep:
         yield sleep
 
@@ -137,7 +137,8 @@ class TestRestartBackend:
         assert response.status_code == 200
         assert system.call_args_list == [
             call('docker stop capdev'),
-            call('docker restart vision'),
+            call('docker stop -t 2 vision'),
+            call('docker start vision'),
             call('docker start capdev'),
         ]
         assert response.get_json() == {'cameras_ready': True, 'capdev_ready': True}
@@ -173,9 +174,9 @@ class TestRestartBackend:
                    side_effect=_routed_get([_resp(200), _resp(200), found])):
             client.get('/refresh_backend')
 
-        # Three /cameras polls, then it stops rather than burning the full
-        # 120s budget.
-        assert no_sleep.call_count == 3
+        # Three /cameras polls with a sleep between each, then it stops rather
+        # than burning the full 120s budget.
+        assert no_sleep.call_count == 2
 
     @pytest.mark.integration
     def test_gives_up_after_the_timeout_and_starts_capdev_anyway(self, client, no_sleep):
@@ -184,16 +185,16 @@ class TestRestartBackend:
             response = client.get('/refresh_backend')
 
         assert response.status_code == 200
-        # 120s budget on a 5s interval.
-        assert no_sleep.call_count == 24
+        # 120s budget on a 2s interval.
+        assert no_sleep.call_count == 60
         assert system.call_args_list[-1] == call('docker start capdev')
         assert response.get_json()['cameras_ready'] is False
 
     @pytest.mark.integration
     def test_a_slow_poll_is_charged_against_the_budget(self, client, no_sleep):
         # listCameras runs synchronously on the first /cameras call, so a poll
-        # can block for its full 30s timeout. Charging only the 5s interval
-        # made the 120s budget 24 * 35s of capdev downtime instead.
+        # can block for its full 30s timeout. Charging only the interval made
+        # the 120s budget many times that in capdev downtime instead.
         clock = itertools.count(0, 30)
 
         with patch('os.system', return_value=0), \
@@ -201,8 +202,9 @@ class TestRestartBackend:
              patch('requests.get', side_effect=_routed_get(_resp(200))):
             client.get('/refresh_backend')
 
-        # 35s consumed per poll, so four of them exhaust the budget.
-        assert no_sleep.call_count == 4
+        # 32s per poll and interval, so the fourth poll exhausts the budget and
+        # is not followed by a sleep.
+        assert no_sleep.call_count == 3
 
     @pytest.mark.integration
     def test_unreachable_vision_does_not_abort_the_restart(self, client, no_sleep):
@@ -221,7 +223,7 @@ class TestRestartBackend:
              patch('requests.get', side_effect=_routed_get(_resp(503))):
             client.get('/refresh_backend')
 
-        assert no_sleep.call_count == 24
+        assert no_sleep.call_count == 60
 
     @pytest.mark.integration
     def test_a_failed_start_is_retried(self, client, no_sleep):
@@ -251,7 +253,7 @@ class TestRestartBackend:
     @pytest.mark.integration
     def test_capdev_is_started_even_when_the_vision_phase_blows_up(self, client, no_sleep):
         def system(cmd):
-            if cmd == 'docker restart vision':
+            if cmd == 'docker stop -t 2 vision':
                 raise RuntimeError('docker daemon gone')
             return 0
 
