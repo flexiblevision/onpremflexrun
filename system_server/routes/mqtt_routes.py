@@ -7,6 +7,7 @@ Includes health monitoring to auto-reconnect if bridge disconnects.
 """
 
 import os
+import re
 import subprocess
 import logging
 import threading
@@ -32,6 +33,9 @@ utils_db = client["fvonprem"]["utils"]
 
 # VerneMQ container name
 VERNEMQ_CONTAINER = "vernemq"
+
+# Written by build.sh --allow-placeholder / shown in the README.
+PLACEHOLDER_PASSWORDS = {"your-bridge-secret", "your-bridge-password"}
 
 
 def get_access_token():
@@ -76,19 +80,23 @@ def update_bridge_config(token: str, device_id: str = None) -> dict:
         with open(config_path, 'r') as f:
             config = f.read()
 
-        # Update the password line
-        import re
+        # Local-cloud (tcp bridge) trusts the backend- client_id with no token,
+        # so there's nothing to inject and we must not rewrite the client_id.
+        if 'vmq_bridge.tcp.' in config:
+            return {"success": True, "skipped": "local-cloud tcp bridge (no token needed)"}
+
+        # Update the password line (transport is ssl for cloud, tcp for local-cloud)
         new_config = re.sub(
-            r'vmq_bridge\.ssl\.gke\.password\s*=\s*.*',
-            f'vmq_bridge.ssl.gke.password = {token}',
+            r'(vmq_bridge\.(?:ssl|tcp)\.gke\.password)\s*=\s*.*',
+            lambda m: f'{m.group(1)} = {token}',
             config
         )
 
         # Optionally update client_id to include device_id
         if device_id:
             new_config = re.sub(
-                r'vmq_bridge\.ssl\.gke\.client_id\s*=\s*.*',
-                f'vmq_bridge.ssl.gke.client_id = bridge-{device_id}',
+                r'(vmq_bridge\.(?:ssl|tcp)\.gke\.client_id)\s*=\s*.*',
+                lambda m: f'{m.group(1)} = bridge-{device_id}',
                 new_config
             )
 
@@ -176,10 +184,46 @@ def get_bridge_metrics() -> dict:
         return {"success": False, "error": str(e)}
 
 
-def check_tcp_connection_to_cloud() -> bool:
-    """Check if there's an established TCP connection to cloud VerneMQ (port 443)"""
+def get_bridge_port() -> str:
+    """Port of the configured bridge endpoint (443 cloud / 31883 local-cloud)."""
     try:
-        # Check for TCP connections from within the vernemq container
+        config_path = "/root/flex-run/setup/mqtt/vernemq-local.conf"
+        with open(config_path) as f:
+            for line in f:
+                m = re.match(r'\s*vmq_bridge\.(?:ssl|tcp)\.gke\s*=\s*\S+:(\d+)', line)
+                if m:
+                    return m.group(1)
+    except Exception as e:
+        log.warning(f"Failed to read bridge port: {e}")
+    return "443"
+
+
+def _is_local_bridge() -> bool:
+    """True for a local-cloud tcp bridge (no token to refresh, must not restart)."""
+    try:
+        with open("/root/flex-run/setup/mqtt/vernemq-local.conf") as f:
+            return 'vmq_bridge.tcp.' in f.read()
+    except Exception:
+        return False
+
+
+def _has_placeholder_credentials() -> bool:
+    """True while the cloud bridge still carries build.sh's placeholder password."""
+    try:
+        with open("/root/flex-run/setup/mqtt/vernemq-local.conf") as f:
+            for line in f:
+                m = re.match(r'\s*vmq_bridge\.ssl\.gke\.password\s*=\s*(\S*)', line)
+                if m:
+                    return m.group(1) in PLACEHOLDER_PASSWORDS
+    except Exception:
+        pass
+    return False
+
+
+def check_tcp_connection_to_cloud() -> bool:
+    """Check for an established TCP connection to the configured bridge endpoint."""
+    port = get_bridge_port()
+    try:
         result = subprocess.run(
             ["docker", "exec", VERNEMQ_CONTAINER, "netstat", "-tnp"],
             capture_output=True,
@@ -187,9 +231,8 @@ def check_tcp_connection_to_cloud() -> bool:
             timeout=10
         )
         if result.returncode == 0:
-            # Look for ESTABLISHED connections to port 443 from beam.smp (VerneMQ)
             for line in result.stdout.split('\n'):
-                if ':443' in line and 'ESTABLISHED' in line and 'beam' in line:
+                if f':{port}' in line and 'ESTABLISHED' in line and 'beam' in line:
                     return True
         return False
     except Exception as e:
@@ -218,10 +261,21 @@ def is_bridge_healthy() -> tuple:
         if 'gke' not in status_output.lower():
             return False, "Bridge 'gke' not configured"
 
-        # Check for actual TCP connection to cloud VerneMQ
+        # Local-cloud tcp bridge: the netstat probe is unreliable in this image
+        # (no netstat binary) and restarting a healthy bridge causes churn, so
+        # treat 'configured' as healthy and skip the probe/auto-refresh.
+        if _is_local_bridge():
+            return True, "Bridge configured (local-cloud tcp)"
+
+        # The cloud broker holds the socket open even for a bad password, so
+        # the TCP probe alone would call this healthy and never inject the token.
+        if _has_placeholder_credentials():
+            return False, "Bridge using placeholder credentials"
+
+        # Check for actual TCP connection to the bridge endpoint
         has_tcp_conn = check_tcp_connection_to_cloud()
         if not has_tcp_conn:
-            return False, "No TCP connection to cloud VerneMQ (port 443)"
+            return False, f"No TCP connection to bridge endpoint (port {get_bridge_port()})"
 
         # Secondary check: monitor message flow for additional health info
         metrics_result = get_bridge_metrics()
@@ -289,6 +343,10 @@ def _health_monitor_loop():
 
     consecutive_failures = 0
     max_failures_before_refresh = 2  # Refresh after 2 consecutive failures
+
+    if _has_placeholder_credentials():
+        log.warning("[Bridge Health] Placeholder bridge credentials, injecting token")
+        _do_bridge_refresh()
 
     while _health_monitor_running:
         try:

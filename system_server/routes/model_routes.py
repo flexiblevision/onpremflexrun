@@ -9,11 +9,14 @@ import auth
 from redis import Redis
 from rq import Queue, Retry
 from worker_scripts.retrieve_models import retrieve_models
+from worker_scripts.retrieve_anomaly_models import retrieve_anomaly_models
+from worker_scripts.retrieve_waveform_models import retrieve_waveform_models
 from worker_scripts.retrieve_programs import retrieve_programs
 from worker_scripts.retrieve_masks import retrieve_masks
 from worker_scripts.model_upload_worker import upload_model
 from worker_scripts.job_manager import insert_job
 from utils.device_utils import base_path
+from utils import model_types
 
 redis_con = Redis('localhost', 6379, password=None)
 job_queue = Queue('default', connection=redis_con)
@@ -22,7 +25,15 @@ BASE_PATH_TO_MODELS = base_path()+'models/'
 BASE_PATH_TO_LITE_MODELS = base_path()+'lite_models/'
 
 for p in [BASE_PATH_TO_MODELS, BASE_PATH_TO_LITE_MODELS]:
-    if not os.path.exists(p): os.makedirs(p)
+    # Best effort at import time. On a device this runs as root and succeeds;
+    # anywhere unprivileged (CI, a dev checkout) a raised PermissionError here
+    # makes the entire routes package unimportable, which is a worse failure
+    # than a missing directory the handlers can report on. exist_ok also drops
+    # the exists-then-makedirs race.
+    try:
+        os.makedirs(p, exist_ok=True)
+    except OSError as e:
+        print('WARNING: could not create {}: {}'.format(p, e))
 
 class CategoryIndex(Resource):
     def get(self, model, version):
@@ -54,6 +65,36 @@ class DownloadModels(Resource):
     def post(self):
         data = request.json
         access_token = request.headers.get('Access-Token')
+        model_type = model_types.resolve(data.get('model_type'))
+
+        # Never fall through to retrieve_models, which would file it as detection.
+        if not model_types.is_known(model_type):
+            return {'error': 'unknown model_type: {}'.format(model_type)}, 400
+
+        # A .fvmdl is one file delivered through the anomaly addon's bind mount,
+        # so it shares none of retrieve_models' zip/saved_model/docker cp work.
+        # Masks and programs are keyed to detection projects and do not apply.
+        if model_type == model_types.ANOMALY:
+            j_anomaly = job_queue.enqueue(retrieve_anomaly_models, data, access_token,
+                                    job_timeout=1800,
+                                    result_ttl=3600,
+                                    retry=Retry(max=5, interval=60),
+                                )
+            if j_anomaly: insert_job(j_anomaly.id, 'Downloading anomaly models')
+            return True
+
+        # A zip unpacked into the audio addon's mount, then bound to every device
+        # on the project. Shares none of retrieve_models' saved_model/docker cp
+        # work, and never restarts the container - detection sessions are
+        # stateful and would die with it.
+        if model_type == model_types.WAVEFORM:
+            j_waveform = job_queue.enqueue(retrieve_waveform_models, data, access_token,
+                                    job_timeout=1800,
+                                    result_ttl=3600,
+                                    retry=Retry(max=5, interval=60),
+                                )
+            if j_waveform: insert_job(j_waveform.id, 'Downloading waveform models')
+            return True
 
         j_models = job_queue.enqueue(retrieve_models, data, access_token,
                                 job_timeout=1800,

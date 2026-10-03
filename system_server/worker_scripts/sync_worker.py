@@ -62,12 +62,15 @@ def decode_base64(data, altchars='+/'):
         data += '='* (4 - missing_padding)
     return base64.b64decode(data, altchars).decode('utf-8')
 
-def token_is_valid(token):
+# Refreshed this long before expiry, so no call goes out on a token about to lapse
+REFRESH_MARGIN = 300
+
+def token_is_valid(token, margin=REFRESH_MARGIN):
     payload = token.split('.')[1]
     data = json.loads(decode_base64(payload))
     time_now = datetime.datetime.now().timestamp()
     token_expiration = data["exp"]
-    if token_expiration < time_now:
+    if token_expiration - margin < time_now:
         print('TOKEN EXPIRED -------------------', datetime.datetime.now())
         return False
     else:
@@ -84,6 +87,9 @@ def get_auth_token():
     else:
         print('REFRESHING TOKENS ')
         tokens = refresh_tokens()
+        if not tokens and token_is_valid(id_token, 0) and token_is_valid(access_token, 0):
+            # Refreshed early and failed; the old pair still works until it lapses
+            return {'access_token': access_token, 'id_token': id_token}
         return tokens
 
     return None
@@ -132,14 +138,59 @@ def sync_device():
         except:
             print('Failed to sync')
             time.sleep(5)
-        
-time.sleep(120)
 
-while True:
-    time.sleep(1)
-    if use_aws:
-        get_auth_token()
-        aws_client.validate_expiry()
 
-    time.sleep(10)
-    sync_device()
+last_access_version = None
+last_refresh_attempt = 0
+# A refresh that keeps failing (revoked refresh token) must not hit Auth0 every pass
+REFRESH_RETRY_SECONDS = 60
+
+def check_access():
+    """Refresh the token as soon as the cloud says this device's access changed.
+    Grants are read live, but the token's claims (org, MQTT ACL) and the cloud's
+    session for it are not; a new token brings all of it, and storing it re-pulls
+    projects and the MQTT bridge. Runs whether or not sync is enabled."""
+    global last_access_version, last_refresh_attempt
+    url = HOST+':'+PORT+'/api/capture/system/access_version'
+    try:
+        # Raises on a malformed stored token, which must not take down main()
+        tokens = get_auth_token()
+        if not tokens:
+            return
+        res = s.get(url, headers={'Authorization': 'Bearer '+tokens['id_token']}, timeout=15)
+        version = res.json().get('version')
+    except Exception:
+        return
+    if version is None or version == last_access_version:
+        return
+    if time.time() - last_refresh_attempt < REFRESH_RETRY_SECONDS:
+        return
+    last_refresh_attempt = time.time()
+    # The first reading after a start counts as a change: the token may predate shares
+    if refresh_tokens():
+        print('ACCESS CHANGED - TOKEN REFRESHED ------', datetime.datetime.now())
+        last_access_version = version
+
+
+# Long enough for the backend container to finish coming up; syncing before it
+# is listening just burns a cycle and logs a failure.
+STARTUP_DELAY = 120
+LOOP_DELAY = 10
+
+
+def main():
+    time.sleep(STARTUP_DELAY)
+
+    while True:
+        time.sleep(1)
+        if use_aws:
+            get_auth_token()
+            aws_client.validate_expiry()
+
+        time.sleep(LOOP_DELAY)
+        check_access()
+        sync_device()
+
+
+if __name__ == '__main__':
+    main()

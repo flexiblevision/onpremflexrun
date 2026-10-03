@@ -21,6 +21,8 @@ def is_arm_device():
 settings_path = os.environ['HOME']+'/flex-run'
 sys.path.append(settings_path)
 import settings
+from cloud_env import get_cloud_domain
+from utils import model_types
 
 client             = MongoClient("172.17.0.1")
 job_collection     = client["fvonprem"]["jobs"]
@@ -34,13 +36,21 @@ def update_job_progress(progress):
     if job:
         job_collection.update_one({'_id': job.id}, {'$set': {'progress': progress}})
 
+def record_job_error(message):
+    """Surface a failure in the job record for the console."""
+    print(message)
+    job = get_current_job()
+    if job:
+        job_collection.update_one({'_id': job.id},
+                                  {'$set': {'error': str(message)[:500]}})
+
 def base_path():
     xavier_ssd = '/xavier_ssd/'
     return xavier_ssd if os.path.exists(xavier_ssd) else '/'
 
 BASE_PATH_TO_MODELS = base_path()+'models/'
 BASE_PATH_TO_LITE_MODELS = base_path()+'lite_models/'
-LITE_MODEL_TYPES    = ['high_speed']
+LITE_MODEL_TYPES    = model_types.LITE_MODEL_TYPES
 
 def create_config_file(data):
     with open (BASE_PATH_TO_MODELS+'model.config', 'a') as f:
@@ -56,7 +66,7 @@ def create_config_file(data):
 
 def download_by_link(token, project_id, version, destination):
     # get link 
-    path = CLOUD_DOMAIN+'/api/capture/models/download_link/'+str(project_id)+'/'+str(version)
+    path = get_cloud_domain(CLOUD_DOMAIN)+'/api/capture/models/download_link/'+str(project_id)+'/'+str(version)
     headers = {'Authorization': 'Bearer '+token}
     res  = requests.get(path, headers=headers)
     
@@ -80,12 +90,17 @@ def download_by_link(token, project_id, version, destination):
 def retrieve_models(data, token):
     BASE_PATH_TO_MODELS = base_path()+'models/'
     BASE_PATH_TO_LITE_MODELS = base_path()+'lite_models/'
-    LITE_MODEL_TYPES    = ['high_speed']
+    LITE_MODEL_TYPES    = model_types.LITE_MODEL_TYPES
     OCR_MODEL = ""
 
+    # A type this worker cannot install is a routing bug, not a model to guess at.
+    requested = model_types.resolve(data.get('model_type'))
+    if not model_types.handled_by_retrieve_models(requested):
+        record_job_error('retrieve_models cannot install model_type {!r} - '
+                         'it belongs to another worker'.format(requested))
+        return False
 
-    model_type = 'versions' if 'model_type' not in data or data['model_type'] != 'high_speed' else data['model_type']
-    if 'model_type' in data and data['model_type'] == 'ocr': model_type = 'ocr'
+    model_type = model_types.bucket_for(requested)
 
     if model_type == 'ocr':
         BASE_PATH_TO_MODELS = '/tmp/'
@@ -143,7 +158,7 @@ def retrieve_models(data, token):
                     OCR_MODEL = model_folder
                     download_by_link(token, str(project_id), str(version), f"{model_folder}/model.zip")
                 else:
-                    path = CLOUD_DOMAIN+'/api/capture/models/download/'+str(project_id)+'/'+str(version)
+                    path = get_cloud_domain(CLOUD_DOMAIN)+'/api/capture/models/download/'+str(project_id)+'/'+str(version)
                     headers = {'accept': 'application/json', 'Authorization': 'Bearer '+token}
                     r = requests.get(path, headers=headers, stream=True)
                     cont_length = int(r.headers.get('Content-length', 0))
@@ -202,14 +217,10 @@ def retrieve_models(data, token):
             os.system(f"rm -rf {BASE_PATH_TO_MODELS}ocrmodel")
             os.system("docker restart ocr")
         elif model_type in LITE_MODEL_TYPES or is_arm_device():
-            # Lite models and ARM high_accuracy models use predictlite
-            os.system("docker exec predictlite rm -rf /data/lite_models")
-            print('pushing models into predictlite server: ', BASE_PATH_TO_MODELS)
-            os.system("docker cp "+BASE_PATH_TO_MODELS+" predictlite:/data/")
+            print('models synced for predictlite: ', BASE_PATH_TO_MODELS)
+            os.system("docker restart predictlite")
         else:
-            os.system("docker exec localprediction rm -rf /models")
-            print('pushing new models to localprediction')
-            os.system("docker cp "+BASE_PATH_TO_MODELS+" localprediction:/")
+            print('models synced for localprediction: ', BASE_PATH_TO_MODELS)
             os.system("docker restart localprediction")
         return True
     else:
@@ -217,25 +228,22 @@ def retrieve_models(data, token):
 
 
 def save_models_versions(models_versions, model_type):
-    # models_collection.drop()
-    # models_collection.insert_many(models_versions)
-    db_models = models_collection.find()
+    # A sync is authoritative for its own type only.
+    models_versions = list(models_versions)
+    incoming = {mv['type']: mv[model_type] for mv in models_versions}
+    other_buckets = [b for b in model_types.DEVICE_BUCKET.values() if b != model_type]
 
     # loop over models and set model type(model name) lists to empty
-    for model in db_models:
-        model_list = {}
-        model_list[model_type] = []
-        models_collection.update_one({'type': model['type']}, {'$set': model_list}, True)
+    for model in models_collection.find():
+        name = model['type']
+        models_collection.update_one({'type': name}, {'$set': {model_type: []}}, True)
 
-        # if versions are empty then remove model
-        is_empty = []
-        if model_type not in models_versions:
-            for version_list in model.values():
-                if isinstance(version_list, list):
-                    is_empty.append(len(version_list)==0)
-                
-        if all(is_empty):
-            models_collection.delete_one({'type': model['type']})
+        if incoming.get(name):
+            continue
+
+        # Nothing in any other type's bucket, so the document describes no model.
+        if not any(model.get(bucket) for bucket in other_buckets):
+            models_collection.delete_one({'type': name})
 
     # loop over model versions and set model versions array by type/model_name
     for mv in models_versions:
@@ -249,12 +257,13 @@ def save_models_versions(models_versions, model_type):
             print(error)
 
 def assign_preset_to_latest_version(model, versions, model_type):
-    type_map = {'versions': 'high_accuracy', 'high_speed': 'high_speed'}
+    # Bucket in, wire type out; io_presets store the wire type.
+    type_map = {bucket: wire for wire, bucket in model_types.DEVICE_BUCKET.items()}
     versions.sort()
     latest_version = versions[-1]
     presets = presets_collection.find({'modelName': model, 'modelType': type_map[model_type]})
     for preset in presets:
-        presets_collection.update({'presetId': preset['presetId']}, {'$set': {'modelVersion': latest_version}})
+        presets_collection.update_one({'presetId': preset['presetId']}, {'$set': {'modelVersion': latest_version}})
 
 def format_filename(s):
     valid_chars = "-_.() %s%s" % (string.ascii_letters, string.digits)

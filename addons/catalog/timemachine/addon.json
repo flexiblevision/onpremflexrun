@@ -1,0 +1,24 @@
+{
+  "schema": "flexrun.addon/v1",
+  "name": "timemachine",
+  "label": "Time Machine",
+  "description": "Continuous camera recording and playback.",
+  "tier": "enterprise",
+  "entitlement": "time_machine",
+  "kind": "composite",
+  "arches": ["x86", "arm"],
+  "hooks": "hooks.py",
+  "health": {
+    "type": "hook"
+  },
+  "ui": {
+    "icon": "History",
+    "order": 40,
+    "manage": "custom"
+  },
+  "legacy_routes": {
+    "enable": "/enable_timemachine",
+    "disable": "/disable_timemachine",
+    "cleanup": "/cleanup_timemachine"
+  }
+}

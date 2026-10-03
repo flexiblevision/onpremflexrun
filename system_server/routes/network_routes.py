@@ -51,13 +51,16 @@ class UpdateIp(Resource):
             idx = eth_names.index(data['lanPort'])
             interface_name = eth_names[idx]
         else:
-            return 'ethernet interface not found', 500
+            # A port that is not on this device is the caller's mistake, not a
+            # server fault. 500 made every one of these look like a crash.
+            return {'error': 'No ethernet port named "{}" on this device. Ports found: {}.'.format(
+                data.get('lanPort'), ', '.join(eth_names) if eth_names else 'none')}, 400
 
         if data['ip'] != '' and is_valid_ip(data['ip']):
             set_ips(data)
             os.system('sudo ifconfig ' + interface_name + ' ' + data['ip'] + ' netmask 255.255.255.0')
         else:
-            return 'IP address invalid', 500
+            return {'error': '"{}" is not a valid IPv4 address.'.format(data.get('ip', ''))}, 400
 
         interface = subprocess.Popen(['ifconfig', interface_name], stdout=subprocess.PIPE).communicate()[0].decode('utf-8')
 

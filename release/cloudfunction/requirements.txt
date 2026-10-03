@@ -1,0 +1,3 @@
+# Stdlib only, like latest_stable_version. Nothing here parses a manifest, so
+# there is deliberately no dependency on the release package: the function
+# stores and returns opaque strings.

@@ -1,0 +1,194 @@
+name: CI
+
+# The deploy path in this repo installs and upgrades software on factory-floor
+# machines, so the gate covers the shell scripts as well as the Python.
+on:
+  push:
+    branches: ['**']
+  pull_request:
+    branches: ['**']
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Tests and shell checks
+    runs-on: ubuntu-22.04
+    timeout-minutes: 20
+
+    # system_server/worker_scripts/job_manager.py pings MongoDB at import and
+    # calls sys.exit(1) on failure, so the interpreter needs a reachable
+    # instance for the suite to import at all. MONGO_SERVER below points it here.
+    services:
+      mongo:
+        image: mongo:4.2
+        ports: ['27017:27017']
+        options: >-
+          --health-cmd "mongo --quiet --eval 'db.runCommand({ping:1}).ok'"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      MONGO_SERVER: 127.0.0.1
+      MONGO_PORT: 27017
+
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
+
+      # 3.9 matches the interpreter on the devices.
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5
+        with:
+          python-version: '3.9'
+          cache: pip
+
+      # Declared rather than assumed preinstalled:
+      #   dash      - what /bin/sh is on the devices; the deploy scripts are
+      #               invoked as `sh <script>` and the parse checks need it
+      #   jq        - upgrade_flex_run.sh reads fvconfig.json with it
+      #   net-tools - network tests shell out to ifconfig
+      - name: Install shell test dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y dash jq net-tools
+          mkdir -p /etc/netplan 2>/dev/null || sudo mkdir -p /etc/netplan
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install -r requirements-dev.txt
+
+      # Kept on one line: a multi-line `python -c` inside a YAML block scalar
+      # carries the YAML indentation into the Python source and fails with
+      # IndentationError before it ever reaches MongoDB.
+      - name: Wait for MongoDB
+        run: |
+          PING="from pymongo import MongoClient; MongoClient('127.0.0.1', 27017, serverSelectionTimeoutMS=1000).admin.command('ping')"
+          for _ in $(seq 30); do
+            if python -c "$PING" 2>/dev/null; then echo "mongo ready"; exit 0; fi
+            sleep 2
+          done
+          echo "mongo never became ready" >&2
+          exit 1
+
+      - name: Run tests
+        run: python -m pytest system_server/tests
+
+      # Written at the repo root: pytest.ini and .coveragerc moved there so
+      # coverage measures deploy.py, helpers/ and upgrades/ too, not just
+      # system_server/.
+      - name: Upload coverage
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
+        with:
+          name: coverage
+          path: |
+            htmlcov/
+            coverage.xml
+          if-no-files-found: ignore
+
+  secrets:
+    name: Secret scan
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
+        with:
+          fetch-depth: 0
+
+      # The Auth0 client id and a default jwt_secret_key are already committed,
+      # so this starts as a report rather than a blocker. Flip
+      # continue-on-error to false once those are rotated and removed.
+      - name: gitleaks
+        continue-on-error: true
+        uses: gitleaks/gitleaks-action@ff98106e4c7b2bc287b24eaf42907196329070c7  # v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # Assembles and publishes a release CANDIDATE. It does not reach any device:
+  # nothing is applied until a channel is promoted to it and an operator
+  # approves, so cutting one on every merge is cheap and reversible.
+  #
+  # Signing is deliberately absent. The key lives on a hardware token, and if
+  # this job could sign then a compromise of it could ship to a factory floor —
+  # the property worth keeping is that CI can publish but cannot sign.
+  release-candidate:
+    name: Release candidate
+    if: github.ref == 'refs/heads/master' && github.event_name == 'push'
+    needs: test
+    runs-on: ubuntu-22.04
+    timeout-minutes: 15
+    steps:
+      # Tags are the state behind the build number, so the whole tag list is
+      # needed — a shallow clone would restart the counter at 1 and hand out a
+      # number a previous release already used.
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5
+        with:
+          python-version: '3.9'
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Assemble the manifest
+        env:
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+        run: |
+          if [ -f release/components.json ]; then
+            SOURCE="--components release/components.json"
+          else
+            # No checked-in component set yet, so seed from the endpoint the
+            # fleet already treats as the source of truth. One-time bootstrap.
+            SOURCE="--from-stable"
+          fi
+          python -m release.build_release $SOURCE --out release-candidate.json
+
+      - name: Show what moved
+        run: |
+          python - <<'PY'
+          import json
+          d = json.load(open('release-candidate.json'))
+          print('release %s  counter %s' % (d['release'], d['counter']))
+          print('created %s   notAfter %s (reported, not enforced)'
+                % (d['created'], d['notAfter']))
+          for arch in sorted(d['images']):
+              print(' ', arch, len(d['images'][arch]), 'images pinned')
+          PY
+
+      - name: Publish the candidate
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
+        with:
+          name: release-candidate
+          path: release-candidate.json
+          if-no-files-found: error
+
+  dependencies:
+    name: Dependency audit
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
+
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5
+        with:
+          python-version: '3.9'
+          cache: pip
+
+      # Reports known advisories against the pinned versions. Advisory
+      # feeds change without the code changing, so this must not be able to
+      # turn an unrelated PR red.
+      - name: pip-audit
+        continue-on-error: true
+        run: |
+          pip install pip-audit
+          pip-audit --requirement requirements.txt --desc

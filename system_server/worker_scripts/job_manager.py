@@ -1,4 +1,4 @@
-from pymongo import MongoClient, ASCENDING
+from pymongo import MongoClient, ASCENDING, DESCENDING
 import datetime
 import string
 import requests
@@ -23,8 +23,12 @@ SYNC_COMPLETION_THRESHOLD = 74
 TRACKER_COLLECTION_NAME = "sync_tracker"  # Separate collection for tracking data
 
 
-MONGODB_HOST = "172.17.0.1"  # Should move to config/environment variable
-MONGODB_PORT = 27017
+# Defaults are the docker bridge address used on devices; overridable so this
+# module can be imported where that address does not exist (CI, a dev box).
+# It pings at import and exits on failure, so an unreachable host takes the
+# whole process down rather than failing a single call.
+MONGODB_HOST = os.environ.get('MONGO_SERVER', "172.17.0.1")
+MONGODB_PORT = int(os.environ.get('MONGO_PORT', 27017))
 MONGODB_TIMEOUT_MS = 5000  # 5 second timeout
 MONGODB_MAX_POOL_SIZE = 50
 MONGODB_SERVER_SELECTION_TIMEOUT_MS = 5000
@@ -53,6 +57,8 @@ use_aws           = False
 aws_client        = None
 config            = settings.config
 BATCH_SIZE        = 10
+# A whole batch is published as one Pub/Sub message, which caps at 10MB.
+MAX_BATCH_BYTES   = int(os.environ.get('MAX_BATCH_BYTES', 8 * 1024 * 1024))
 LB_DOMAIN         = "https://functions-proxy.flexiblevision.com"
 BQ_INGEST_PATH    = "https://data-ingest-queue-172198548516.us-central1.run.app"
 if config['latest_stable_ref'] == 'latest_stable_version':
@@ -227,17 +233,49 @@ def mark_as_processing(record_id):
     analytics_coll.update_one({"id": record_id},
         {"$set": {"synced": "processing", "modified": time_now_ms()}}, True)
 
+# How many synced inspections stay on the device. They are kept so the most
+# recent work is still there to look at after it has gone to the cloud; the
+# interval purge in capdev (default 5 days) still ages them out from there.
+KEEP_SYNCED_ANALYTICS = 50
+
 def mark_as_synced(record_id):
-    analytics_coll.delete_one({"id": record_id})
+    """Mark the record synced. It used to be deleted outright, which meant a
+    successful sync left nothing behind to look at on the device."""
+    analytics_coll.update_one({"id": record_id},
+        {"$set": {"synced": True, "modified": time_now_ms()}})
+
+def prune_synced_analytics():
+    """Drop synced records beyond the newest KEEP_SYNCED_ANALYTICS.
+
+    Without this, not deleting on sync would simply let the collection grow
+    until the purge interval came round - and these records carry images.
+    Records still waiting to sync are never touched: only synced: True is
+    considered, so nothing is dropped before it has reached the cloud.
+    """
+    # _id, not prediction_end_time: Time Machine and audio records carry no
+    # prediction_end_time, and a missing value sorted last would become the
+    # cutoff and stop every prune. Every record has an ObjectId, in insert order.
+    newest = list(
+        analytics_coll.find({"synced": True}, {"_id": 1})
+        .sort("_id", DESCENDING)
+        .limit(KEEP_SYNCED_ANALYTICS)
+    )
+    if len(newest) < KEEP_SYNCED_ANALYTICS:
+        return
+
+    analytics_coll.delete_many(
+        {"synced": True, "_id": {"$lt": newest[-1]["_id"]}})
 
 def cloud_call(url, analytics, headers):
     if not analytics:
         return True
     try:
         for a in analytics: a['synced'] = True
-        res = requests.post(url, json=analytics, headers=headers, timeout=20)
-        bq_res = requests.post(BQ_INGEST_PATH, json=analytics, headers=headers, timeout=20)
-        print(res, bq_res)
+        if config.get('environ') == 'local':
+            res = requests.post(url, json=analytics, headers=headers, timeout=20)
+        else:
+            res = requests.post(BQ_INGEST_PATH, json=analytics, headers=headers, timeout=20)
+        print(res)
         print('--------------------------------------')
         success = res.status_code == 200
         if success:
@@ -246,6 +284,15 @@ def cloud_call(url, analytics, headers):
                 if sync_tracker:
                     did = i.get('did', 'unknown')
                     update_sync_tracker(did, success=True, record_id=i['id'])
+            # Once per batch, not once per record: the cap is a property of the
+            # collection, and pruning inside the loop would run it 1000 times
+            # for a full batch to reach the same end state. Its own try: the
+            # batch is already accepted, and failing into the handler below
+            # would mark it unsynced and upload it again.
+            try:
+                prune_synced_analytics()
+            except Exception as e:
+                print(f'prune_synced_analytics failed: {e}')
         else:
             # Track failed syncs and mark for retry
             for i in analytics:
@@ -340,20 +387,33 @@ def kinesis_call(analytics):
 
         return False
 
+def batch_records(records, max_records=BATCH_SIZE, max_bytes=MAX_BATCH_BYTES):
+    """Slice by record count *and* serialized size.
+
+    An oversized record still goes alone rather than being dropped.
+    """
+    batch, size = [], 0
+    for record in records:
+        weight = len(json.dumps(record, default=str)) + 1
+        if batch and (len(batch) >= max_records or size + weight > max_bytes):
+            yield batch
+            batch, size = [], 0
+        batch.append(record)
+        size += weight
+    if batch:
+        yield batch
+
+
 def push_analytics_to_cloud(domain, access_token):
     headers = {"Authorization": "Bearer "+access_token, 'Content-Type': 'application/json'}
     url     = domain+"/api/capture/devices/upload_prediction"
 
     latest_analytics = get_unsynced_records()
-    num_analytics = len(latest_analytics)
 
-    if num_analytics == 0:
+    if not latest_analytics:
         return True
 
-    for i in range(0, num_analytics, BATCH_SIZE):
-        analytics = latest_analytics[i:i+BATCH_SIZE]
-        if not analytics: break
-
+    for analytics in batch_records(latest_analytics):
         print('#Analytics: ', len(analytics))
         if use_aws:
             j_push = job_queue.enqueue(
@@ -379,6 +439,22 @@ def push_analytics_to_cloud(domain, access_token):
     return True
 
 
+# Deploying an addon now happens in addons.jobs.enable_addon, driven by the
+# descriptor in addons/catalog/<name>/. These three remain only because rq
+# serialises a job by import path: a job queued before the upgrade still names
+# one of them, and deleting them would strand it.
+def _enable_addon(name):
+    from addons.jobs import enable_addon
+    return enable_addon(name)
+
+
 def enable_ocr():
-    install_file = f"{os.environ['HOME']}/flex-run/helpers/install_ocr.sh"
-    os.system(f"sudo sh {install_file}")
+    return _enable_addon('ocr')
+
+
+def enable_assembly_guidance():
+    return _enable_addon('assembly')
+
+
+def enable_audio():
+    return _enable_addon('anomaly_audio')
