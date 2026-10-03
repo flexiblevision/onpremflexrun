@@ -13,6 +13,7 @@ from io import BytesIO
 from pymongo import MongoClient
 from rq import get_current_job
 import datetime
+import json
 import string
 
 def is_arm_device():
@@ -63,6 +64,18 @@ def create_config_file(data):
             f.write('\t\tmodel_version_policy: {all {}}\n')
             f.write('\t}\n')
         f.write('}')
+
+# fvonprem.models field listing a model's Segment versions; only high accuracy has them.
+SEG_FIELD = 'seg_versions'
+
+
+def is_segmentation(version_folder):
+    try:
+        with open(version_folder+'/job.json') as f:
+            return bool(json.load(f).get('segmentation'))
+    except Exception:
+        return False
+
 
 def download_by_link(token, project_id, version, destination):
     # get link 
@@ -139,7 +152,7 @@ def retrieve_models(data, token):
         if len(versions) > 0 and not os.path.exists(model_folder): 
             os.system("mkdir " + model_folder)
 
-        model_data = {'type': model_name}
+        model_data = {'type': model_name, SEG_FIELD: []}
         model_data[model_type] =[]
         #iterate over the models data and request/extract model to models folder
         for version in versions:
@@ -149,6 +162,8 @@ def retrieve_models(data, token):
                 update_job_progress(round((completed_models / total_models) * 100))
                 if os.path.exists(model_folder+'/'+str(version)):
                     model_data[model_type].append(version)
+                    if is_segmentation(model_folder+'/'+str(version)):
+                        model_data[SEG_FIELD].append(version)
                     print('model has already been downloaded')
                 else:
                     print('version not found, skipping...', model_folder+'/'+str(version))
@@ -192,6 +207,8 @@ def retrieve_models(data, token):
                             os.system("mv "+vars_path+" "+model_folder+"/"+str(version))
 
                         model_data[model_type].append(version)
+                        if is_segmentation(model_folder+'/'+str(version)):
+                            model_data[SEG_FIELD].append(version)
                     except zipfile.BadZipfile:
                         print('bad zipfile in '+model_folder)
                     os.system("rm -rf "+model_folder+'/model.zip')
@@ -199,6 +216,7 @@ def retrieve_models(data, token):
         if model_data[model_type]:
             if model_name in models_versions:
                 models_versions[model_name][model_type] += model_data[model_type]
+                models_versions[model_name][SEG_FIELD] += model_data[SEG_FIELD]
             else:
                 models_versions[model_name] = model_data
 
@@ -232,11 +250,14 @@ def save_models_versions(models_versions, model_type):
     models_versions = list(models_versions)
     incoming = {mv['type']: mv[model_type] for mv in models_versions}
     other_buckets = [b for b in model_types.DEVICE_BUCKET.values() if b != model_type]
+    # Segment versions are high accuracy versions, so only that sync rewrites them.
+    owns_seg = model_type == model_types.bucket_for(model_types.HIGH_ACCURACY)
+    cleared = {model_type: [], SEG_FIELD: []} if owns_seg else {model_type: []}
 
     # loop over models and set model type(model name) lists to empty
     for model in models_collection.find():
         name = model['type']
-        models_collection.update_one({'type': name}, {'$set': {model_type: []}}, True)
+        models_collection.update_one({'type': name}, {'$set': cleared}, True)
 
         if incoming.get(name):
             continue
@@ -249,6 +270,8 @@ def save_models_versions(models_versions, model_type):
     for mv in models_versions:
         model_list = {}
         model_list[model_type] = mv[model_type]
+        if owns_seg:
+            model_list[SEG_FIELD] = mv.get(SEG_FIELD, [])
         model_query = {'type': mv['type']}
         models_collection.update_one(model_query, {'$set': model_list}, True)
         try:

@@ -2,6 +2,7 @@
 Unit tests for retrieve_models.py worker script
 """
 import pytest
+import json
 import os
 import zipfile
 import string
@@ -813,3 +814,75 @@ class TestWaveformIsAKnownType:
         for wire, bucket in model_types.DEVICE_BUCKET.items():
             assert bucket is not None
             assert model_types.bucket_for(wire) == bucket
+
+
+class TestSegmentVersions:
+    """job.json carries "segmentation": true for Segment models; the sync records which
+    installed high accuracy versions those are, beside the bare version list."""
+
+    def _version(self, root, version, job):
+        d = root / 'Widget' / str(version)
+        d.mkdir(parents=True)
+        (d / 'job.json').write_text(json.dumps(job))
+        return d
+
+    @pytest.mark.unit
+    def test_is_segmentation_reads_job_json(self, tmp_path):
+        from worker_scripts.retrieve_models import is_segmentation
+        assert is_segmentation(str(self._version(tmp_path, 3, {'segmentation': True})))
+        assert not is_segmentation(str(self._version(tmp_path, 2, {'model_version': 2})))
+
+    @pytest.mark.unit
+    def test_missing_or_broken_job_json_is_not_segmentation(self, tmp_path):
+        from worker_scripts.retrieve_models import is_segmentation
+        assert not is_segmentation(str(tmp_path / 'nope'))
+        d = tmp_path / 'bad'
+        d.mkdir()
+        (d / 'job.json').write_text('{not json')
+        assert not is_segmentation(str(d))
+
+    @pytest.mark.unit
+    @patch('os.system')
+    def test_installed_versions_are_marked_from_job_json(self, mock_os_system, tmp_path):
+        import worker_scripts.retrieve_models as rm
+        models_dir = tmp_path / 'models'
+        self._version(models_dir, 1, {'model_version': 1})
+        self._version(models_dir, 2, {'model_version': 2, 'segmentation': True})
+        data = {
+            'models': {'p1': {'_id': 'p1', 'name': 'Widget', 'models': [1, 2]}},
+            'exclude_models': {'Widget': [1, 2]},
+            'model_type': 'high_accuracy',
+        }
+        with patch.object(rm, 'base_path', return_value=str(tmp_path) + '/'), \
+             patch.object(rm, 'is_arm_device', return_value=False), \
+             patch.object(rm, 'create_config_file'), \
+             patch.object(rm, 'save_models_versions') as save:
+            rm.retrieve_models(data, 'token')
+        saved = list(save.call_args[0][0])
+        assert saved[0]['versions'] == [1, 2]
+        assert saved[0]['seg_versions'] == [2]
+
+    @pytest.mark.unit
+    @patch('worker_scripts.retrieve_models.presets_collection')
+    @patch('worker_scripts.retrieve_models.models_collection')
+    def test_high_accuracy_sync_writes_seg_versions(self, models, presets):
+        from worker_scripts.retrieve_models import save_models_versions
+        models.find.return_value = [{'type': 'Gone', 'versions': [1], 'seg_versions': [1],
+                                     'high_speed': [4]}]
+        presets.find.return_value = []
+        save_models_versions([{'type': 'Widget', 'versions': [1, 2], 'seg_versions': [2]}],
+                             'versions')
+        sets = [c[0][1]['$set'] for c in models.update_one.call_args_list]
+        assert {'versions': [], 'seg_versions': []} in sets
+        assert {'versions': [1, 2], 'seg_versions': [2]} in sets
+
+    @pytest.mark.unit
+    @patch('worker_scripts.retrieve_models.presets_collection')
+    @patch('worker_scripts.retrieve_models.models_collection')
+    def test_other_syncs_leave_seg_versions_alone(self, models, presets):
+        from worker_scripts.retrieve_models import save_models_versions
+        models.find.return_value = [{'type': 'Widget', 'versions': [2], 'seg_versions': [2]}]
+        presets.find.return_value = []
+        save_models_versions([{'type': 'Widget', 'high_speed': [5]}], 'high_speed')
+        sets = [c[0][1]['$set'] for c in models.update_one.call_args_list]
+        assert all('seg_versions' not in s for s in sets)

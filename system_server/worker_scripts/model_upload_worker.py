@@ -129,6 +129,9 @@ def upload_model(temp_model_path, filename):
                 #GENERATE CONFIG FILE
                 create_config_file()
 
+        if job_data.get('segmentation'):
+            models_collection.update_one({'type': model_name}, {'$addToSet': {'seg_versions': version}}, True)
+
         if is_lite_model:
             print('MODELS SYNCED FOR PREDICT LITE SERVER')
             os.system("docker restart predictlite")

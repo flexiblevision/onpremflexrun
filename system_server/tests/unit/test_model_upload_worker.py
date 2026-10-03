@@ -458,3 +458,23 @@ class TestCleanupOperations:
         rm_calls = [str(call) for call in mock_os_system.call_args_list
                    if 'rm -rf' in str(call)]
         assert any('/tmp/testmodel' in call for call in rm_calls)
+
+
+class TestUploadSegmentModel:
+    @pytest.mark.unit
+    @pytest.mark.parametrize('job, marked', [
+        ({'model_version': 3, 'model_type': 'high_accuracy', 'segmentation': True}, True),
+        ({'model_version': 3, 'model_type': 'high_accuracy'}, False),
+    ])
+    @patch('os.system')
+    @patch('os.path.exists')
+    @patch('worker_scripts.model_upload_worker.read_job_file')
+    @patch('worker_scripts.model_upload_worker.models_collection')
+    def test_segment_version_is_recorded(self, models, read_job, exists, os_system, job, marked):
+        from worker_scripts.model_upload_worker import upload_model
+        read_job.return_value = job
+        exists.side_effect = lambda path: '/tmp/testmodel' in path or path == '/models/testmodel'
+        assert upload_model('/tmp/testmodel', 'testmodel#3.zip') is True
+        seg = [c for c in models.update_one.call_args_list
+               if c[0][1] == {'$addToSet': {'seg_versions': '3'}}]
+        assert bool(seg) is marked
