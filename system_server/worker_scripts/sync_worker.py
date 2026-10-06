@@ -49,6 +49,9 @@ def refresh_tokens():
     try:
         res = s.post(url, headers=headers, json=data, timeout=30)
         tokens = res.json()
+        # Older backends double-encode this as a JSON string.
+        if isinstance(tokens, str):
+            tokens = json.loads(tokens)
         if 'id_token' in tokens and 'access_token' in tokens:
             return {'id_token':tokens['id_token'], 'access_token': tokens['access_token']}
     except:

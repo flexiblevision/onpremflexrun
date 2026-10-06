@@ -603,6 +603,17 @@ class TestRefreshTokens:
         assert post.call_args[1]['json'] == {'refresh_token': 'r'}
 
     @pytest.mark.unit
+    def test_an_older_backends_double_encoded_pair_is_accepted(self):
+        # Read as a failure, this kept check_access refreshing every minute.
+        response = MagicMock()
+        response.json.return_value = json.dumps({'id_token': 'id', 'access_token': 'acc'})
+
+        with patch.object(sync_worker, 'get_refresh_token', return_value='r'), \
+             patch.object(sync_worker.s, 'post', return_value=response):
+            assert sync_worker.refresh_tokens() == \
+                {'id_token': 'id', 'access_token': 'acc'}
+
+    @pytest.mark.unit
     def test_an_unauthorised_device_cannot_refresh(self):
         with patch.object(sync_worker, 'get_refresh_token', return_value=None), \
              patch.object(sync_worker.s, 'post') as post:
