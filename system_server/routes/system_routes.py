@@ -671,6 +671,89 @@ class StartTeamviewer(Resource):
             return {'success': False, 'status': 'error', 'error': str(e)}, 500
 
 
+class HostTimezone(Resource):
+    """The machine's own clock zone.
+
+    The UI formats times against the device's configured zone, so this is not
+    what users see - it is for everything that reads the OS clock instead:
+    journal entries, cron, and the host-side workers that log with localtime.
+
+    Containers do NOT follow this straight away. Each one is started with a TZ
+    environment variable, and TZ beats the /etc/localtime bind-mount, so a
+    container keeps the zone it was created with until it is recreated - at
+    which point system_container_upgrades.sh reads /etc/timezone and passes
+    the new value in. This endpoint says so in its reply rather than letting a
+    caller assume the whole stack moved.
+    """
+
+    @auth.requires_auth
+    def get(self):
+        import subprocess
+        try:
+            name = subprocess.run(['timedatectl', 'show', '-p', 'Timezone', '--value'],
+                                  capture_output=True, text=True, timeout=10).stdout.strip()
+        except Exception:
+            name = ''
+        if not name:
+            try:
+                with open('/etc/timezone') as fh:
+                    name = fh.read().strip()
+            except Exception:
+                name = ''
+        return {'timezone': name}, 200
+
+    @auth.requires_auth
+    def post(self):
+        import subprocess
+        from flask import request
+        body = request.get_json(silent=True) or {}
+        name = (body.get('timezone') or '').strip()
+        if not name:
+            return {'error': 'timezone is required'}, 400
+
+        # Only a zone the system itself lists. This string reaches a command,
+        # so it is checked against the allowed set rather than escaped.
+        try:
+            listed = subprocess.run(['timedatectl', 'list-timezones'],
+                                    capture_output=True, text=True, timeout=20).stdout.split()
+        except Exception as exc:
+            return {'error': 'Could not list timezones: {}'.format(exc)}, 500
+        if name not in listed:
+            return {'error': 'Unknown timezone: {}'.format(name)}, 400
+
+        try:
+            done = subprocess.run(['timedatectl', 'set-timezone', name],
+                                  capture_output=True, text=True, timeout=20)
+        except Exception as exc:
+            return {'error': 'Could not set timezone: {}'.format(exc)}, 500
+        if done.returncode != 0:
+            return {'error': (done.stderr or 'timedatectl failed').strip()}, 500
+
+        # timedatectl repoints /etc/localtime but cannot replace /etc/timezone
+        # while a container bind-mounts it - the file is a live mount source,
+        # so the rename fails silently and it keeps the old zone. That file is
+        # what system_container_upgrades.sh reads to set every container's TZ,
+        # so leaving it stale would quietly give the whole stack the old zone
+        # on the next upgrade. Write through the same inode instead.
+        stamped = None
+        try:
+            with open('/etc/timezone', 'w') as fh:
+                fh.write(name + '\n')
+            with open('/etc/timezone') as fh:
+                stamped = fh.read().strip()
+        except Exception as exc:
+            stamped = 'failed: {}'.format(exc)
+
+        return {
+            'timezone': name,
+            'etcTimezone': stamped,
+            # Said plainly so nobody concludes the whole stack moved with it.
+            'containersFollowOnRecreate': True,
+            'note': ('The machine clock is now ' + name + '. Containers keep the '
+                     'zone they were created with until they are recreated.'),
+        }, 200
+
+
 def register_routes(api):
     api.add_resource(Shutdown, '/shutdown')
     api.add_resource(Restart, '/restart')
@@ -685,3 +768,4 @@ def register_routes(api):
     api.add_resource(Rollback, '/rollback')
     api.add_resource(SystemIsUptodate, '/system_uptodate')
     api.add_resource(StartTeamviewer, '/start_teamviewer')
+    api.add_resource(HostTimezone, '/timezone')
