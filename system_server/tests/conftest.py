@@ -350,8 +350,18 @@ def temp_test_dir(tmp_path):
 @pytest.fixture(autouse=True)
 def reset_environment():
     """Reset environment between tests"""
+    _clear_process_caches()
     yield
-    # Cleanup code here if needed
+    _clear_process_caches()
+
+def _clear_process_caches():
+    # Only modules already imported: importing device_routes here would pull in its deps for every test.
+    utils_mod = sys.modules.get('utils.device_utils')
+    if utils_mod is not None:
+        utils_mod._static.clear()
+    routes_mod = sys.modules.get('routes.device_routes')
+    if routes_mod is not None:
+        routes_mod._mongo_client = None
 
 @pytest.fixture(scope='function')
 def mock_platform():

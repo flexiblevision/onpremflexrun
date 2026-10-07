@@ -161,6 +161,37 @@ class TestReleaseIdentity:
 
         assert identity['release'] is None
 
+    @pytest.mark.integration
+    def test_repeated_calls_share_one_mongo_client(self):
+        collection = MagicMock()
+        collection.find_one.return_value = None
+        client = MagicMock()
+        client.__getitem__.return_value = {'utils': collection}
+
+        with patch('upgrade_runner._device_channel', return_value='stable'), \
+             patch('cloud_env.get_cloud_domain',
+                   return_value='https://v1.cloud.flexiblevision.com'), \
+             patch('pymongo.MongoClient', return_value=client) as make_client:
+            for _ in range(5):
+                dr._release_identity()
+
+        assert make_client.call_count == 1
+
+    @pytest.mark.integration
+    def test_a_failed_connect_is_retried_next_call(self):
+        collection = MagicMock()
+        collection.find_one.return_value = {'installed': {'release': '1.4'}}
+        client = MagicMock()
+        client.__getitem__.return_value = {'utils': collection}
+
+        with patch('upgrade_runner._device_channel', return_value='stable'), \
+             patch('cloud_env.get_cloud_domain',
+                   return_value='https://v1.cloud.flexiblevision.com'), \
+             patch('pymongo.MongoClient',
+                   side_effect=[RuntimeError('connection refused'), client]):
+            assert dr._release_identity()['release'] is None
+            assert dr._release_identity()['release'] == '1.4'
+
 
 class TestSerialNumber:
     @pytest.mark.integration

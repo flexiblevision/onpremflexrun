@@ -18,6 +18,19 @@ class MacId(Resource):
         return get_mac_id()
 
 
+_mongo_client = None
+
+def _mongo():
+    # One client per process: a new one per call leaked a pool and its monitor threads.
+    global _mongo_client
+    if _mongo_client is None:
+        from pymongo import MongoClient
+        _mongo_client = MongoClient(os.environ.get('MONGO_SERVER', '172.17.0.1'),
+                                    int(os.environ.get('MONGO_PORT', 27017)),
+                                    serverSelectionTimeoutMS=5000)
+    return _mongo_client
+
+
 def _release_identity():
     """What this device is running and where it takes it from.
 
@@ -42,12 +55,8 @@ def _release_identity():
         print('could not resolve the cloud: {}'.format(e))
 
     try:
-        from pymongo import MongoClient
         from release import state as release_state
-        client = MongoClient(os.environ.get('MONGO_SERVER', '172.17.0.1'),
-                             int(os.environ.get('MONGO_PORT', 27017)),
-                             serverSelectionTimeoutMS=5000)
-        installed = release_state.read(client['fvonprem']['utils']).get('installed')
+        installed = release_state.read(_mongo()['fvonprem']['utils']).get('installed')
         identity['release'] = (installed or {}).get('release')
     except Exception as e:
         print('could not read the installed release: {}'.format(e))
