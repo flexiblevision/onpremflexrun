@@ -262,6 +262,31 @@ class TestFlexRunErrorMapping:
                 sorted(documented - set(upgrade_runner.FLEX_RUN_ERRORS)))
 
 
+class TestRefreshPin:
+
+    def _refresh_env(self, monkeypatch, tmp_path, **kw):
+        monkeypatch.setenv('HOME', str(tmp_path))
+        monkeypatch.delenv('FLEXRUN_PIN_COMMIT', raising=False)
+        monkeypatch.setattr(upgrade_runner, '_mark_failed', lambda *a: None)
+        seen = []
+
+        def fake_run(cmd, **kwargs):
+            seen.append(kwargs.get('env') or {})
+            return MagicMock(returncode=11, stdout='', stderr='')
+
+        monkeypatch.setattr(upgrade_runner.subprocess, 'run', fake_run)
+        upgrade_runner.run('run-1', [], **kw)
+        return seen[0]
+
+    def test_the_commit_reaches_the_refresh(self, monkeypatch, tmp_path):
+        env = self._refresh_env(monkeypatch, tmp_path, commit='b' * 40)
+        assert env['FLEXRUN_PIN_COMMIT'] == 'b' * 40
+
+    def test_no_commit_leaves_the_refresh_unpinned(self, monkeypatch, tmp_path):
+        env = self._refresh_env(monkeypatch, tmp_path)
+        assert 'FLEXRUN_PIN_COMMIT' not in env
+
+
 class TestImportsWithoutInheritedPath:
     """The runner is spawned as a bare script by absolute path, so only its own
     directory is on sys.path - `release` lives a level up. It used to reach it

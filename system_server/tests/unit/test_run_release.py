@@ -70,9 +70,10 @@ class Recorder:
             self.recorded = parsed
             return parsed
 
-        def run(run_id, versions, plan_path=None):
+        def run(run_id, versions, plan_path=None, commit=None):
             self.events.append('run')
-            self.run_env = {'versions': versions, 'plan_path': plan_path}
+            self.run_env = {'versions': versions, 'plan_path': plan_path,
+                            'commit': commit}
             return self.run_code
 
         monkeypatch.setattr(fetch_mod, 'fetch_release', fetch_release)
@@ -203,6 +204,12 @@ class TestWhatReachesTheDeployScripts:
         r.go(tmp_path)
         assert len(r.run_env['versions']) == len(upgrade_runner.VERSION_ARGS)
 
+    def test_the_signed_flexrun_commit_is_pinned(self, monkeypatch, tmp_path):
+        r = Recorder()
+        r.install(monkeypatch, tmp_path)
+        r.go(tmp_path)
+        assert r.run_env['commit'] == 'a' * 40
+
 
 class TestPreferManifestWithFallback:
     """A device must never be stranded because the release endpoint is down -
@@ -213,7 +220,7 @@ class TestPreferManifestWithFallback:
                             lambda: ['1.97'] * 7)
         monkeypatch.setattr(upgrade_runner, '_device_arch', lambda: 'x86')
 
-        def run(run_id, versions, plan_path=None):
+        def run(run_id, versions, plan_path=None, commit=None):
             calls.append(('legacy' if plan_path is None else 'release', versions))
             return 0
         monkeypatch.setattr(upgrade_runner, 'run', run)

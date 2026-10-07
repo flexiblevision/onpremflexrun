@@ -202,14 +202,20 @@ def _mark_failed(run_id, message):
         sys.stderr.write('[upgrade_runner] could not record failure: {}\n'.format(exc))
 
 
-def run(run_id, versions, plan_path=None):
+def run(run_id, versions, plan_path=None, commit=None):
     home = os.environ['HOME']
     flex_run = os.path.join(home, 'flex-run', 'upgrades', 'upgrade_flex_run.sh')
     upgrade_system = os.path.join(home, 'flex-run', 'system_server', 'upgrade_system.sh')
 
     print('[upgrade_runner] run {} starting'.format(run_id))
 
-    refresh = subprocess.run(['sh', flex_run], capture_output=True, text=True)
+    # Without the pin the refresh takes the fvconfig branch tip, which need not
+    # hold the code the release was signed against - or even this runner.
+    refresh_env = dict(os.environ)
+    if commit:
+        refresh_env['FLEXRUN_PIN_COMMIT'] = commit
+    refresh = subprocess.run(['sh', flex_run], capture_output=True, text=True,
+                             env=refresh_env)
     sys.stdout.write(refresh.stdout or '')
     sys.stderr.write(refresh.stderr or '')
 
@@ -333,7 +339,8 @@ def run_release(run_id, arch, channel='stable', counter=None,
     print('[upgrade_runner] release {} (counter {}) moves: {}'.format(
         plan['release'], plan['counter'], ', '.join(plan['changing']) or 'nothing'))
 
-    code = run(run_id, plan['versions'], plan_path=plan['plan_path'])
+    code = run(run_id, plan['versions'], plan_path=plan['plan_path'],
+               commit=(parsed.get('flexrun') or {}).get('commit'))
     if code != 0:
         return code
 
