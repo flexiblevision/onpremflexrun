@@ -49,10 +49,21 @@ jobs:
       #               invoked as `sh <script>` and the parse checks need it
       #   jq        - upgrade_flex_run.sh reads fvconfig.json with it
       #   net-tools - network tests shell out to ifconfig
+      # The runner image normally ships all three; apt is only touched when one
+      # is missing, since a dead Azure mirror can hang `apt-get update` for the
+      # whole job timeout.
       - name: Install shell test dependencies
+        timeout-minutes: 5
         run: |
-          sudo apt-get update
-          sudo apt-get install -y dash jq net-tools
+          missing=""
+          command -v dash >/dev/null || missing="$missing dash"
+          command -v jq >/dev/null || missing="$missing jq"
+          command -v ifconfig >/dev/null || missing="$missing net-tools"
+          if [ -n "$missing" ]; then
+            APT="-o Acquire::Retries=2 -o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20"
+            sudo apt-get $APT update
+            sudo apt-get $APT install -y $missing
+          fi
           mkdir -p /etc/netplan 2>/dev/null || sudo mkdir -p /etc/netplan
 
       - name: Install dependencies
