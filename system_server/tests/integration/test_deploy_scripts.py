@@ -217,6 +217,58 @@ def pinned(sh):
     return sh
 
 
+class TestOverwrittenWhileRunning:
+    """Master's /upgrade runs its own upgrade_flex_run.sh, which copies the new
+    tree over itself mid-run. sh keeps reading the same file at the old offset,
+    so whatever sits there in the new script is glued onto master's last line."""
+
+    MASTER_SCRIPT = (
+        'git clone --single-branch --branch "$(jq -r \'.branch\' ~/fvconfig.json)" '
+        'https://github.com/flexiblevision/onpremflexrun.git ~/flex-run-temp\n'
+        'cp -r ~/flex-run-temp/* ~/flex-run/\n'
+        'rm -rf ~/flex-run-temp\n'
+        '\n'
+        'sleep 3')
+
+    @pytest.fixture
+    def crossover(self, sh):
+        home = sh.tmp / 'home'
+        (home / 'flex-run' / 'upgrades').mkdir(parents=True)
+        (home / 'fvconfig.json').write_text('{"branch": "master"; bad}')
+        running = home / 'flex-run' / 'upgrades' / 'upgrade_flex_run.sh'
+        running.write_text(self.MASTER_SCRIPT)
+        _write_stub(sh.stubs, 'jq', 'echo master\n')
+        _write_stub(sh.stubs, 'git', """
+            for a in "$@"; do d="$a"; done
+            mkdir -p "$d/upgrades"
+            cp %s "$d/upgrades/upgrade_flex_run.sh"
+            """ % FLEX_RUN)
+        _write_stub(sh.stubs, 'sleep', 'echo "sleep $*" >> %s\n' % (sh.tmp / 'sleeps.log'))
+        sh.running = running
+        return sh
+
+    def test_master_script_is_the_one_being_replaced(self, crossover):
+        assert len(self.MASTER_SCRIPT.encode()) == 207
+
+    @pytest.mark.parametrize('shell', ['dash', 'bash'])
+    def test_resumed_tail_runs_nothing_but_masters_sleep(self, crossover, shell):
+        result = crossover('%s %s' % (shell, crossover.running))
+        log = crossover.tmp / 'sleeps.log'
+        sleeps = log.read_text().splitlines() if log.exists() else []
+        assert 'invalid time interval' not in result.stderr
+        assert 'not found' not in result.stderr, result.stderr
+        assert all(s == 'sleep 3' for s in sleeps), sleeps
+        assert crossover.running.read_text() == open(FLEX_RUN).read()
+
+    def test_padding_covers_every_resume_offset(self):
+        # bash resumes after the cp line, dash at master's end of file.
+        new = open(FLEX_RUN).read()
+        master = self.MASTER_SCRIPT
+        for offset in (master.index('rm -rf'), len(master)):
+            rest = new[offset:new.index('\n', offset)]
+            assert re.match(r'^ *#', rest), 'offset %d lands on %r' % (offset, rest[:20])
+
+
 class TestPinnedCommit:
     """Pinning is what stops branch tip from replacing the code that checks the
     manifest signature, so the refusals matter more than the happy path."""

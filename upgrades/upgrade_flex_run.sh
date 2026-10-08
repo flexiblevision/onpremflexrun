@@ -1,4 +1,7 @@
 #!/bin/sh
+#                                                                                                                                                                                                                                                                                                          #
+# Padding above: master's copy of this script overwrites itself mid-run and sh
+# resumes at the old offset, which must land in those spaces.
 # Refresh the flex-run orchestration tree from git.
 #
 # This script replaces the scripts that run immediately after it, so a partial
