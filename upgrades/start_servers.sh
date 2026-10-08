@@ -62,6 +62,11 @@ printf '[connection]\nwifi.powersave = 2\n' > /etc/NetworkManager/conf.d/no-powe
 # upgrades/lib/deploy_common.sh (same block the setup path uses).
 install_crontab
 
+# forever hands its children our environment. A service left holding one run's
+# plan feeds it to any later upgrade_system.sh it spawns, which then ignores its
+# own version arguments.
+unset FLEXRUN_PLAN FLEXRUN_RUN_ID FLEXRUN_RECORDER
+
 #restart worker server
 forever stop $HOME/flex-run/system_server/worker.py
 forever start -c python3 $HOME/flex-run/system_server/worker.py
@@ -92,8 +97,11 @@ fi
 configure_redis
 sleep 3
 
-forever stop $HOME/flex-run/system_server/server.py
-sleep 2
+# Detached: before upgrade_runner existed, /upgrade ran this script inside
+# server.py, so stopping the server kills this shell before the start below. A
+# device crossing over from that release would be left with no system server.
 # Through the wrapper, not `forever start` directly: it exports PYTHONPATH, and
 # the upgrade runner this server spawns inherits its environment.
-sh $HOME/flex-run/scripts/fv_system_server_start.sh
+( setsid sh -c "forever stop $HOME/flex-run/system_server/server.py; sleep 2; \
+    sh $HOME/flex-run/scripts/fv_system_server_start.sh" \
+    </dev/null >/dev/null 2>&1 & )
