@@ -983,6 +983,111 @@ class TestEnableMqtt:
 
 
 # --------------------------------------------------------------------------
+# ensure_bridge_topics - new bridge topics reach a broker config made at install
+# --------------------------------------------------------------------------
+
+BRIDGE_TOPICS = os.path.join(REPO, 'setup', 'mqtt', 'bridge_topics')
+BUILD_SH = os.path.join(REPO, 'setup', 'mqtt', 'build.sh')
+
+INSTALLED_CONF = (
+    'plugins.vmq_bridge = on\n'
+    'vmq_bridge.ssl.gke = mqtt-dev.flexiblevision.com:443\n'
+    'vmq_bridge.ssl.gke.client_id = bridge-FV-1\n'
+    'vmq_bridge.ssl.gke.password = device-token\n'
+    'vmq_bridge.ssl.gke.topic.1 = devices/+/system/sync out 0\n'
+    'vmq_bridge.ssl.gke.topic.13 = devices/+/system/reboot in 0\n'
+    'vmq_bridge.ssl.gke.topic.22 = devices/+/timemachine/+ in 0\n')
+
+
+def _topic_lines(text):
+    return re.findall(r'^(vmq_bridge\.\w+\.\w+)\.topic\.(\d+) = (\S+) (\S+) (\S+)$', text, re.M)
+
+
+class TestEnsureBridgeTopics:
+
+    @pytest.fixture
+    def conf(self, sh):
+        path = sh.tmp / 'vernemq-local.conf'
+        path.write_text(INSTALLED_CONF)
+        os.chmod(str(path), 0o644)
+        return path
+
+    def _apply(self, sh, conf):
+        return sh('. %s\nensure_bridge_topics %s %s\n'
+                  'echo "rc=$? changed=$BRIDGE_TOPICS_CHANGED"' % (LIB, conf, BRIDGE_TOPICS))
+
+    def _wanted(self):
+        rows = [l.split() for l in open(BRIDGE_TOPICS)
+                if l.strip() and not l.lstrip().startswith('#')]
+        return {(r[0], r[1]) for r in rows}
+
+    def test_missing_topics_are_added_after_the_highest_index(self, sh, conf):
+        result = self._apply(sh, conf)
+        assert 'changed=1' in result.stdout
+        lines = _topic_lines(conf.read_text())
+        assert {(p, d) for _, _, p, d, _ in lines} == self._wanted()
+        added = [int(n) for _, n, _, _, _ in lines][3:]
+        assert added == list(range(23, 23 + len(added)))
+
+    def test_release_topics_reach_an_installed_device(self, sh, conf):
+        self._apply(sh, conf)
+        text = conf.read_text()
+        assert re.search(r'topic\.\d+ = devices/\+/system/release in 1$', text, re.M)
+        assert re.search(r'topic\.\d+ = devices/\+/release/status out 1$', text, re.M)
+
+    def test_everything_else_is_kept(self, sh, conf):
+        self._apply(sh, conf)
+        assert conf.read_text().startswith(INSTALLED_CONF)
+
+    def test_is_idempotent(self, sh, conf):
+        self._apply(sh, conf)
+        once = conf.read_text()
+        result = self._apply(sh, conf)
+        assert 'changed=0' in result.stdout
+        assert conf.read_text() == once
+
+    def test_tcp_bridge_uses_its_own_key(self, sh, conf):
+        conf.write_text(INSTALLED_CONF.replace('vmq_bridge.ssl.', 'vmq_bridge.tcp.'))
+        self._apply(sh, conf)
+        assert {k for k, *_ in _topic_lines(conf.read_text())} == {'vmq_bridge.tcp.gke'}
+
+    def test_config_without_trailing_newline(self, sh, conf):
+        conf.write_text(INSTALLED_CONF.rstrip('\n'))
+        self._apply(sh, conf)
+        assert 'timemachine/+ in 0\nvmq_bridge.ssl.gke.topic.23' in conf.read_text()
+
+    def test_mode_is_kept_for_the_broker_container(self, sh, conf):
+        self._apply(sh, conf)
+        assert stat.S_IMODE(os.stat(str(conf)).st_mode) == 0o644
+
+    def test_no_config_is_left_for_setup(self, sh):
+        path = sh.tmp / 'nope.conf'
+        result = self._apply(sh, path)
+        assert 'rc=0' in result.stdout
+        assert not path.exists()
+
+    def test_config_without_a_bridge_is_left_alone(self, sh, conf):
+        conf.write_text('listener.tcp.default = 0.0.0.0:1883\n')
+        result = self._apply(sh, conf)
+        assert 'rc=0' not in result.stdout
+        assert conf.read_text() == 'listener.tcp.default = 0.0.0.0:1883\n'
+
+    def test_fresh_config_already_has_every_topic(self, sh):
+        """build.sh and the upgrade must agree on the list."""
+        out = sh.tmp / 'fresh.conf'
+        (sh.tmp / 'home').mkdir(exist_ok=True)
+        (sh.tmp / 'home' / 'fvconfig.json').write_text('{"environ": "cloud", "device_id": "FV-T"}')
+        _write_stub(sh.stubs, 'docker', 'exit 1\n')
+        result = sh('sh %s --allow-placeholder' % BUILD_SH,
+                    env={'CONFIG_FILE': str(out), 'BRIDGE_PASSWORD': 'x'})
+        assert result.returncode == 0, result.stdout + result.stderr
+        lines = _topic_lines(out.read_text())
+        assert {(p, d) for _, _, p, d, _ in lines} == self._wanted()
+        assert [int(n) for _, n, _, _, _ in lines] == list(range(1, len(lines) + 1))
+        assert 'changed=0' in self._apply(sh, out).stdout
+
+
+# --------------------------------------------------------------------------
 # install_crontab - one atomic replace, site entries preserved
 # --------------------------------------------------------------------------
 

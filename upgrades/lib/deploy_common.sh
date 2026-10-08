@@ -92,6 +92,68 @@ enable_mqtt() {
     echo "enabled use_mqtt in $file"
 }
 
+# ensure_bridge_topics [config] [topic list]
+#
+# The broker config is generated once, at install, so a bridge topic added since
+# never reaches a device that already has one. Appends the missing topics and
+# leaves every other line - including the token the system server injected -
+# as it is. Sets BRIDGE_TOPICS_CHANGED=1 when it wrote, so the caller restarts
+# the broker.
+ensure_bridge_topics() {
+    local conf="${1:-$HOME/flex-run/setup/mqtt/vernemq-local.conf}"
+    local topics="${2:-$HOME/flex-run/setup/mqtt/bridge_topics}"
+    local key missing tmp
+
+    BRIDGE_TOPICS_CHANGED=0
+
+    if [ ! -f "$conf" ]; then
+        echo "no broker config at $conf - setup_mqtt.sh generates it with every topic"
+        return 0
+    fi
+    if [ ! -r "$topics" ]; then
+        echo "WARNING: bridge topic list $topics not found - bridge topics not updated"
+        return 1
+    fi
+
+    key="$(sed -n 's/^\(vmq_bridge\.[a-z]*\.[A-Za-z0-9_]*\) = .*/\1/p' "$conf" | head -1)"
+    if [ -z "$key" ]; then
+        echo "WARNING: no bridge defined in $conf - bridge topics not updated"
+        return 1
+    fi
+
+    missing="$(awk -v key="$key" '
+        FNR == NR {
+            if (index($0, key ".topic.") == 1 && $2 == "=") {
+                n = substr($1, length(key ".topic.") + 1) + 0
+                if (n > max) max = n
+                have[$3 " " $4] = 1
+            }
+            next
+        }
+        /^[[:space:]]*(#|$)/ { next }
+        !(($1 " " $2) in have) { max++; print key ".topic." max " = " $1 " " $2 " " $3 }
+    ' "$conf" "$topics")"
+
+    [ -n "$missing" ] || return 0
+
+    tmp="$conf.flexrun.$$"
+    if ! { cat "$conf"; [ -z "$(tail -c 1 "$conf")" ] || echo; printf '%s\n' "$missing"; } >"$tmp"; then
+        echo "ERROR: could not rewrite $conf - bridge topics not updated"
+        rm -f "$tmp"
+        return 1
+    fi
+    chown --reference="$conf" "$tmp" 2>/dev/null || true
+    chmod --reference="$conf" "$tmp" 2>/dev/null || true
+    if ! mv -f "$tmp" "$conf"; then
+        echo "ERROR: could not install new $conf"
+        rm -f "$tmp"
+        return 1
+    fi
+
+    BRIDGE_TOPICS_CHANGED=1
+    printf '%s\n' "$missing" | sed 's/^/added bridge topic: /'
+}
+
 # ---- container swap, with a way back ---------------------------------------
 #
 # The upgrade path removes a container and then creates the new one, so a

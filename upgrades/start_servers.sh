@@ -64,6 +64,12 @@ install_crontab
 
 enable_mqtt
 
+ensure_bridge_topics
+if [ "${BRIDGE_TOPICS_CHANGED:-0}" = 1 ] && \
+   docker ps -a --format '{{.Names}}' | grep -qx vernemq; then
+    docker restart vernemq
+fi
+
 # forever hands its children our environment. A service left holding one run's
 # plan feeds it to any later upgrade_system.sh it spawns, which then ignores its
 # own version arguments.

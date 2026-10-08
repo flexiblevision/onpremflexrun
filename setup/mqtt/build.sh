@@ -119,6 +119,13 @@ echo "  Username:  $BRIDGE_USERNAME"
 echo "  ClientID:  $BRIDGE_CLIENT_ID"
 echo "  Password:  $(printf '%s' "$BRIDGE_PASSWORD" | cut -c1-2)***"
 
+TOPICS_FILE="${TOPICS_FILE:-$SCRIPT_DIR/bridge_topics}"
+if [ ! -r "$TOPICS_FILE" ]; then
+    echo "ERROR: bridge topic list not found at $TOPICS_FILE"
+    exit 1
+fi
+TOPIC_BLOCK="$(awk -v key="$BRIDGE_KEY" '!/^[[:space:]]*(#|$)/ { n++; print key ".topic." n " = " $1 " " $2 " " $3 }' "$TOPICS_FILE")"
+
 cat > "$CONFIG_FILE" <<EOF
 ## Basic listener config
 listener.tcp.default = 0.0.0.0:1883
@@ -148,33 +155,7 @@ ${TLS_BLOCK}
 ${BRIDGE_KEY}.cleansession = on
 
 
-## Outbound: device → cloud
-## NOTE: VerneMQ cuttlefish parser strips '#' from bridge topics.
-## Use explicit subtopic patterns instead of '#' wildcards.
-${BRIDGE_KEY}.topic.1 = devices/+/system/sync out 0
-${BRIDGE_KEY}.topic.2 = devices/+/assembly/+/started out 0
-${BRIDGE_KEY}.topic.3 = devices/+/assembly/+/workstation/started out 0
-${BRIDGE_KEY}.topic.4 = devices/+/assembly/+/workstation/completed out 0
-${BRIDGE_KEY}.topic.5 = devices/+/assembly/+/workstation/skipped out 0
-${BRIDGE_KEY}.topic.6 = devices/+/assembly/+/step/recorded out 0
-${BRIDGE_KEY}.topic.7 = devices/+/assembly/+/status out 0
-${BRIDGE_KEY}.topic.8 = devices/+/assembly/+/line/transition out 0
-${BRIDGE_KEY}.topic.9 = devices/+/assembly/+/logs out 0
-${BRIDGE_KEY}.topic.10 = devices/+/assembly/+/metrics out 0
-${BRIDGE_KEY}.topic.11 = devices/+/stats/+ out 0
-${BRIDGE_KEY}.topic.12 = devices/+/heartbeat out 0
-
-## Inbound: cloud → device (commands)
-${BRIDGE_KEY}.topic.13 = devices/+/system/reboot in 0
-${BRIDGE_KEY}.topic.14 = devices/+/system/shutdown in 0
-${BRIDGE_KEY}.topic.15 = devices/+/system/refresh_backend in 0
-${BRIDGE_KEY}.topic.16 = devices/+/system/node_trigger in 0
-${BRIDGE_KEY}.topic.17 = devices/+/system/toggle_sync in 0
-${BRIDGE_KEY}.topic.18 = devices/+/system/update_software in 0
-${BRIDGE_KEY}.topic.19 = devices/+/system/start_teamviewer in 0
-${BRIDGE_KEY}.topic.20 = devices/+/models in 0
-${BRIDGE_KEY}.topic.21 = devices/+/preset/+ in 0
-${BRIDGE_KEY}.topic.22 = devices/+/timemachine/+ in 0
+${TOPIC_BLOCK}
 EOF
 
 # 644, not 600: the file is bind-mounted into the VerneMQ container, which runs
