@@ -62,6 +62,8 @@ printf '[connection]\nwifi.powersave = 2\n' > /etc/NetworkManager/conf.d/no-powe
 # upgrades/lib/deploy_common.sh (same block the setup path uses).
 install_crontab
 
+enable_mqtt
+
 # forever hands its children our environment. A service left holding one run's
 # plan feeds it to any later upgrade_system.sh it spawns, which then ignores its
 # own version arguments.

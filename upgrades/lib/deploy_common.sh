@@ -54,6 +54,44 @@ set_conf_directive() {
     echo "set $key $value in $file"
 }
 
+# enable_mqtt [fvconfig]
+#
+# Most of the fleet was installed with use_mqtt false, and the system server
+# only registers the MQTT routes - including the monitor that provisions the
+# cloud bridge - when it is true. Must run before the server restarts.
+enable_mqtt() {
+    local file="${1:-$HOME/fvconfig.json}"
+    local tmp
+
+    if ! jq -e 'type == "object"' "$file" >/dev/null 2>&1; then
+        echo "WARNING: $file is missing or not a JSON object - use_mqtt not enabled"
+        return 1
+    fi
+
+    if [ "$(jq -r '.use_mqtt' "$file")" = "true" ]; then
+        return 0
+    fi
+
+    tmp="$file.flexrun.$$"
+
+    if ! jq '.use_mqtt = true' "$file" >"$tmp"; then
+        echo "ERROR: could not rewrite $file - use_mqtt not enabled"
+        rm -f "$tmp"
+        return 1
+    fi
+
+    chown --reference="$file" "$tmp" 2>/dev/null || true
+    chmod --reference="$file" "$tmp" 2>/dev/null || true
+
+    if ! mv -f "$tmp" "$file"; then
+        echo "ERROR: could not install new $file"
+        rm -f "$tmp"
+        return 1
+    fi
+
+    echo "enabled use_mqtt in $file"
+}
+
 # ---- container swap, with a way back ---------------------------------------
 #
 # The upgrade path removes a container and then creates the new one, so a

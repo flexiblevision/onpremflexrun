@@ -861,6 +861,75 @@ class TestSetConfDirective:
 
 
 # --------------------------------------------------------------------------
+# enable_mqtt - turns cloud MQTT on for a fleet installed with it off
+# --------------------------------------------------------------------------
+
+class TestEnableMqtt:
+
+    @pytest.fixture
+    def config(self, sh):
+        path = sh.tmp / 'fvconfig.json'
+        path.write_text(json.dumps({'branch': 'master', 'environ': 'cloud',
+                                    'use_mqtt': False, 'use_aws': False}))
+        return path
+
+    def _apply(self, sh, path):
+        return sh('. %s\nenable_mqtt %s' % (LIB, path))
+
+    def test_false_is_turned_on(self, sh, config):
+        assert self._apply(sh, config).returncode == 0
+        assert json.loads(config.read_text())['use_mqtt'] is True
+
+    def test_missing_key_is_added(self, sh, config):
+        config.write_text(json.dumps({'branch': 'master'}))
+        self._apply(sh, config)
+        assert json.loads(config.read_text())['use_mqtt'] is True
+
+    def test_other_settings_are_kept(self, sh, config):
+        self._apply(sh, config)
+        data = json.loads(config.read_text())
+        assert data['branch'] == 'master'
+        assert data['environ'] == 'cloud'
+        assert data['use_aws'] is False
+
+    def test_already_on_is_not_rewritten(self, sh, config):
+        config.write_text('{"use_mqtt": true}')
+        before = os.stat(str(config)).st_ino
+        result = self._apply(sh, config)
+        assert result.returncode == 0
+        assert os.stat(str(config)).st_ino == before
+        assert config.read_text() == '{"use_mqtt": true}'
+
+    def test_default_path_is_home_fvconfig(self, sh):
+        home = sh.tmp / 'home'
+        home.mkdir()
+        (home / 'fvconfig.json').write_text('{"use_mqtt": false}')
+        sh('. %s\nenable_mqtt' % LIB)
+        assert json.loads((home / 'fvconfig.json').read_text())['use_mqtt'] is True
+
+    def test_invalid_json_is_left_alone(self, sh, config):
+        config.write_text('{"use_mqtt": false,')
+        result = self._apply(sh, config)
+        assert result.returncode != 0
+        assert config.read_text() == '{"use_mqtt": false,'
+
+    def test_missing_file_is_not_created(self, sh):
+        path = sh.tmp / 'nope.json'
+        result = self._apply(sh, path)
+        assert result.returncode != 0
+        assert not path.exists()
+
+    def test_file_mode_is_preserved(self, sh, config):
+        os.chmod(str(config), 0o600)
+        self._apply(sh, config)
+        assert stat.S_IMODE(os.stat(str(config)).st_mode) == 0o600
+
+    def test_no_temp_file_is_left_behind(self, sh, config):
+        self._apply(sh, config)
+        assert [n for n in os.listdir(str(sh.tmp)) if '.flexrun.' in n] == []
+
+
+# --------------------------------------------------------------------------
 # install_crontab - one atomic replace, site entries preserved
 # --------------------------------------------------------------------------
 
