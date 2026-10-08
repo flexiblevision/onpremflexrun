@@ -13,6 +13,23 @@ set -eu
 
 ARCH=$(arch)
 UPGRADES="$HOME/flex-run/upgrades"
+RUNNER="$HOME/flex-run/system_server/upgrade_runner.py"
+
+# No run id means the caller is a release from before upgrade_runner: its
+# /upgrade chose the versions itself and calls this directly, so nothing would
+# be verified, pinned to the release's commit, or recorded - the device would
+# need a second upgrade to land on the release. Give the whole upgrade to the
+# runner instead. Detached, because that caller runs inside server.py and the
+# upgrade ends by restarting it.
+if [ -z "${FLEXRUN_RUN_ID:-}" ] && [ -r "$RUNNER" ]; then
+    LOG_DIR="${FLEXRUN_UPGRADE_LOG_DIR:-/var/log/flex-run}"
+    mkdir -p "$LOG_DIR"
+    run_id="$(python3 -c 'import uuid; print(uuid.uuid4())')"
+    ( setsid python3 "$RUNNER" --release "$run_id" \
+        </dev/null >>"$LOG_DIR/upgrade-$run_id.log" 2>&1 & )
+    echo "upgrade handed to upgrade_runner as run $run_id - log: $LOG_DIR/upgrade-$run_id.log"
+    exit 0
+fi
 
 sh "$UPGRADES/install_dependencies.sh"
 

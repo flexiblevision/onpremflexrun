@@ -16,6 +16,7 @@ import stat
 import shutil
 import subprocess
 import textwrap
+import time
 import pytest
 
 REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', '..'))
@@ -1487,6 +1488,81 @@ class TestUpgradeSystemDispatch:
         assert result.returncode != 0
         assert 'unsupported architecture' in result.stderr
         assert argv == [], 'container upgrade ran on an unsupported arch'
+
+
+class TestLegacyCallerHandsOffToRunner:
+    """A pre-runner /upgrade calls upgrade_system.sh with no run id. Left alone it
+    would upgrade by tag and record nothing, so the device needs a second
+    upgrade to land on the release; the runner must take the run instead."""
+
+    @pytest.fixture
+    def legacy(self, sh):
+        home = sh.tmp / 'home'
+        upgrades = home / 'flex-run' / 'upgrades'
+        upgrades.mkdir(parents=True)
+        (upgrades / 'install_dependencies.sh').write_text('exit 0\n')
+        (upgrades / 'system_container_upgrades.sh').write_text(
+            'printf "%s\\n" "$@" > ' + str(sh.tmp / 'argv.txt') + '\n')
+        runner = home / 'flex-run' / 'system_server' / 'upgrade_runner.py'
+        runner.parent.mkdir(parents=True)
+        runner.write_text(
+            'import os, sys\n'
+            'open(%r, "w").write("\\n".join(sys.argv[1:] + [str(os.getsid(0))]))\n'
+            % str(sh.tmp / 'runner.txt'))
+        _write_stub(sh.stubs, 'arch', 'echo x86_64\n')
+        logs = sh.tmp / 'logs'
+
+        def run(env=None):
+            environment = {'FLEXRUN_UPGRADE_LOG_DIR': str(logs)}
+            environment.update(env or {})
+            result = sh('sh %s %s' % (os.path.join(REPO, 'system_server', 'upgrade_system.sh'),
+                                      ' '.join(['"1.9.3"'] * 7)), env=environment)
+            return result
+
+        def runner_argv(timeout=10):
+            path = sh.tmp / 'runner.txt'
+            deadline = time.time() + timeout
+            while time.time() < deadline:
+                if path.exists() and path.read_text():
+                    return path.read_text().splitlines()
+                time.sleep(0.1)
+            return None
+
+        sh.run_legacy, sh.runner_argv, sh.logs = run, runner_argv, logs
+        return sh
+
+    def test_runner_takes_a_legacy_call(self, legacy):
+        result = legacy.run_legacy()
+        assert result.returncode == 0, result.stderr
+        argv = legacy.runner_argv()
+        assert argv is not None, 'runner was never started'
+        assert argv[0] == '--release'
+        assert re.match(r'^[0-9a-f-]{36}$', argv[1]), argv
+
+    def test_legacy_call_does_not_upgrade_containers_itself(self, legacy):
+        legacy.run_legacy()
+        legacy.runner_argv()
+        assert not (legacy.tmp / 'argv.txt').exists(), \
+            'container upgrade ran by tag alongside the runner'
+
+    def test_runner_is_detached_from_the_caller(self, legacy):
+        """The caller is server.py, which the upgrade restarts."""
+        legacy.run_legacy()
+        argv = legacy.runner_argv()
+        assert argv[2] != str(os.getsid(0)), 'runner shares the caller session'
+
+    def test_runner_output_is_logged_under_its_run_id(self, legacy):
+        result = legacy.run_legacy()
+        run_id = legacy.runner_argv()[1]
+        assert (legacy.logs / ('upgrade-%s.log' % run_id)).exists()
+        assert run_id in result.stdout
+
+    def test_a_runner_call_is_never_handed_off_again(self, legacy):
+        result = legacy.run_legacy(env={'FLEXRUN_RUN_ID': 'run-1'})
+        assert result.returncode == 0, result.stderr
+        assert legacy.runner_argv(timeout=1) is None, 'runner re-entered itself'
+        argv = (legacy.tmp / 'argv.txt').read_text().splitlines()
+        assert argv[3] == 'x86', argv
 
 
 # --------------------------------------------------------------------------
