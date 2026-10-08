@@ -1340,3 +1340,13 @@ class TestCleanEfiScript:
                 broken.append(relative)
 
         assert broken == ['scripts/clean_efi.py']
+
+
+class TestReleaseControlAvailable:
+    """Signed releases need the release service; a local cloud has none."""
+
+    @pytest.mark.parametrize('environ,want', [('local', False), ('cloud', True), (None, True)])
+    def test_only_local_cloud_goes_without(self, environ, want):
+        import cloud_env
+        cfg = {} if environ is None else {'environ': environ}
+        assert cloud_env.release_control_available(cfg) is want

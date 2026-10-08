@@ -235,6 +235,16 @@ class TestPreferManifestWithFallback:
         assert upgrade_runner._release_or_legacy('r1') == 0
         assert calls == [('legacy', ['1.97'] * 7)]
 
+    def test_a_local_cloud_device_never_asks_for_a_release(self, monkeypatch):
+        import cloud_env
+        calls = []
+        self._legacy(monkeypatch, calls)
+        monkeypatch.setattr(cloud_env, 'release_control_available', lambda cfg=None: False)
+        monkeypatch.setattr(upgrade_runner, 'run_release',
+                            lambda *a, **k: pytest.fail('local cloud fetched a release'))
+        assert upgrade_runner._release_or_legacy('r1') == 0
+        assert calls == [('legacy', ['1.97'] * 7)]
+
     def test_nothing_promoted_falls_back(self, monkeypatch):
         from release import fetch as fetch_mod
         calls = []

@@ -170,6 +170,16 @@ def _clean(raw):
     return out
 
 
+def release_control_available(cfg=None):
+    """Whether this device takes signed releases at all.
+
+    A local-cloud device has no release service to read from, so it upgrades
+    the way it did before signed releases and offers no channel or rollback.
+    """
+    cfg = _site_config() if cfg is None else cfg
+    return cfg.get('environ') != 'local'
+
+
 def release_override_allowed(cfg=None):
     """Whether the release-plane keys are honoured on this device."""
     cfg = _site_config() if cfg is None else cfg

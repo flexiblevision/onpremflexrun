@@ -342,6 +342,11 @@ class Releases(Resource):
     round trips over a factory network is three chances to render half a state.
     """
     def get(self):
+        import cloud_env
+        if not cloud_env.release_control_available():
+            return {'release_control': False, 'installed': None, 'high_water': 0,
+                    'history': [], 'rollback_targets': [], 'available': None,
+                    'update_available': False, 'rolled_back_from': None, 'channel': None}
         try:
             from release import state as release_state
             collection = _release_collection()
@@ -367,6 +372,7 @@ class Releases(Resource):
         except Exception as e:
             summary['trust'] = {'count': 0, 'keys': [], 'unavailable': str(e)}
 
+        summary['release_control'] = True
         return summary
 
 
@@ -384,8 +390,10 @@ class ReleaseChannel(Resource):
         try:
             import cloud_env
             domain = cloud_env.get_cloud_domain()
-            return {'channel': upgrade_runner._device_channel(),
-                    'changeable': cloud_env.release_override_allowed(),
+            available = cloud_env.release_control_available()
+            return {'channel': upgrade_runner._device_channel() if available else None,
+                    'release_control': available,
+                    'changeable': available and cloud_env.release_override_allowed(),
                     'choices': list(cloud_env.CHANNELS),
                     'cloud_domain': domain,
                     'cloud': cloud_env.cloud_name(domain),
@@ -399,6 +407,9 @@ class ReleaseChannel(Resource):
     def put(self):
         from flask import request
         import cloud_env
+
+        if not cloud_env.release_control_available():
+            return {'error': 'release channels are not available on a local-cloud device'}, 403
 
         body = request.get_json(silent=True) or {}
         channel = body.get('channel')
@@ -446,6 +457,10 @@ class Rollback(Resource):
     def post(self):
         from flask import request
         from release import state as release_state
+        import cloud_env
+
+        if not cloud_env.release_control_available():
+            return {'error': 'rollback is not available on a local-cloud device'}, 403
 
         body = request.get_json(silent=True) or {}
         target = body.get('counter')

@@ -586,6 +586,45 @@ class TestReleaseChannel:
         assert sorted(body['cloud_choices']) == ['dev', 'prod']
 
 
+class TestLocalCloudOffersNoReleaseControl:
+    """A local-cloud device has no release service to read from: no channel, no
+    rollback, and the screens are told so they can hide the controls."""
+
+    @pytest.fixture(autouse=True)
+    def local(self):
+        with patch('cloud_env.release_control_available', return_value=False):
+            yield
+
+    @pytest.mark.integration
+    def test_releases_says_so_without_asking_the_channel(self, client, offline_channel):
+        body = client.get('/releases').get_json()
+        assert body['release_control'] is False
+        assert body['rollback_targets'] == []
+        offline_channel.assert_not_called()
+
+    @pytest.mark.integration
+    def test_channel_is_reported_unavailable(self, client):
+        body = client.get('/release_channel').get_json()
+        assert body['release_control'] is False
+        assert body['changeable'] is False
+        assert body['channel'] is None
+
+    @pytest.mark.integration
+    def test_channel_cannot_be_moved(self, client):
+        with patch('cloud_env.set_override') as write:
+            response = client.put('/release_channel', json={'channel': 'beta'})
+        assert response.status_code == 403
+        write.assert_not_called()
+
+    @pytest.mark.integration
+    def test_rollback_is_refused(self, client):
+        with patch('upgrade_runner.lock_holder', return_value=None), \
+             patch('subprocess.Popen') as popen:
+            response = client.post('/rollback', json={'counter': 37})
+        assert response.status_code == 403
+        popen.assert_not_called()
+
+
 class TestReleasesReportsTrust:
     """A rotation cannot be finished safely unless you can see which devices
     have picked up the new key, so /releases has to report it."""

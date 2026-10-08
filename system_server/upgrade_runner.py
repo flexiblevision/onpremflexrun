@@ -418,6 +418,14 @@ def _release_or_legacy(run_id, channel=None):
     """
     from release import fetch as fetch_mod
 
+    try:
+        import cloud_env
+        if not cloud_env.release_control_available():
+            print('[upgrade_runner] local-cloud device - upgrading from the version endpoint')
+            return run(run_id, _legacy_versions())
+    except ImportError:
+        pass
+
     if channel is None:
         channel = _device_channel()
 
