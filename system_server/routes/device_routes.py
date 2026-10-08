@@ -40,7 +40,14 @@ def _release_identity():
     hotspot page and the cloud, and none of them should lose an IP address
     because mongo is down.
     """
-    identity = {'release': None, 'release_channel': None, 'cloud': None}
+    identity = {'release': None, 'release_counter': None, 'release_channel': None,
+                'cloud': None, 'release_control': None, 'rollback_targets': []}
+
+    try:
+        import cloud_env
+        identity['release_control'] = cloud_env.release_control_available()
+    except Exception as e:
+        print('could not tell whether release control is available: {}'.format(e))
 
     try:
         import upgrade_runner
@@ -54,10 +61,19 @@ def _release_identity():
     except Exception as e:
         print('could not resolve the cloud: {}'.format(e))
 
+    if identity['release_control'] is False:
+        return identity
+
     try:
         from release import state as release_state
-        installed = release_state.read(_mongo()['fvonprem']['utils']).get('installed')
-        identity['release'] = (installed or {}).get('release')
+        summary = release_state.summary(_mongo()['fvonprem']['utils'])
+        installed = summary.get('installed') or {}
+        identity['release'] = installed.get('release')
+        identity['release_counter'] = installed.get('counter')
+        # The cloud offers these as rollback choices; it cannot read the history.
+        identity['rollback_targets'] = [
+            {'counter': t.get('counter'), 'release': t.get('release')}
+            for t in summary.get('rollback_targets') or []]
     except Exception as e:
         print('could not read the installed release: {}'.format(e))
 

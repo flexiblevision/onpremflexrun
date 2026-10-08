@@ -109,19 +109,36 @@ class TestReleaseIdentity:
         collection = MagicMock()
         collection.find_one.return_value = {
             'installed': {'counter': 8, 'release': '1.4'}, 'high_water': 8,
-            'history': [],
+            'history': [{'counter': 5, 'release': '1.1', 'applied_at': 'x'},
+                        {'counter': 8, 'release': '1.4', 'applied_at': 'y'}],
         }
         client = MagicMock()
         client.__getitem__.return_value = {'utils': collection}
 
         with patch('upgrade_runner._device_channel', return_value='beta'), \
+             patch('cloud_env.release_control_available', return_value=True), \
              patch('cloud_env.get_cloud_domain',
                    return_value='https://clouddeploy.api.flexiblevision.com'), \
              patch('pymongo.MongoClient', return_value=client):
             identity = dr._release_identity()
 
-        assert identity == {'release': '1.4', 'release_channel': 'beta',
-                            'cloud': 'dev'}
+        assert identity == {'release': '1.4', 'release_counter': 8,
+                            'release_channel': 'beta', 'cloud': 'dev',
+                            'release_control': True,
+                            'rollback_targets': [{'counter': 5, 'release': '1.1'}]}
+
+    @pytest.mark.integration
+    def test_a_local_cloud_device_reports_no_release_control(self):
+        with patch('cloud_env.release_control_available', return_value=False), \
+             patch('upgrade_runner._device_channel', return_value='stable'), \
+             patch('cloud_env.get_cloud_domain', return_value='http://10.0.0.2'), \
+             patch('pymongo.MongoClient') as make_client:
+            identity = dr._release_identity()
+
+        assert identity['release_control'] is False
+        assert identity['rollback_targets'] == []
+        assert identity['release'] is None
+        make_client.assert_not_called()
 
     @pytest.mark.integration
     def test_a_cloud_that_is_neither_dev_nor_prod_is_not_relabelled(self):
