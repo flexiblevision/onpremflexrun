@@ -15,10 +15,12 @@ Under flexrun-releases/<release>-<arch>-<counter>/ on the stick:
 
   manifest.json, manifest.sig   the signed release, byte for byte
   images/<component>.tar        docker save of each pinned image
-  registry/<component>.json     the registry manifest the signed digest names.
-                                Its sha256 is that digest and its config digest
-                                is the id docker load gives the image, which is
-                                what ties a loaded image to the signature.
+  registry/<component>.manifest the registry manifest the signed digest names,
+                                byte for byte. Its sha256 is that digest and its
+                                config digest is the id docker load gives the
+                                image, which ties a loaded image to the
+                                signature. A manifest list also carries
+                                <component>.platform, the one for this arch.
   flexrun.bundle                git bundle of flex-run at the pinned commit;
                                 git checks every object against its hash
   bundle.json                   what is where - written last, so a stick pulled
@@ -147,8 +149,16 @@ def write_signed(directory, raw, signature, keys_dir=KEYS_DIR):
         raise UsbError('release does not verify: {}'.format(exc))
 
 
+def platform_child(body, arch):
+    """The entry for this arch in a manifest list, or None."""
+    os_name, cpu = PLATFORMS[arch]
+    return next((m for m in body.get('manifests') or []
+                 if (m.get('platform') or {}).get('os') == os_name
+                 and (m.get('platform') or {}).get('architecture') == cpu), None)
+
+
 def registry_proof(resolver, repository, digest, arch):
-    """(manifest bytes, the image's config digest).
+    """(manifest bytes, per-arch manifest bytes or None, the image's config digest).
 
     A manifest list names one manifest per platform; the image id is the
     config digest of the one for this arch.
@@ -158,17 +168,14 @@ def registry_proof(resolver, repository, digest, arch):
         raise UsbError('registry served {}@{} with a different hash'.format(repository, digest))
     body = json.loads(raw)
     if media_type in INDEX_TYPES or 'manifests' in body:
-        os_name, cpu = PLATFORMS[arch]
-        child = next((m for m in body['manifests']
-                      if (m.get('platform') or {}).get('os') == os_name
-                      and (m.get('platform') or {}).get('architecture') == cpu), None)
+        child = platform_child(body, arch)
         if not child:
             raise UsbError('{}@{} has no {} image'.format(repository, digest, arch))
         child_raw, _ = resolver.manifest_bytes(repository, child['digest'])
         if sha256_digest(child_raw) != child['digest']:
             raise UsbError('registry served {}@{} with a different hash'.format(repository, child['digest']))
-        return {'index': body, 'manifest': json.loads(child_raw)}, json.loads(child_raw)['config']['digest']
-    return {'manifest': body}, body['config']['digest']
+        return raw, child_raw, json.loads(child_raw)['config']['digest']
+    return raw, None, body['config']['digest']
 
 
 def flexrun_bundle(commit, path, repo=REPO, runner=run):
@@ -205,9 +212,13 @@ def write_bundle(target, arch='x86', channel='stable', counter=None, resolver=No
     index_images = {}
     for component, entry in sorted(images.items()):
         ref = '{}@{}'.format(entry['repository'], entry['digest'])
-        proof, config = registry_proof(resolver, entry['repository'], entry['digest'], arch)
-        with open(os.path.join(root, 'registry', component + '.json'), 'w') as handle:
-            json.dump(proof, handle, indent=2, sort_keys=True)
+        raw_manifest, platform_manifest, config = registry_proof(
+            resolver, entry['repository'], entry['digest'], arch)
+        with open(os.path.join(root, 'registry', component + '.manifest'), 'wb') as handle:
+            handle.write(raw_manifest)
+        if platform_manifest is not None:
+            with open(os.path.join(root, 'registry', component + '.platform'), 'wb') as handle:
+                handle.write(platform_manifest)
         log('  pulling {}'.format(ref))
         runner(['docker', 'pull', ref])
         image_id = runner(['docker', 'image', 'inspect', '--format', '{{.Id}}', ref])
@@ -216,7 +227,9 @@ def write_bundle(target, arch='x86', channel='stable', counter=None, resolver=No
         size = int(runner(['docker', 'image', 'inspect', '--format', '{{.Size}}', ref]))
         index_images[component] = {'reference': ref, 'image_id': image_id, 'size': size,
                                    'tar': 'images/{}.tar'.format(component),
-                                   'registry': 'registry/{}.json'.format(component)}
+                                   'manifest': 'registry/{}.manifest'.format(component),
+                                   'platform': ('registry/{}.platform'.format(component)
+                                                if platform_manifest is not None else None)}
 
     needed = sum(i['size'] for i in index_images.values()) * SPACE_MARGIN
     free = shutil.disk_usage(root).free

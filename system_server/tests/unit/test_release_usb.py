@@ -115,11 +115,11 @@ class TestRegistryProof:
 
     def test_a_single_manifest_names_the_image_id(self):
         raw = image_manifest('sha256:cfg')
-        proof, config = usb.registry_proof(
+        stored, platform, config = usb.registry_proof(
             FakeRegistry({digest_of(raw): (raw, 'application/vnd.docker.distribution.manifest.v2+json')}),
             'fvonprem/x86-backend', digest_of(raw), 'x86')
         assert config == 'sha256:cfg'
-        assert proof['manifest']['config']['digest'] == 'sha256:cfg'
+        assert stored == raw and platform is None
 
     def test_bytes_that_do_not_hash_to_the_signed_digest_are_refused(self):
         raw = image_manifest('sha256:cfg')
@@ -136,8 +136,9 @@ class TestRegistryProof:
         ]}).encode()
         registry = FakeRegistry({digest_of(index): (index, usb.INDEX_TYPES[0]),
                                  digest_of(amd): (amd, ''), digest_of(arm): (arm, '')})
-        assert usb.registry_proof(registry, 'r', digest_of(index), 'x86')[1] == 'sha256:amd'
-        assert usb.registry_proof(registry, 'r', digest_of(index), 'arm')[1] == 'sha256:arm'
+        stored, platform, config = usb.registry_proof(registry, 'r', digest_of(index), 'x86')
+        assert (stored, platform, config) == (index, amd, 'sha256:amd')
+        assert usb.registry_proof(registry, 'r', digest_of(index), 'arm')[2] == 'sha256:arm'
 
 
 class FakeTools:
@@ -187,7 +188,9 @@ class TestWriteBundle:
         assert index['counter'] == 39
         assert index['images']['backend']['image_id'] == 'sha256:cfg-backend'
         assert open(os.path.join(root, 'images', 'backend.tar'), 'rb').read() == b'image'
-        assert os.path.exists(os.path.join(root, 'registry', 'backend.json'))
+        stored = open(os.path.join(root, 'registry', 'backend.manifest'), 'rb').read()
+        # The device re-hashes these bytes against the signed digest.
+        assert digest_of(stored) == release['parsed']['images']['x86']['backend']['digest']
         assert os.path.exists(os.path.join(root, 'flexrun.bundle'))
         assert not [n for n in os.listdir(os.path.join(root, 'images')) if n.endswith('.partial')]
 
