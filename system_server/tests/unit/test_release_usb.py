@@ -31,7 +31,7 @@ def stick(tmp_path):
     (sys_root / 'class' / 'block').mkdir(parents=True)
     os.symlink(str(disk / 'sdb1'), str(sys_root / 'class' / 'block' / 'sdb1'))
     mounts = tmp_path / 'mounts'
-    mounts.write_text('/dev/nvme0n1p2 / ext4 rw 0 0\n/dev/sdb1 {} vfat rw 0 0\n'.format(target))
+    mounts.write_text('/dev/nvme0n1p2 / ext4 rw 0 0\n/dev/sdb1 {} exfat rw 0 0\n'.format(target))
     return {'target': str(target), 'mounts': str(mounts), 'sys': str(sys_root), 'disk': disk}
 
 
@@ -60,6 +60,12 @@ class TestRemovableTarget:
         os.symlink(str(disk / 'sdb1'), str(sys_root / 'class' / 'block' / 'sdb1'))
         with pytest.raises(usb.UsbError):
             usb.removable_target(stick['target'], stick['mounts'], str(sys_root))
+
+    def test_a_fat32_stick_is_refused_because_images_exceed_4gb(self, stick):
+        mounts = open(stick['mounts']).read().replace(' exfat ', ' vfat ')
+        open(stick['mounts'], 'w').write(mounts)
+        with pytest.raises(usb.UsbError, match='exFAT'):
+            usb.removable_target(stick['target'], stick['mounts'], stick['sys'])
 
     def test_a_missing_path_is_refused(self, stick):
         with pytest.raises(usb.UsbError, match='not a directory'):
@@ -156,6 +162,8 @@ class FakeTools:
             open(cmd[3], 'wb').write(b'image')
         if cmd[:3] == ['git', 'bundle', 'create']:
             open(cmd[3], 'wb').write(b'bundle')
+        if cmd[:2] == ['git', 'show']:
+            return 'Flask==2.3.3'
         return ''
 
 
@@ -193,6 +201,19 @@ class TestWriteBundle:
         assert digest_of(stored) == release['parsed']['images']['x86']['backend']['digest']
         assert os.path.exists(os.path.join(root, 'flexrun.bundle'))
         assert not [n for n in os.listdir(os.path.join(root, 'images')) if n.endswith('.partial')]
+        assert index['pythons'] == ['py310', 'py312', 'py38']
+        assert open(os.path.join(root, 'packages', 'requirements.txt')).read() == 'Flask==2.3.3\n'
+
+    def test_packages_are_fetched_per_python_and_written_as_this_user(self, stick, release):
+        tools = FakeTools({release['ref']: 'sha256:cfg-backend'}, {release['ref']: 1000})
+        self._write(stick, release, tools)
+        runs = [c for c in tools.calls if c[:2] == ['docker', 'run']]
+        images = sorted(next(a for a in c if a.startswith('python:')) for c in runs)
+        assert images == sorted(usb.PYTHONS.values())
+        for c in runs:
+            assert c[c.index('--user') + 1] == '{}:{}'.format(os.getuid(), os.getgid())
+            assert 'setuptools' in c and 'wheel' in c
+            assert c[c.index('--platform') + 1] == 'linux/amd64'
 
     def test_an_image_that_is_not_the_signed_one_stops_the_write(self, stick, release):
         tools = FakeTools({release['ref']: 'sha256:something-else'}, {release['ref']: 1000})
