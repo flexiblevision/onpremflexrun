@@ -141,6 +141,22 @@ class DockerHubResolver:
                 .format(repository, tag))
         return digest.strip()
 
+    def manifest_bytes(self, repository, reference):
+        """(raw manifest bytes, media type) for a tag or digest.
+
+        The raw bytes, not a parsed copy: their sha256 is the digest a release
+        signs, so anyone holding them can check that without the registry.
+        """
+        token = self._token(repository)
+        headers = {'Accept': ACCEPT, 'Authorization': 'Bearer ' + token}
+        url = '{}/v2/{}/manifests/{}'.format(REGISTRY_URL, repository, reference)
+        response = self.session.get(url, headers=headers, timeout=TIMEOUT)
+        if response.status_code != 200:
+            raise RegistryError(
+                'manifest {}@{} returned HTTP {}'
+                .format(repository, reference, response.status_code))
+        return response.content, response.headers.get('Content-Type', '')
+
     def list_tags(self, repository):
         """Every tag on a repository. Paginated; the registry caps page size."""
         token = self._token(repository)
