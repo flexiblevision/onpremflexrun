@@ -149,8 +149,49 @@ class TestSystemArch:
         assert result == 'aarch64'
 
 
+class TestStaticCache:
+    """device_info polls these; lshw is slow and neither answer changes."""
+
+    @pytest.mark.unit
+    @patch('subprocess.Popen')
+    def test_lshw_and_arch_run_once(self, mock_popen):
+        lshw, grep, arch = MagicMock(), MagicMock(), MagicMock()
+        grep.communicate.return_value = (b'  system  Computer Name', b'')
+        arch.communicate.return_value = (b'x86_64\n', b'')
+        mock_popen.side_effect = [lshw, grep, arch]
+
+        for _ in range(3):
+            assert system_info() == 'system Computer Name'
+            assert system_arch() == 'x86_64'
+
+        assert mock_popen.call_count == 3
+
+    @pytest.mark.unit
+    @patch('subprocess.Popen')
+    def test_an_empty_lshw_is_retried(self, mock_popen):
+        empty, found = MagicMock(), MagicMock()
+        empty.communicate.return_value = (b'', b'')
+        found.communicate.return_value = (b'system Computer Name', b'')
+        mock_popen.side_effect = [MagicMock(), empty, MagicMock(), found]
+
+        assert system_info() == ''
+        assert system_info() == 'system Computer Name'
+
+
 class TestListUsbPaths:
     """Tests for USB path listing"""
+
+    @pytest.fixture(autouse=True)
+    def cold_cache(self):
+        """list_usb_paths() caches for 5s to avoid a blkid storm, so without
+        this the first test's result is returned to every later test and their
+        mocks are never consulted."""
+        import utils.device_utils as device_utils
+        device_utils._usb_cache['paths'] = []
+        device_utils._usb_cache['time'] = 0
+        yield
+        device_utils._usb_cache['paths'] = []
+        device_utils._usb_cache['time'] = 0
 
     @pytest.mark.unit
     @patch('subprocess.Popen')

@@ -1,0 +1,61 @@
+[run]
+# Measured from the repo root so the number covers deploy.py, helpers/ and the
+# rest of the release path, not just system_server/. The old config lived in
+# [coverage:*] sections of system_server/pytest.ini, which coverage.py never
+# reads - so the omit list below was silently inactive and the suite was
+# measuring its own test files.
+# Every directory holding source is listed. coverage only descends into
+# subdirectories that have an __init__.py, and almost none of these do, so a
+# bare `source = .` left system_server/tcp/, system_server/gpio/, scripts/ and
+# the rest out of the report entirely rather than showing them as 0%.
+# (coverage's include_namespace_packages option would do this in one line but
+# needs >= 7.4; requirements-dev pins 7.3.)
+source =
+    .
+    aws
+    helpers
+    release
+    scripts
+    setup
+    upgrades
+    system_server
+    system_server/gpio
+    system_server/routes
+    system_server/tcp
+    system_server/timemachine
+    system_server/utils
+    system_server/worker_scripts
+
+branch = True
+parallel = False
+
+omit =
+    */tests/*
+    */__pycache__/*
+    */node_modules/*
+    */.venv/*
+    */venv/*
+    ._*
+    */._*
+    Arduino/*
+    */Arduino/*
+
+[report]
+show_missing = True
+skip_covered = False
+precision = 1
+
+exclude_lines =
+    pragma: no cover
+    def __repr__
+    raise AssertionError
+    raise NotImplementedError
+    if __name__ == .__main__.:
+    if TYPE_CHECKING:
+    @abstractmethod
+
+[html]
+directory = htmlcov
+
+[xml]
+output = coverage.xml

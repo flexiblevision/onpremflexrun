@@ -1,0 +1,32 @@
+# Topics the device's broker bridges to the cloud: pattern, direction, qos.
+# build.sh writes these into a new config; ensure_bridge_topics adds any missing
+# from an existing one on upgrade, so a topic added here reaches the fleet.
+# VerneMQ's config parser strips '#' from bridge topics - use explicit levels.
+
+# device -> cloud
+devices/+/system/sync                         out 0
+devices/+/assembly/+/started                  out 0
+devices/+/assembly/+/workstation/started      out 0
+devices/+/assembly/+/workstation/completed    out 0
+devices/+/assembly/+/workstation/skipped      out 0
+devices/+/assembly/+/step/recorded            out 0
+devices/+/assembly/+/status                   out 0
+devices/+/assembly/+/line/transition          out 0
+devices/+/assembly/+/logs                     out 0
+devices/+/assembly/+/metrics                  out 0
+devices/+/stats/+                             out 0
+devices/+/heartbeat                           out 0
+devices/+/release/status                      out 1
+
+# cloud -> device
+devices/+/system/reboot                       in 0
+devices/+/system/shutdown                     in 0
+devices/+/system/refresh_backend              in 0
+devices/+/system/node_trigger                 in 0
+devices/+/system/toggle_sync                  in 0
+devices/+/system/update_software              in 0
+devices/+/system/start_teamviewer             in 0
+devices/+/models                              in 0
+devices/+/preset/+                            in 0
+devices/+/timemachine/+                       in 0
+devices/+/system/release                      in 1

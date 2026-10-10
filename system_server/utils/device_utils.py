@@ -14,18 +14,29 @@ def get_mac_id():
     cmd_out, cmd_err = cmd.communicate()
     return cmd_out.strip().decode("utf-8")
 
+# Hardware and arch don't change while the process runs. Empty results aren't
+# cached so a failed lshw is retried.
+_static = {}
+
 def system_info():
+    if _static.get('system'):
+        return _static['system']
     out = subprocess.Popen(['lshw', '-short'], stdout=subprocess.PIPE)
     cmd = subprocess.Popen(['grep', 'system'], stdin=out.stdout, stdout=subprocess.PIPE)
     cmd_out, cmd_err = cmd.communicate()
     system = cmd_out.strip().decode("utf-8")
     system = " ".join(system.split())
+    _static['system'] = system
     return system
 
 def system_arch():
+    if _static.get('arch'):
+        return _static['arch']
     cmd = subprocess.Popen(['arch'], stdout=subprocess.PIPE)
     cmd_out, cmd_err = cmd.communicate()
-    return cmd_out.strip().decode("utf-8")
+    arch = cmd_out.strip().decode("utf-8")
+    _static['arch'] = arch
+    return arch
 
 _usb_cache = {'paths': [], 'time': 0}
 

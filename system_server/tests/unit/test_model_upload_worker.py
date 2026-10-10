@@ -349,7 +349,12 @@ class TestDockerOperations:
     @patch('worker_scripts.model_upload_worker.models_collection')
     def test_docker_copy_to_lite_server(self, mock_models_collection, mock_read_job,
                                          mock_exists, mock_os_system):
-        """Test that lite models are copied to predictlite container"""
+        """predictlite bind-mounts the host lite_models directory, so a lite
+        model must NOT be copied into the container - the write to the host is
+        already visible there, and copying in would only duplicate 790MB.
+
+        It must still be restarted, because the server loads models at startup.
+        """
         from worker_scripts.model_upload_worker import upload_model
 
         mock_read_job.return_value = {'model_version': 'v1', 'model_type': 'high_speed'}
@@ -357,11 +362,11 @@ class TestDockerOperations:
 
         upload_model('/tmp/testmodel', 'testmodel#v1.zip')
 
-        # Check for docker cp command to predictlite
-        docker_calls = [str(call) for call in mock_os_system.call_args_list
-                       if 'docker cp' in str(call)]
-        assert len(docker_calls) > 0
-        assert any('predictlite' in call for call in docker_calls)
+        calls = [str(call) for call in mock_os_system.call_args_list]
+        copied = [c for c in calls if 'docker cp' in c and 'predictlite' in c]
+        assert copied == [], 'lite models are mounted, not copied: {}'.format(copied)
+        assert any('docker restart predictlite' in c for c in calls), \
+            'predictlite loads models at startup, so it has to be restarted'
 
 
 class TestFilePathConstruction:
@@ -453,3 +458,23 @@ class TestCleanupOperations:
         rm_calls = [str(call) for call in mock_os_system.call_args_list
                    if 'rm -rf' in str(call)]
         assert any('/tmp/testmodel' in call for call in rm_calls)
+
+
+class TestUploadSegmentModel:
+    @pytest.mark.unit
+    @pytest.mark.parametrize('job, marked', [
+        ({'model_version': 3, 'model_type': 'high_accuracy', 'segmentation': True}, True),
+        ({'model_version': 3, 'model_type': 'high_accuracy'}, False),
+    ])
+    @patch('os.system')
+    @patch('os.path.exists')
+    @patch('worker_scripts.model_upload_worker.read_job_file')
+    @patch('worker_scripts.model_upload_worker.models_collection')
+    def test_segment_version_is_recorded(self, models, read_job, exists, os_system, job, marked):
+        from worker_scripts.model_upload_worker import upload_model
+        read_job.return_value = job
+        exists.side_effect = lambda path: '/tmp/testmodel' in path or path == '/models/testmodel'
+        assert upload_model('/tmp/testmodel', 'testmodel#3.zip') is True
+        seg = [c for c in models.update_one.call_args_list
+               if c[0][1] == {'$addToSet': {'seg_versions': '3'}}]
+        assert bool(seg) is marked

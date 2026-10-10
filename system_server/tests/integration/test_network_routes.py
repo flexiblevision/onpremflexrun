@@ -162,9 +162,11 @@ class TestUpdateIpEndpoint:
                                        data=json.dumps(data),
                                        content_type='application/json')
 
-        # Should return 500 for invalid IP
-        assert response.status_code == 500
-        assert b'IP address invalid' in response.data
+        # A bad address is the caller's mistake, so 400, and the body says
+        # which address was rejected.
+        assert response.status_code == 400
+        assert b'not a valid IPv4 address' in response.data
+        assert b'invalid_ip' in response.data
 
     @pytest.mark.integration
     @patch('routes.network_routes.get_eth_port_names', return_value=['enp0s31f6', 'eth0'])
@@ -181,9 +183,12 @@ class TestUpdateIpEndpoint:
                                        data=json.dumps(data),
                                        content_type='application/json')
 
-        # Should return 500 for invalid port
-        assert response.status_code == 500
-        assert b'ethernet interface not found' in response.data
+        # Likewise for a port that is not on the device; the body names the
+        # ports that are, which is what the operator needs to pick one.
+        assert response.status_code == 400
+        assert b'invalid_port' in response.data
+        assert b'enp0s31f6' in response.data
+        assert b'eth0' in response.data
 
 
 class TestGetLanIpsEndpoint:
