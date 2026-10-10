@@ -268,7 +268,8 @@ plan_version() {
 # Pulling by tag is why digest pinning was decorative on the device: a manifest
 # recorded sha256:... and the device then fetched whatever the tag pointed at,
 # which is what a repointed tag exploits. Only a *@sha256:* value is accepted,
-# so a malformed plan cannot redirect a pull somewhere else.
+# so a malformed plan cannot redirect a pull somewhere else - or a bare image
+# id, which a USB release loads and checks against the signed digest itself.
 plan_ref() {
     local component="$1"
     local fallback="$2"
@@ -284,8 +285,15 @@ plan_ref() {
 
     case "$pinned" in
         *@sha256:*) echo "$pinned" ;;
-        *)          echo "$fallback" ;;
+        *)
+            if is_image_id "$pinned"; then echo "$pinned"; else echo "$fallback"; fi
+            ;;
     esac
+}
+
+# is_image_id <ref> - a content-addressed local image id, nothing else.
+is_image_id() {
+    printf '%s' "$1" | grep -Eqx 'sha256:[0-9a-f]{64}'
 }
 
 # report_component <component> <outcome> <from> <to> <ref>
@@ -318,6 +326,15 @@ vernemq_tag() {
 # pull, so this lives here rather than in either one.
 safe_pull() {
     local image="$1"
+    # Loaded from a USB release - there is no registry to pull it from.
+    if is_image_id "$image"; then
+        if docker image inspect "$image" >/dev/null 2>&1; then
+            echo "Using loaded image: $image"
+            return 0
+        fi
+        echo "ERROR: image $image is not loaded"
+        return 1
+    fi
     echo "Pulling image: $image"
     if docker pull "$image"; then
         echo "Pull succeeded: $image"

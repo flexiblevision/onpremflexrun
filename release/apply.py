@@ -32,7 +32,7 @@ class ApplyError(Exception):
     pass
 
 
-def is_current(entry, running):
+def is_current(entry, running, local_ref=None):
     """Is this container already on what the release pins?
 
     A container created from a pinned reference reports its digest, not a tag,
@@ -47,10 +47,12 @@ def is_current(entry, running):
         # "Not known to be current" - and never a match for an entry that
         # happens to carry no digest.
         return False
-    return running in (entry.get('tag'), entry.get('digest'))
+    # A container started from a USB release reports the image id it ran.
+    return running in (entry.get('tag'), entry.get('digest')) or (
+        local_ref is not None and running == local_ref)
 
 
-def plan_lines(parsed, arch, current=None):
+def plan_lines(parsed, arch, current=None, local_refs=None):
     """'<component> <version> <repo>@sha256:...' per component, sorted.
 
     Every component in the release appears, including ones with no positional
@@ -59,24 +61,28 @@ def plan_lines(parsed, arch, current=None):
     """
     components = manifest_mod.components_for(parsed, arch)
     current = current or {}
+    local_refs = local_refs or {}
     lines = []
     for name in sorted(components):
         entry = components[name]
         tag = entry['tag']
-        version = UP_TO_DATE if is_current(entry, current.get(name)) else tag
-        lines.append('{} {} {}'.format(
-            name, version, manifest_mod.pinned_reference(parsed, arch, name)))
+        local = local_refs.get(name)
+        version = UP_TO_DATE if is_current(entry, current.get(name), local) else tag
+        # A USB release has no registry to pull from: its images are loaded
+        # and checked against the signed digests, and run by image id.
+        ref = local or manifest_mod.pinned_reference(parsed, arch, name)
+        lines.append('{} {} {}'.format(name, version, ref))
     return lines
 
 
-def write_plan(parsed, arch, path, current=None):
+def write_plan(parsed, arch, path, current=None, local_refs=None):
     """Write the plan file the deploy scripts read. Returns the path.
 
     Written whole then moved into place: a deploy script reading a half-written
     file would silently fall back to tags for whatever had not been flushed,
     which is the failure this whole change exists to remove.
     """
-    body = '\n'.join(plan_lines(parsed, arch, current=current)) + '\n'
+    body = '\n'.join(plan_lines(parsed, arch, current=current, local_refs=local_refs)) + '\n'
     directory = os.path.dirname(os.path.abspath(path)) or '.'
     if not os.path.isdir(directory):
         os.makedirs(directory)
@@ -99,7 +105,7 @@ def write_plan(parsed, arch, path, current=None):
     return path
 
 
-def versions_for(parsed, arch, current=None):
+def versions_for(parsed, arch, current=None, local_refs=None):
     """The positional version arguments upgrade_system.sh expects.
 
     'True' means "already at this version, skip it" to those scripts. Passing
@@ -108,6 +114,7 @@ def versions_for(parsed, arch, current=None):
     """
     components = manifest_mod.components_for(parsed, arch)
     current = current or {}
+    local_refs = local_refs or {}
 
     versions = []
     for name in ARGUMENT_ORDER:
@@ -116,12 +123,12 @@ def versions_for(parsed, arch, current=None):
             # Not in this release for this arch - visiontools on arm, say.
             versions.append(UP_TO_DATE)
             continue
-        versions.append(UP_TO_DATE if is_current(entry, current.get(name))
+        versions.append(UP_TO_DATE if is_current(entry, current.get(name), local_refs.get(name))
                         else entry['tag'])
     return versions
 
 
-def plan(parsed, arch, current=None, plan_path=None):
+def plan(parsed, arch, current=None, plan_path=None, local_refs=None):
     """Everything the runner needs: the argument list and the digest file.
 
     Returned together because they have to agree - versions decide which
@@ -133,10 +140,10 @@ def plan(parsed, arch, current=None, plan_path=None):
             'manifest is for {} but this device is {}'
             .format(parsed['arch'], arch))
 
-    versions = versions_for(parsed, arch, current=current)
+    versions = versions_for(parsed, arch, current=current, local_refs=local_refs)
     path = None
     if plan_path:
-        path = write_plan(parsed, arch, plan_path, current=current)
+        path = write_plan(parsed, arch, plan_path, current=current, local_refs=local_refs)
     return {
         'versions': versions,
         'plan_path': path,

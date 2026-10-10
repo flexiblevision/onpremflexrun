@@ -217,6 +217,145 @@ def pinned(sh):
     return sh
 
 
+class TestFlexRunFromUsbBundle:
+    """An offline install takes flex-run from the git bundle on the stick, never
+    GitHub - and only the commit the signed release pins."""
+
+    SENTINEL_FILES = ('deploy.py', 'requirements.txt', 'system_server/server.py',
+                      'system_server/upgrade_runner.py', 'upgrades/system_container_upgrades.sh',
+                      'upgrades/lib/deploy_common.sh')
+
+    @pytest.fixture
+    def usb(self, tmp_path):
+        source = tmp_path / 'source'
+        source.mkdir()
+        git = lambda *a: subprocess.run(['git', '-C', str(source)] + list(a), check=True,
+                                        capture_output=True, text=True).stdout.strip()
+        git('init', '-q')
+        git('config', 'user.email', 't@t')
+        git('config', 'user.name', 't')
+        for path in self.SENTINEL_FILES:
+            (source / path).parent.mkdir(parents=True, exist_ok=True)
+            (source / path).write_text('')
+        commits = []
+        for version in ('RELEASED-CODE', 'LATER-CODE'):
+            (source / 'deploy.py').write_text(version + '\n')
+            git('add', '-A')
+            git('commit', '-q', '-m', version)
+            commits.append(git('rev-parse', 'HEAD'))
+        bundle = tmp_path / 'stick' / 'flexrun.bundle'
+        bundle.parent.mkdir()
+        git('bundle', 'create', str(bundle), 'HEAD')
+
+        home = tmp_path / 'home'
+        (home / 'flex-run').mkdir(parents=True)
+        (home / 'flex-run' / 'deploy.py').write_text('OLD-VERSION-CODE\n')
+        (home / 'fvconfig.json').write_text('{"branch": "master"}')
+        return {'bundle': str(bundle), 'released': commits[0], 'later': commits[1], 'home': home}
+
+    def _run(self, usb, **env):
+        environment = dict(os.environ, HOME=str(usb['home']), GIT_ALLOW_PROTOCOL='file')
+        environment.update(env)
+        return subprocess.run(['sh', FLEX_RUN], capture_output=True, text=True,
+                              env=environment, cwd=str(usb['home']))
+
+    def test_the_pinned_commit_is_installed_from_the_stick(self, usb):
+        result = self._run(usb, FLEXRUN_SOURCE=usb['bundle'], FLEXRUN_PIN_COMMIT=usb['released'])
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert (usb['home'] / 'flex-run' / 'deploy.py').read_text() == 'RELEASED-CODE\n'
+
+    def test_a_source_without_a_pin_is_refused(self, usb):
+        result = self._run(usb, FLEXRUN_SOURCE=usb['bundle'], FLEXRUN_PIN_COMMIT='')
+        assert result.returncode != 0
+        assert (usb['home'] / 'flex-run' / 'deploy.py').read_text() == 'OLD-VERSION-CODE\n'
+
+    def test_a_commit_the_stick_does_not_carry_is_refused(self, usb):
+        result = self._run(usb, FLEXRUN_SOURCE=usb['bundle'],
+                           FLEXRUN_PIN_COMMIT='a' * 40)
+        assert result.returncode != 0
+        assert (usb['home'] / 'flex-run' / 'deploy.py').read_text() == 'OLD-VERSION-CODE\n'
+
+
+class TestDependenciesFromUsb:
+    """Offline, apt has nothing to reach and pip installs from the stick's
+    packages for this device's Python - its own and deploy.py's pip alike."""
+
+    @pytest.fixture
+    def deps(self, sh):
+        log = sh.tmp / 'calls.log'
+        for tool in ('apt', 'apt-get', 'dpkg', 'usermod', 'debconf-set-selections', 'xargs'):
+            _write_stub(sh.stubs, tool, 'echo "%s $*" >> %s\n' % (tool, log))
+        _write_stub(sh.stubs, 'pip3', 'echo "pip3 $* NO_INDEX=$PIP_NO_INDEX LINKS=$PIP_FIND_LINKS" >> %s\n' % log)
+        _write_stub(sh.stubs, 'python3', 'case "$1" in -c) echo 312 ;; esac\n')
+        packages = sh.tmp / 'stick' / 'packages'
+        (packages / 'py312').mkdir(parents=True)
+        script = os.path.join(REPO, 'upgrades', 'install_dependencies.sh')
+
+        def run(env=None):
+            if log.exists():
+                log.unlink()
+            result = sh('sh %s' % script, env=env)
+            return result, (log.read_text().splitlines() if log.exists() else [])
+
+        sh.run_deps, sh.packages = run, packages
+        return sh
+
+    def test_offline_installs_from_the_stick_and_never_calls_apt(self, deps):
+        result, calls = deps.run_deps({'FLEXRUN_PACKAGES': str(deps.packages)})
+        assert result.returncode == 0, result.stderr
+        assert not any(c.startswith(('apt ', 'apt-get ')) for c in calls), calls
+        [pip] = [c for c in calls if c.startswith('pip3 install') and '--help' not in c]
+        assert 'NO_INDEX=1' in pip
+        assert 'LINKS={}'.format(deps.packages / 'py312') in pip
+
+    def test_a_python_the_stick_has_no_packages_for_stops_first(self, deps):
+        (deps.packages / 'py312').rmdir()
+        (deps.packages / 'py38').mkdir()
+        result, calls = deps.run_deps({'FLEXRUN_PACKAGES': str(deps.packages)})
+        assert result.returncode != 0
+        assert 'no Python packages' in result.stderr
+        assert not any(c.startswith('pip3 install') and '--help' not in c for c in calls)
+
+    def test_online_is_unchanged(self, deps):
+        result, calls = deps.run_deps()
+        assert any(c.startswith('apt-get ') for c in calls)
+        [pip] = [c for c in calls if c.startswith('pip3 install') and '--help' not in c]
+        assert 'NO_INDEX= ' in pip
+
+
+class TestLoadedImageRefs:
+    """A USB release runs images by id: plan_ref passes a well-formed id
+    through, and safe_pull never tries to pull one."""
+
+    ID = 'sha256:' + '9' * 64
+
+    def _plan(self, sh, ref):
+        plan = sh.tmp / 'plan'
+        plan.write_text('backend 2.0 {}\n'.format(ref))
+        return sh('. %s\nplan_ref backend fallback-ref' % LIB,
+                  env={'FLEXRUN_PLAN': str(plan)}).stdout.strip()
+
+    def test_an_image_id_is_used(self, sh):
+        assert self._plan(sh, self.ID) == self.ID
+
+    @pytest.mark.parametrize('ref', ['sha256:abc', 'sha256:' + 'G' * 64, 'backend:latest', 'sha256:' + '9' * 65])
+    def test_anything_else_falls_back(self, sh, ref):
+        assert self._plan(sh, ref) == 'fallback-ref'
+
+    def test_a_loaded_image_is_not_pulled(self, sh):
+        log = sh.tmp / 'docker.log'
+        _write_stub(sh.stubs, 'docker', 'echo "$*" >> %s\n' % log)
+        result = sh('. %s\nsafe_pull %s' % (LIB, self.ID))
+        assert result.returncode == 0
+        calls = log.read_text()
+        assert 'image inspect ' + self.ID in calls
+        assert 'pull' not in calls
+
+    def test_an_image_id_that_is_not_loaded_fails(self, sh):
+        _write_stub(sh.stubs, 'docker', 'case "$*" in "image inspect"*) exit 1 ;; esac\n')
+        assert sh('. %s\nsafe_pull %s' % (LIB, self.ID)).returncode != 0
+
+
 class TestOverwrittenWhileRunning:
     """Master's /upgrade runs its own upgrade_flex_run.sh, which copies the new
     tree over itself mid-run. sh keeps reading the same file at the old offset,

@@ -1,6 +1,19 @@
 # Unattended script — never block on an interactive debconf prompt.
 export DEBIAN_FRONTEND=noninteractive
 
+# A USB release has no network: apt has nothing to reach, and pip takes the
+# stick's packages for this Python. PIP_* reach deploy.py's own pip as well.
+if [ -n "${FLEXRUN_PACKAGES:-}" ]; then
+    PYTAG="py$(python3 -c 'import sys; print("%d%d" % sys.version_info[:2])')"
+    if [ ! -d "$FLEXRUN_PACKAGES/$PYTAG" ]; then
+        echo "ERROR: this release carries no Python packages for $(python3 --version 2>&1)" >&2
+        exit 1
+    fi
+    export PIP_NO_INDEX=1
+    export PIP_FIND_LINKS="$FLEXRUN_PACKAGES/$PYTAG"
+fi
+
+if [ -z "${FLEXRUN_PACKAGES:-}" ]; then
 apt install -y vsftpd
 apt-get -y install isc-dhcp-server
 apt-get -y install jq
@@ -15,6 +28,7 @@ apt-get -y --only-upgrade install google-chrome-stable
 # panic) and force the noninteractive frontend so apt never blocks on input.
 echo "kexec-tools kexec-tools/load_kexec boolean false" | debconf-set-selections
 DEBIAN_FRONTEND=noninteractive apt install -y linux-crashdump kdump-tools 2>/dev/null || echo "Warning: kdump not installed (no apt access) — kernel will still panic+reboot on lockups but won't capture crash dumps"
+fi
 usermod -aG dialout visioncell
 
 sudo rm /etc/xdg/autostart/update-notifier.desktop

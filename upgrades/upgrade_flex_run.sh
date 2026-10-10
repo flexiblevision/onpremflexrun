@@ -38,6 +38,8 @@ trap cleanup EXIT HUP INT TERM
 
 # --- resolve the pin --------------------------------------------------------
 PIN_COMMIT="${FLEXRUN_PIN_COMMIT:-}"
+# A USB release's flex-run: a git bundle on the stick, used instead of GitHub.
+SOURCE="${FLEXRUN_SOURCE:-}"
 
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -89,6 +91,12 @@ rm -rf "$TMP_TREE"
 # Shallow sha fetch is cheaper but not all remotes serve it; fall back to a full
 # clone rather than dropping back to branch tip.
 clone_pinned() {
+    if [ -n "$SOURCE" ]; then
+        git clone --quiet "$SOURCE" "$TMP_TREE" || return 1
+        git -C "$TMP_TREE" checkout --quiet "$PIN_COMMIT" || return 1
+        return 0
+    fi
+
     mkdir -p "$TMP_TREE" || return 1
     git -C "$TMP_TREE" init --quiet || return 1
     git -C "$TMP_TREE" remote add origin "$REPO_URL" || return 1
@@ -105,8 +113,13 @@ clone_pinned() {
     git -C "$TMP_TREE" checkout --quiet "$PIN_COMMIT" || return 1
 }
 
+if [ -n "$SOURCE" ] && [ -z "$PIN_COMMIT" ]; then
+    fail "a flex-run source was given without the commit to take from it - live tree left as it was"
+    exit 11
+fi
+
 if [ -n "$PIN_COMMIT" ]; then
-    log "fetching pinned commit $PIN_COMMIT"
+    log "fetching pinned commit $PIN_COMMIT${SOURCE:+ from $SOURCE}"
     if ! clone_pinned; then
         fail "could not check out pinned commit $PIN_COMMIT on branch '$BRANCH' - live tree left as it was"
         exit 11

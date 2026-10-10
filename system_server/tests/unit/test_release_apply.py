@@ -179,3 +179,26 @@ class TestPlan:
     def test_no_digest_path_writes_nothing(self):
         got = a.plan(manifest(), 'x86')
         assert got['plan_path'] is None
+
+
+class TestUsbRelease:
+    """A USB release has no registry: its images are loaded, checked against
+    the signed digests, and run by image id."""
+
+    LOADED = 'sha256:' + '9' * 64
+
+    def test_a_loaded_image_is_run_by_its_id(self):
+        lines = a.plan_lines(manifest(), 'x86', local_refs={'backend': self.LOADED})
+        refs = {l.split(' ')[0]: l.split(' ')[2] for l in lines}
+        assert refs['backend'] == self.LOADED
+        assert refs['frontend'] == 'fvonprem/x86-frontend@sha256:' + 'b' * 64
+
+    def test_a_container_already_on_the_loaded_image_is_left_alone(self):
+        versions = a.versions_for(manifest(), 'x86', current={'backend': self.LOADED},
+                                  local_refs={'backend': self.LOADED})
+        assert versions[a.ARGUMENT_ORDER.index('backend')] == a.UP_TO_DATE
+
+    def test_a_different_running_image_is_still_upgraded(self):
+        versions = a.versions_for(manifest(), 'x86', current={'backend': 'sha256:' + '1' * 64},
+                                  local_refs={'backend': self.LOADED})
+        assert versions[a.ARGUMENT_ORDER.index('backend')] == '1.999'
