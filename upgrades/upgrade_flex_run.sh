@@ -33,6 +33,7 @@ SENTINELS='deploy.py requirements.txt system_server/server.py system_server/upgr
 log()  { echo "[upgrade_flex_run] $*"; }
 fail() { echo "[upgrade_flex_run] ERROR: $*" >&2; }
 
+# shellcheck disable=SC2329  # invoked by the trap below
 cleanup() { rm -rf "$TMP_TREE"; }
 trap cleanup EXIT HUP INT TERM
 
@@ -195,3 +196,7 @@ fi
 # Let filesystem writes settle before the caller executes the scripts we just
 # replaced.
 sleep 3
+
+# This file was just replaced while sh still holds it open. Without an explicit
+# exit, sh reads on past the old end into the new file's tail and runs it.
+exit 0

@@ -202,6 +202,30 @@ def _mark_failed(run_id, message):
         sys.stderr.write('[upgrade_runner] could not record failure: {}\n'.format(exc))
 
 
+def _run_copy(script, env):
+    """Run a copy of the refresh script, not the file itself.
+
+    The refresh copies the new tree over the live one, this script included.
+    sh keeps reading the file it was started on, so once that file is replaced
+    by a longer version it carries on into the new file's tail - the update
+    succeeds and then dies on a syntax error in a line it never meant to run.
+    """
+    import shutil
+    import tempfile
+    handle, copy = tempfile.mkstemp(prefix='upgrade_flex_run.', suffix='.sh')
+    os.close(handle)
+    try:
+        try:
+            shutil.copyfile(script, copy)
+            target = copy
+        except OSError:
+            # Nothing to copy: let sh report the missing script as it always has.
+            target = script
+        return subprocess.run(['sh', target], capture_output=True, text=True, env=env)
+    finally:
+        os.unlink(copy)
+
+
 def run(run_id, versions, plan_path=None, commit=None, source=None, packages=None):
     home = os.environ['HOME']
     flex_run = os.path.join(home, 'flex-run', 'upgrades', 'upgrade_flex_run.sh')
@@ -217,8 +241,7 @@ def run(run_id, versions, plan_path=None, commit=None, source=None, packages=Non
     # A USB release: flex-run comes from the stick, not GitHub.
     if source:
         refresh_env['FLEXRUN_SOURCE'] = source
-    refresh = subprocess.run(['sh', flex_run], capture_output=True, text=True,
-                             env=refresh_env)
+    refresh = _run_copy(flex_run, refresh_env)
     sys.stdout.write(refresh.stdout or '')
     sys.stderr.write(refresh.stderr or '')
 

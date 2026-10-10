@@ -312,3 +312,44 @@ class TestImportsWithoutInheritedPath:
                               cwd=str(tmp_path), env=env,
                               capture_output=True, text=True)
         assert proc.returncode == 0, proc.stderr
+
+
+class TestRefreshRunsFromACopy:
+    """The refresh copies a new tree over itself. Run from the file itself, sh
+    reads on into a longer replacement's tail after finishing - the update
+    succeeds, then fails on a line it never meant to run (exit 2 in the field)."""
+
+    def _self_replacing(self, tmp_path):
+        script = tmp_path / 'upgrade_flex_run.sh'
+        longer = tmp_path / 'longer.sh'
+        script.write_text('cp "{}" "{}"\necho refreshed\n'.format(longer, script))
+        longer.write_text('cp "{}" "{}"\necho refreshed\n'.format(longer, script)
+                          + '# padding\n' * 40 + 'echo "$(unbalanced"\n')
+        return script
+
+    def test_a_longer_replacement_is_never_run(self, tmp_path):
+        script = self._self_replacing(tmp_path)
+        result = upgrade_runner._run_copy(str(script), dict(os.environ))
+        assert result.returncode == 0, result.stderr
+        assert result.stdout.strip() == 'refreshed'
+
+    def test_the_file_itself_would_have_run_the_tail(self, tmp_path):
+        """The control: proves the case above reproduces the failure."""
+        import subprocess
+        script = self._self_replacing(tmp_path)
+        result = subprocess.run(['dash', str(script)], capture_output=True, text=True)
+        assert result.returncode != 0
+
+    def test_no_copy_is_left_behind(self, tmp_path, monkeypatch):
+        import tempfile
+        monkeypatch.setattr(tempfile, 'tempdir', str(tmp_path / 'tmp'))
+        (tmp_path / 'tmp').mkdir()
+        upgrade_runner._run_copy(str(self._self_replacing(tmp_path)), dict(os.environ))
+        assert os.listdir(str(tmp_path / 'tmp')) == []
+
+
+def test_the_refresh_script_ends_with_an_explicit_exit():
+    """A running copy must never read past its own end into a replacement."""
+    path = os.path.join(os.path.dirname(upgrade_runner.__file__), '..', 'upgrades', 'upgrade_flex_run.sh')
+    lines = [l.strip() for l in open(path) if l.strip() and not l.lstrip().startswith('#')]
+    assert lines[-1] == 'exit 0'
