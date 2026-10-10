@@ -625,6 +625,67 @@ class TestLocalCloudOffersNoReleaseControl:
         popen.assert_not_called()
 
 
+class TestUsbReleases:
+    """A plugged-in stick, seen only from the release screen, installed only on
+    request - and only a release the stick really holds."""
+
+    STICK = '/media/alec/FV/flexrun-releases/2.0-x86-40'
+
+    def _found(self, offer='upgrade'):
+        return [{'path': self.STICK, 'stick': 'FV', 'release': '2.0', 'counter': 40,
+                 'offer': offer, 'detail': 'newer than the installed release'}]
+
+    @pytest.mark.integration
+    def test_releases_lists_what_is_on_the_stick(self, client):
+        with patch('routes.system_routes._usb_releases', return_value=self._found()):
+            body = client.get('/releases').get_json()
+        assert body['usb'][0]['release'] == '2.0'
+
+    @pytest.mark.integration
+    def test_a_local_cloud_device_still_sees_the_stick(self, client):
+        with patch('cloud_env.release_control_available', return_value=False), \
+             patch('routes.system_routes._usb_releases', return_value=self._found()):
+            body = client.get('/releases').get_json()
+        assert body['release_control'] is False
+        assert body['usb'][0]['offer'] == 'upgrade'
+
+    @pytest.mark.integration
+    def test_installing_starts_the_runner_from_the_stick(self, client):
+        with patch('routes.system_routes._usb_releases', return_value=self._found()), \
+             patch('upgrade_runner.lock_holder', return_value=None), \
+             patch('upgrade_runner.log_path', return_value=None), \
+             patch('subprocess.Popen') as popen:
+            response = client.post('/upgrade_usb', json={'path': self.STICK})
+        assert response.status_code == 202
+        argv = popen.call_args[0][0]
+        assert argv[-3] == '--usb' and argv[-1] == self.STICK
+
+    @pytest.mark.integration
+    def test_a_path_that_is_not_on_the_stick_is_refused(self, client):
+        with patch('routes.system_routes._usb_releases', return_value=self._found()), \
+             patch('subprocess.Popen') as popen:
+            response = client.post('/upgrade_usb', json={'path': '/etc'})
+        assert response.status_code == 400
+        popen.assert_not_called()
+
+    @pytest.mark.integration
+    def test_a_release_not_offered_is_refused(self, client):
+        with patch('routes.system_routes._usb_releases', return_value=self._found(offer='older')), \
+             patch('subprocess.Popen') as popen:
+            response = client.post('/upgrade_usb', json={'path': self.STICK})
+        assert response.status_code == 400
+        popen.assert_not_called()
+
+    @pytest.mark.integration
+    def test_one_install_at_a_time(self, client):
+        with patch('routes.system_routes._usb_releases', return_value=self._found()), \
+             patch('upgrade_runner.lock_holder', return_value=1234), \
+             patch('subprocess.Popen') as popen:
+            response = client.post('/upgrade_usb', json={'path': self.STICK})
+        assert response.status_code == 409
+        popen.assert_not_called()
+
+
 class TestReleasesReportsTrust:
     """A rotation cannot be finished safely unless you can see which devices
     have picked up the new key, so /releases has to report it."""

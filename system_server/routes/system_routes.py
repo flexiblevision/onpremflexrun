@@ -257,6 +257,62 @@ class Upgrade(Resource):
                 'poll': '/upgrade_status'}, 202
 
 
+def _usb_releases():
+    """What is on any plugged-in USB stick. Only the release screen asks, so a
+    stick is never looked at - let alone acted on - unless someone is there."""
+    try:
+        from release import state as release_state
+        from release import trust as release_trust
+        from release import usb_source
+        return usb_source.find(
+            upgrade_runner._device_arch(), release_state.read(_release_collection()),
+            os.environ.get('FLEXRUN_TRUST_DIR', release_trust.DEFAULT_TRUST_DIR))
+    except Exception as e:
+        print('could not read USB releases: {}'.format(e))
+        return []
+
+
+class UpgradeFromUsb(Resource):
+    """Install a release from a plugged-in USB stick. No network involved, so
+    unlike /upgrade there is no docker login to check."""
+
+    @auth.requires_auth
+    def post(self):
+        from flask import request
+        from release import usb_source
+
+        path = (request.get_json(silent=True) or {}).get('path')
+        offered = {r['path']: r for r in _usb_releases()}
+        if path not in offered:
+            return {'error': 'that release is not on a plugged-in USB stick'}, 400
+        if offered[path]['offer'] not in (usb_source.UPGRADE, usb_source.ROLLBACK):
+            return {'error': offered[path]['detail']}, 400
+
+        holder = upgrade_runner.lock_holder()
+        if holder is not None:
+            return {'error': 'An upgrade is already running on this device', 'pid': holder}, 409
+
+        home = os.environ['HOME']
+        runner = os.path.join(home, 'flex-run', 'system_server', 'upgrade_runner.py')
+        run_id = str(uuid.uuid4())
+        log = upgrade_runner.log_path(run_id)
+        try:
+            handle = open(log, 'ab', 0) if log else subprocess.DEVNULL
+        except IOError:
+            handle, log = subprocess.DEVNULL, None
+        try:
+            subprocess.Popen([sys.executable, runner, '--usb', run_id, path],
+                             stdout=handle, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
+                             start_new_session=True, close_fds=True)
+        except Exception as e:
+            return {'error': 'Could not start the install', 'detail': str(e)}, 500
+        finally:
+            if handle is not subprocess.DEVNULL:
+                handle.close()
+        return {'status': 'install started', 'id': run_id, 'log': log,
+                'release': offered[path]['release'], 'poll': '/upgrade_status'}, 202
+
+
 class UpgradeStatus(Resource):
     def get(self):
         return upgrade_runner.status()
@@ -344,9 +400,18 @@ class Releases(Resource):
     def get(self):
         import cloud_env
         if not cloud_env.release_control_available():
-            return {'release_control': False, 'installed': None, 'high_water': 0,
-                    'history': [], 'rollback_targets': [], 'available': None,
-                    'update_available': False, 'rolled_back_from': None, 'channel': None}
+            # No release service to offer or roll back from - but what came
+            # from USB sticks is still worth showing, and so is the stick.
+            summary = {'installed': None, 'high_water': 0, 'history': []}
+            try:
+                from release import state as release_state
+                summary = release_state.summary(_release_collection())
+            except Exception as e:
+                print('could not read release state: {}'.format(e))
+            return {'release_control': False, 'installed': summary.get('installed'),
+                    'high_water': summary.get('high_water', 0), 'history': summary.get('history', []),
+                    'rollback_targets': [], 'available': None, 'update_available': False,
+                    'rolled_back_from': None, 'channel': None, 'usb': _usb_releases()}
         try:
             from release import state as release_state
             collection = _release_collection()
@@ -373,6 +438,7 @@ class Releases(Resource):
             summary['trust'] = {'count': 0, 'keys': [], 'unavailable': str(e)}
 
         summary['release_control'] = True
+        summary['usb'] = _usb_releases()
         return summary
 
 
@@ -780,6 +846,7 @@ def register_routes(api):
     api.add_resource(SystemVersions, '/system_versions')
     api.add_resource(Releases, '/releases')
     api.add_resource(ReleaseChannel, '/release_channel')
+    api.add_resource(UpgradeFromUsb, '/upgrade_usb')
     api.add_resource(Rollback, '/rollback')
     api.add_resource(SystemIsUptodate, '/system_uptodate')
     api.add_resource(StartTeamviewer, '/start_teamviewer')
