@@ -202,6 +202,7 @@ class TestWriteBundle:
         assert os.path.exists(os.path.join(root, 'flexrun.bundle'))
         assert not [n for n in os.listdir(os.path.join(root, 'images')) if n.endswith('.partial')]
         assert index['pythons'] == ['py310', 'py312', 'py38']
+        assert open(os.path.join(root, 'install.sh')).read() == open(usb.INSTALLER).read()
         assert open(os.path.join(root, 'packages', 'requirements.txt')).read() == 'Flask==2.3.3\n'
 
     def test_packages_are_fetched_per_python_and_written_as_this_user(self, stick, release):
@@ -243,3 +244,8 @@ class TestWriteBundle:
                              mounts_file=stick['mounts'], sys_root=stick['sys'], log=lambda *_: None)
         assert tools.calls == []
         assert os.listdir(str(local)) == []
+
+
+def test_the_first_install_script_parses():
+    import subprocess
+    assert subprocess.run(['sh', '-n', usb.INSTALLER]).returncode == 0

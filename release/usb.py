@@ -27,6 +27,9 @@ Under flexrun-releases/<release>-<arch>-<counter>/ on the stick:
                                 device may run, as that Python would pick them
                                 online: wheels where they exist, sources the
                                 device builds where they do not
+  install.sh                    the first install on a device whose software
+                                predates USB releases; later ones install from
+                                Settings > System
   bundle.json                   what is where - written last, so a stick pulled
                                 out part-way is never taken for a release
 """
@@ -48,6 +51,7 @@ BUNDLE_SCHEMA = 'flexrun.usb/v1'
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 RELEASES_JSON = os.path.join(REPO, 'release', 'cloudfunction', 'releases.json')
 KEYS_DIR = os.path.join(REPO, 'release', 'keys')
+INSTALLER = os.path.join(REPO, 'release', 'usb_install.sh')
 PLATFORMS = {'x86': ('linux', 'amd64'), 'arm': ('linux', 'arm64')}
 INDEX_TYPES = ('application/vnd.docker.distribution.manifest.list.v2+json',
                'application/vnd.oci.image.index.v1+json')
@@ -294,6 +298,7 @@ def write_bundle(target, arch='x86', channel='stable', counter=None, resolver=No
     flexrun_bundle(commit, os.path.join(root, 'flexrun.bundle'), runner=runner)
     log('  writing Python packages for {}'.format(', '.join(sorted(PYTHONS))))
     pythons = python_packages(root, commit, arch, runner=runner)
+    shutil.copyfile(INSTALLER, os.path.join(root, 'install.sh'))
 
     index = {'schema': BUNDLE_SCHEMA, 'release': parsed['release'], 'counter': counter,
              'arch': arch, 'flexrun_commit': commit, 'flexrun': 'flexrun.bundle',
