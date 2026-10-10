@@ -422,3 +422,62 @@ class TestDeviceArch:
         monkeypatch.setattr(device_utils, 'system_arch', lambda: 'riscv64')
 
         assert upgrade_runner._device_arch() == 'riscv64'
+
+
+class TestRunUsb:
+    """A USB install: prepared and proved from the stick, then the same apply
+    and record as an online release, with everything taken from the stick."""
+
+    LOADED = {'backend': 'sha256:' + '9' * 64, 'vision': 'sha256:' + '8' * 64}
+
+    def _go(self, monkeypatch, tmp_path, doc=None, installed=None, run_code=0, prepare_error=None):
+        from release import state as state_mod
+        events, captured = [], {}
+        doc = doc or document(counter=5)
+
+        def prepare(path, arch, state, trust_dir, now):
+            events.append('prepare')
+            if prepare_error:
+                raise prepare_error
+            return doc, dict(self.LOADED), '/media/s/flexrun.bundle', '/media/s/packages'
+
+        def run(run_id, versions, plan_path=None, commit=None, source=None, packages=None):
+            events.append('run')
+            captured.update(versions=versions, plan=open(plan_path).read(), commit=commit,
+                            source=source, packages=packages)
+            return run_code
+
+        def record_applied(collection, parsed, now=None, rolled_back=False):
+            events.append('record(rolled_back=%s)' % rolled_back)
+
+        monkeypatch.setattr(state_mod, 'read', lambda c: {
+            'high_water': 4, 'installed': {'counter': installed} if installed else None, 'history': []})
+        monkeypatch.setattr(state_mod, 'record_applied', record_applied)
+        monkeypatch.setattr(upgrade_runner, 'run', run)
+        code = upgrade_runner.run_usb('run-1', 'x86', '/media/s/2.0', collection=object(),
+                                      plan_path=str(tmp_path / 'plan'), trust_dir=str(tmp_path),
+                                      current={}, prepare=prepare)
+        return code, events, captured
+
+    def test_everything_comes_from_the_stick(self, monkeypatch, tmp_path):
+        code, events, captured = self._go(monkeypatch, tmp_path)
+        assert code == 0
+        assert events == ['prepare', 'run', 'record(rolled_back=False)']
+        assert captured['source'] == '/media/s/flexrun.bundle'
+        assert captured['packages'] == '/media/s/packages'
+        assert captured['commit'] == 'a' * 40
+        assert 'backend 1.999 ' + self.LOADED['backend'] in captured['plan']
+
+    def test_nothing_runs_when_the_stick_does_not_check_out(self, monkeypatch, tmp_path):
+        from release.usb_source import UsbSourceError
+        with pytest.raises(UsbSourceError):
+            self._go(monkeypatch, tmp_path, prepare_error=UsbSourceError('not the signed image'))
+
+    def test_a_failed_install_is_not_recorded(self, monkeypatch, tmp_path):
+        code, events, _ = self._go(monkeypatch, tmp_path, run_code=1)
+        assert code == 1
+        assert not any(e.startswith('record') for e in events)
+
+    def test_going_back_to_an_older_release_is_recorded_as_a_rollback(self, monkeypatch, tmp_path):
+        _, events, _ = self._go(monkeypatch, tmp_path, doc=document(counter=3), installed=5)
+        assert events[-1] == 'record(rolled_back=True)'

@@ -202,7 +202,7 @@ def _mark_failed(run_id, message):
         sys.stderr.write('[upgrade_runner] could not record failure: {}\n'.format(exc))
 
 
-def run(run_id, versions, plan_path=None, commit=None):
+def run(run_id, versions, plan_path=None, commit=None, source=None, packages=None):
     home = os.environ['HOME']
     flex_run = os.path.join(home, 'flex-run', 'upgrades', 'upgrade_flex_run.sh')
     upgrade_system = os.path.join(home, 'flex-run', 'system_server', 'upgrade_system.sh')
@@ -214,6 +214,9 @@ def run(run_id, versions, plan_path=None, commit=None):
     refresh_env = dict(os.environ)
     if commit:
         refresh_env['FLEXRUN_PIN_COMMIT'] = commit
+    # A USB release: flex-run comes from the stick, not GitHub.
+    if source:
+        refresh_env['FLEXRUN_SOURCE'] = source
     refresh = subprocess.run(['sh', flex_run], capture_output=True, text=True,
                              env=refresh_env)
     sys.stdout.write(refresh.stdout or '')
@@ -233,6 +236,8 @@ def run(run_id, versions, plan_path=None, commit=None):
     # started by an older runner still works.
     if plan_path:
         env['FLEXRUN_PLAN'] = plan_path
+    if packages:
+        env['FLEXRUN_PACKAGES'] = packages
     system = subprocess.run(['sh', upgrade_system] + list(versions), env=env)
 
     if system.returncode != 0:
@@ -351,11 +356,56 @@ def run_release(run_id, arch, channel='stable', counter=None,
     return 0
 
 
+def run_usb(run_id, arch, path, collection=None, now=None, plan_path=None,
+            trust_dir=None, current=None, prepare=None):
+    """Install a release from a USB stick, with no network.
+
+    The same order as run_release: nothing is applied until the signature,
+    the counter and every image check out, and nothing is recorded until the
+    containers moved. Everything - flex-run, images, Python packages - comes
+    from the stick.
+    """
+    import datetime as _dt
+    from release import apply as apply_mod
+    from release import state as state_mod
+    from release import trust as trust_mod
+    from release import usb_source
+
+    collection = collection if collection is not None else _release_collection()
+    now = now or _dt.datetime.utcnow()
+    plan_path = plan_path or PLAN_PATH
+    trust_dir = trust_dir or os.environ.get('FLEXRUN_TRUST_DIR', trust_mod.DEFAULT_TRUST_DIR)
+    prepare = prepare or usb_source.prepare
+
+    state = state_mod.read(collection)
+    parsed, local_refs, source, packages = prepare(path, arch, state, trust_dir, now)
+
+    if current is None:
+        current = _running_versions()
+    plan = apply_mod.plan(parsed, arch, current=current, plan_path=plan_path,
+                          local_refs=local_refs)
+    print('[upgrade_runner] USB release {} (counter {}) moves: {}'.format(
+        plan['release'], plan['counter'], ', '.join(plan['changing']) or 'nothing'))
+
+    code = run(run_id, plan['versions'], plan_path=plan['plan_path'],
+               commit=(parsed.get('flexrun') or {}).get('commit'),
+               source=source, packages=packages)
+    if code != 0:
+        return code
+
+    installed = (state.get('installed') or {}).get('counter')
+    state_mod.record_applied(collection, parsed, now=now,
+                             rolled_back=installed is not None and parsed['counter'] < installed)
+    print('[upgrade_runner] recorded release {} as installed'.format(plan['release']))
+    return 0
+
+
 USAGE = (
     'usage: upgrade_runner.py <run-id> <7 version args>\n'
     '       upgrade_runner.py --release  <run-id> [channel]\n'
     '                         (channel defaults to the device fvconfig)\n'
-    '       upgrade_runner.py --rollback <run-id> <counter>\n')
+    '       upgrade_runner.py --rollback <run-id> <counter>\n'
+    '       upgrade_runner.py --usb      <run-id> <release dir on a stick>\n')
 
 
 def _device_arch():
@@ -446,7 +496,7 @@ def main(argv):
     mode = argv[0] if argv[0].startswith('--') else None
     rest = argv[1:] if mode else argv
 
-    if mode in ('--release', '--rollback') and len(rest) < 1:
+    if mode in ('--release', '--rollback', '--usb') and len(rest) < 1:
         sys.stderr.write(USAGE)
         return 2
     if mode is None and len(argv) < 2:
@@ -470,6 +520,11 @@ def main(argv):
         if mode == '--release':
             channel = rest[1] if len(rest) > 1 else None
             return _release_or_legacy(run_id, channel)
+        if mode == '--usb':
+            if len(rest) < 2:
+                sys.stderr.write(USAGE)
+                return 2
+            return run_usb(run_id, _device_arch(), rest[1])
         return run(run_id, argv[1:])
     except Exception as exc:
         _mark_failed(run_id, 'Upgrade runner crashed: {}'.format(exc))
