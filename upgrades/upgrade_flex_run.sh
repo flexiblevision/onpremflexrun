@@ -4,16 +4,11 @@
 # resumes at the old offset, which must land in those spaces.
 # Refresh the flex-run orchestration tree from git.
 #
-# This script replaces the scripts that run immediately after it, so a partial
-# or wrong result here is worse than no result at all: the caller would go on to
-# run the OLD scripts against the NEW container versions. Every step is
-# therefore checked, and any failure exits non-zero with the live tree
-# untouched.
+# It replaces the scripts that run next, so a partial result is worse than none:
+# every step is checked, and a failure leaves the live tree untouched.
 #
-# --commit <sha> (or FLEXRUN_PIN_COMMIT) pins the tree to the commit a signed
-# release names. Without it we take branch tip, so whoever can move the branch
-# replaces the code that checks the signature. Unpinned stays the default
-# because first install has no manifest to read a commit from; it warns.
+# FLEXRUN_PIN_COMMIT pins the tree to the commit a signed release names.
+# Unpinned takes branch tip (first install has no manifest) and warns.
 #
 # Exit codes:  0 updated   10 bad config   11 clone failed
 #             12 clone tree invalid   13 not enough disk   14 copy failed
@@ -161,11 +156,8 @@ if [ "$FREE_KB" -lt "$((NEED_KB * 2))" ]; then
 fi
 
 # --- copy into place --------------------------------------------------------
-# Additive, matching previous behaviour: files removed upstream are NOT deleted
-# from the device. Do not "fix" that here with rsync --delete - the live tree
-# also holds untracked device state (setup/mqtt/ssl* certificates and private
-# keys, vernemq-local.conf, creds.txt) that a clean sync would destroy.
-# Pruning stale files needs an explicit keep-list; see R-07.
+# Additive: no rsync --delete - the live tree holds untracked device state (mqtt
+# certificates and keys, vernemq-local.conf, creds.txt). See R-07.
 log "updating $LIVE_TREE from $COMMIT"
 if ! cp -r "$TMP_TREE"/* "$LIVE_TREE"/; then
     fail "copy into $LIVE_TREE failed - tree may be inconsistent, do not continue"
@@ -185,9 +177,7 @@ else
     log "updated to $COMMIT (branch tip of '$BRANCH', unpinned)"
 fi
 
-# Devices installed before release signing existed have no trust store, and
-# they can only get one through this path. Not fatal: an older device that
-# cannot verify a manifest still runs, it just cannot take a signed release.
+# The only way a pre-signing device gets a trust store. Not fatal.
 if [ -x "$LIVE_TREE/setup/provision_trust.sh" ]; then
     "$LIVE_TREE/setup/provision_trust.sh" \
         || log "WARNING: could not provision release signing keys"
@@ -197,6 +187,5 @@ fi
 # replaced.
 sleep 3
 
-# This file was just replaced while sh still holds it open. Without an explicit
-# exit, sh reads on past the old end into the new file's tail and runs it.
+# sh still holds this replaced file open; without this it would run the new tail.
 exit 0

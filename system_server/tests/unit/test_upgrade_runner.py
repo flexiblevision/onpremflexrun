@@ -353,3 +353,14 @@ def test_the_refresh_script_ends_with_an_explicit_exit():
     path = os.path.join(os.path.dirname(upgrade_runner.__file__), '..', 'upgrades', 'upgrade_flex_run.sh')
     lines = [l.strip() for l in open(path) if l.strip() and not l.lstrip().startswith('#')]
     assert lines[-1] == 'exit 0'
+
+
+# Releases up to 1.35 run upgrade_flex_run.sh in place and without a closing
+# exit, so a device on one of them runs the tail of any longer replacement.
+LONGEST_UNPROTECTED_REFRESH = 7966
+
+
+def test_the_refresh_script_is_no_longer_than_the_unprotected_ones():
+    """Remove once no device runs 1.35 or older."""
+    path = os.path.join(os.path.dirname(upgrade_runner.__file__), '..', 'upgrades', 'upgrade_flex_run.sh')
+    assert os.path.getsize(path) <= LONGEST_UNPROTECTED_REFRESH
