@@ -32,7 +32,7 @@ fail() { echo "[upgrade_flex_run] ERROR: $*" >&2; }
 cleanup() { rm -rf "$TMP_TREE"; }
 trap cleanup EXIT HUP INT TERM
 
-# --- resolve the pin --------------------------------------------------------
+# resolve the pin
 PIN_COMMIT="${FLEXRUN_PIN_COMMIT:-}"
 # A USB release's flex-run: a git bundle on the stick, used instead of GitHub.
 SOURCE="${FLEXRUN_SOURCE:-}"
@@ -60,7 +60,7 @@ if [ -n "$PIN_COMMIT" ]; then
     fi
 fi
 
-# --- resolve the branch -----------------------------------------------------
+# resolve the branch
 # jq prints the string "null" and exits 0 when .branch is absent, so an
 # unchecked value here becomes `git clone --branch null`.
 if [ ! -r "$CONFIG" ]; then
@@ -81,7 +81,7 @@ case "$BRANCH" in
         ;;
 esac
 
-# --- clone ------------------------------------------------------------------
+# clone
 rm -rf "$TMP_TREE"
 
 # Shallow sha fetch is cheaper but not all remotes serve it; fall back to a full
@@ -130,7 +130,7 @@ else
     fi
 fi
 
-# --- verify what we cloned --------------------------------------------------
+# verify what we cloned
 for sentinel in $SENTINELS; do
     if [ ! -f "$TMP_TREE/$sentinel" ]; then
         fail "cloned tree is missing $sentinel - not copying it over the live tree"
@@ -146,7 +146,7 @@ if [ -n "$PIN_COMMIT" ] && [ "$COMMIT" != "$PIN_COMMIT" ]; then
     exit 15
 fi
 
-# --- check there is room before starting the copy ---------------------------
+# check there is room before starting the copy
 # A copy that runs out of space part-way leaves a tree matching no commit.
 NEED_KB="$(du -sk "$TMP_TREE" | awk '{print $1}')"
 FREE_KB="$(df -Pk "$LIVE_TREE" | awk 'NR==2 {print $4}')"
@@ -155,7 +155,7 @@ if [ "$FREE_KB" -lt "$((NEED_KB * 2))" ]; then
     exit 13
 fi
 
-# --- copy into place --------------------------------------------------------
+# copy into place
 # Additive: no rsync --delete - the live tree holds untracked device state (mqtt
 # certificates and keys, vernemq-local.conf, creds.txt). See R-07.
 log "updating $LIVE_TREE from $COMMIT"
@@ -164,8 +164,7 @@ if ! cp -r "$TMP_TREE"/* "$LIVE_TREE"/; then
     exit 14
 fi
 
-# pinned= matters during an incident: "which code is this?" and "did a release
-# vouch for it?" are different questions.
+# pinned= says whether a signed release vouched for this code.
 printf 'commit=%s\nbranch=%s\npinned=%s\nupdated=%s\n' \
     "$COMMIT" "$BRANCH" "$([ -n "$PIN_COMMIT" ] && echo yes || echo no)" \
     "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \

@@ -356,8 +356,9 @@ def test_the_refresh_script_ends_with_an_explicit_exit():
 
 
 # Releases up to 1.35 run upgrade_flex_run.sh in place and without a closing
-# exit, so a device on one of them runs the tail of any longer replacement.
-LONGEST_UNPROTECTED_REFRESH = 7966
+# exit, so a device on one of them runs the tail of any longer replacement. The
+# shortest of those still on devices is 7040 bytes (3bb28a4); 1.35's is 7966.
+LONGEST_UNPROTECTED_REFRESH = 7040
 
 
 def test_the_refresh_script_is_no_longer_than_the_unprotected_ones():
