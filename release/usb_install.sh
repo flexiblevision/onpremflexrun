@@ -29,7 +29,9 @@ TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
 echo "Installing flex-run ${COMMIT} from the USB stick..."
-git clone --quiet "$HERE/flexrun.bundle" "$TMP/flex-run"
+# Unbundle, not clone: git 2.43 clones only refs/heads from a bundle.
+git init --quiet "$TMP/flex-run"
+git -C "$TMP/flex-run" bundle unbundle "$HERE/flexrun.bundle" >/dev/null
 git -C "$TMP/flex-run" checkout --quiet "$COMMIT"
 FLEXRUN_SOURCE="$HERE/flexrun.bundle" FLEXRUN_PIN_COMMIT="$COMMIT" \
     sh "$TMP/flex-run/upgrades/upgrade_flex_run.sh"

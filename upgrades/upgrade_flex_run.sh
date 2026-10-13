@@ -88,7 +88,11 @@ rm -rf "$TMP_TREE"
 # clone rather than dropping back to branch tip.
 clone_pinned() {
     if [ -n "$SOURCE" ]; then
-        git clone --quiet "$SOURCE" "$TMP_TREE" || return 1
+        # Unbundle, not clone: git 2.43 clones only refs/heads from a bundle, and
+        # older sticks keep the commit under refs/flexrun-usb/.
+        mkdir -p "$TMP_TREE" || return 1
+        git -C "$TMP_TREE" init --quiet || return 1
+        git -C "$TMP_TREE" bundle unbundle "$SOURCE" >/dev/null || return 1
         git -C "$TMP_TREE" checkout --quiet "$PIN_COMMIT" || return 1
         return 0
     fi
