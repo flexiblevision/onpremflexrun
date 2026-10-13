@@ -87,9 +87,11 @@ BRIDGE_TRANSPORT="${BRIDGE_TRANSPORT:-$_default_transport}"
 BRIDGE_KEY="vmq_bridge.${BRIDGE_TRANSPORT}.gke"
 
 if [ "$BRIDGE_TRANSPORT" = "ssl" ]; then
-    # cafile is the CA bundle inside the vernemq image, not on the host.
+    # cafile is the CA bundle inside the vernemq image, not on the host. depth
+    # defaults to 1 intermediate; Let's Encrypt's chain has 2.
     TLS_BLOCK="${BRIDGE_KEY}.insecure = off
 ${BRIDGE_KEY}.cafile = /etc/ssl/certs/ca-certificates.crt
+${BRIDGE_KEY}.depth = 3
 ${BRIDGE_KEY}.tls_version = tlsv1.2"
 else
     TLS_BLOCK=""

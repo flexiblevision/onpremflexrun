@@ -264,6 +264,19 @@ class TestFlexRunFromUsbBundle:
         assert result.returncode == 0, result.stdout + result.stderr
         assert (usb['home'] / 'flex-run' / 'deploy.py').read_text() == 'RELEASED-CODE\n'
 
+    def test_a_commit_held_outside_refs_heads_is_installed(self, usb, tmp_path):
+        """Sticks already written keep the commit under refs/flexrun-usb/, which
+        git 2.43's clone of a bundle skips."""
+        source = str(tmp_path / 'source')
+        ref = 'refs/flexrun-usb/' + usb['released']
+        subprocess.run(['git', '-C', source, 'update-ref', ref, usb['released']], check=True)
+        bundle = tmp_path / 'stick' / 'written.bundle'
+        subprocess.run(['git', '-C', source, 'bundle', 'create', str(bundle), ref],
+                       check=True, capture_output=True)
+        result = self._run(usb, FLEXRUN_SOURCE=str(bundle), FLEXRUN_PIN_COMMIT=usb['released'])
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert (usb['home'] / 'flex-run' / 'deploy.py').read_text() == 'RELEASED-CODE\n'
+
     def test_a_source_without_a_pin_is_refused(self, usb):
         result = self._run(usb, FLEXRUN_SOURCE=usb['bundle'], FLEXRUN_PIN_COMMIT='')
         assert result.returncode != 0
@@ -1260,7 +1273,28 @@ class TestEnsureBridgeTls:
         assert conf.read_text() == INSECURE_CONF.replace(
             'vmq_bridge.ssl.gke.insecure = on\n',
             'vmq_bridge.ssl.gke.insecure = off\n'
-            'vmq_bridge.ssl.gke.cafile = %s\n' % CA_BUNDLE)
+            'vmq_bridge.ssl.gke.cafile = %s\n'
+            'vmq_bridge.ssl.gke.depth = 3\n' % CA_BUNDLE)
+
+    def test_a_verifying_bridge_without_depth_gets_it(self, sh, conf):
+        """Devices migrated before depth was set reject Let's Encrypt's
+        two-intermediate chain, so the bridge never connects."""
+        conf.write_text(INSECURE_CONF.replace(
+            'vmq_bridge.ssl.gke.insecure = on\n',
+            'vmq_bridge.ssl.gke.insecure = off\n'
+            'vmq_bridge.ssl.gke.cafile = %s\n' % CA_BUNDLE))
+        assert 'changed=1' in self._apply(sh, conf).stdout
+        assert re.findall(r'^vmq_bridge\.ssl\.gke\.depth = (.*)$', conf.read_text(), re.M) == ['3']
+
+    def test_a_depth_too_short_for_the_chain_is_raised(self, sh, conf):
+        conf.write_text(INSECURE_CONF + 'vmq_bridge.ssl.gke.depth = 1\n')
+        self._apply(sh, conf)
+        assert re.findall(r'^vmq_bridge\.ssl\.gke\.depth = (.*)$', conf.read_text(), re.M) == ['3']
+
+    def test_a_deeper_depth_is_kept(self, sh, conf):
+        conf.write_text(INSECURE_CONF + 'vmq_bridge.ssl.gke.depth = 5\n')
+        self._apply(sh, conf)
+        assert re.findall(r'^vmq_bridge\.ssl\.gke\.depth = (.*)$', conf.read_text(), re.M) == ['5']
 
     def test_is_idempotent(self, sh, conf):
         self._apply(sh, conf)
@@ -1281,7 +1315,8 @@ class TestEnsureBridgeTls:
         self._apply(sh, conf)
         assert conf.read_text().endswith(
             'vmq_bridge.ssl.gke.insecure = off\n'
-            'vmq_bridge.ssl.gke.cafile = %s\n' % CA_BUNDLE)
+            'vmq_bridge.ssl.gke.cafile = %s\n'
+            'vmq_bridge.ssl.gke.depth = 3\n' % CA_BUNDLE)
 
     def test_tcp_bridge_is_left_alone(self, sh, conf):
         tcp = INSECURE_CONF.replace('vmq_bridge.ssl.', 'vmq_bridge.tcp.')
@@ -1311,6 +1346,7 @@ class TestEnsureBridgeTls:
         text = out.read_text()
         assert 'vmq_bridge.ssl.gke.insecure = off\n' in text
         assert 'vmq_bridge.ssl.gke.cafile = %s\n' % CA_BUNDLE in text
+        assert 'vmq_bridge.ssl.gke.depth = 3\n' in text
         assert 'changed=0' in self._apply(sh, out).stdout
 
     def test_fresh_local_cloud_config_has_no_tls(self, sh):
@@ -1323,7 +1359,7 @@ class TestEnsureBridgeTls:
         assert result.returncode == 0, result.stdout + result.stderr
         text = out.read_text()
         assert 'vmq_bridge.tcp.gke = 10.0.0.5:31883\n' in text
-        assert 'insecure' not in text and 'cafile' not in text
+        assert 'insecure' not in text and 'cafile' not in text and 'depth' not in text
 
 
 # --------------------------------------------------------------------------
