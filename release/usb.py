@@ -2,7 +2,7 @@
 Write a published release onto a USB stick, for a device with no route to the
 release service.
 
-    ./release_cut_usb.sh                     # finds the stick, asks which release
+    ./usb_release_writer.sh                     # finds the stick, asks which release
     python3 -m release.usb /media/$USER/STICK --channel stable
     python3 -m release.usb /media/$USER/STICK --channel beta
     python3 -m release.usb /media/$USER/STICK --counter 39 --arch arm
