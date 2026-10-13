@@ -65,7 +65,8 @@ install_crontab
 enable_mqtt
 
 ensure_bridge_topics
-if [ "${BRIDGE_TOPICS_CHANGED:-0}" = 1 ] && \
+ensure_bridge_tls
+if { [ "${BRIDGE_TOPICS_CHANGED:-0}" = 1 ] || [ "${BRIDGE_TLS_CHANGED:-0}" = 1 ]; } && \
    docker ps -a --format '{{.Names}}' | grep -qx vernemq; then
     docker restart vernemq
 fi

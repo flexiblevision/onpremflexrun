@@ -154,6 +154,60 @@ ensure_bridge_topics() {
     printf '%s\n' "$missing" | sed 's/^/added bridge topic: /'
 }
 
+# ensure_bridge_tls [config]
+#
+# Configs generated before build.sh verified the cloud broker carry
+# insecure = on, which accepts any certificate. Turns verification on for an ssl
+# bridge; a tcp (local-cloud) bridge has no TLS and is left alone. A cafile
+# already set is kept. Sets BRIDGE_TLS_CHANGED=1 when it wrote, so the caller
+# restarts the broker.
+ensure_bridge_tls() {
+    local conf="${1:-$HOME/flex-run/setup/mqtt/vernemq-local.conf}"
+    local key tmp
+
+    BRIDGE_TLS_CHANGED=0
+
+    [ -f "$conf" ] || return 0
+    key="$(sed -n 's/^\(vmq_bridge\.ssl\.[A-Za-z0-9_]*\)[[:space:]]*=.*/\1/p' "$conf" | head -1)"
+    [ -n "$key" ] || return 0
+
+    tmp="$conf.flexrun.$$"
+    if ! awk -v key="$key" -v cafile=/etc/ssl/certs/ca-certificates.crt '
+        { k = $0; sub(/[ \t]*=.*/, "", k) }
+        FNR == NR { if (k == key ".cafile") hasca = 1; next }
+        k == key ".insecure" {
+            print key ".insecure = off"
+            if (!hasca) print key ".cafile = " cafile
+            hasca = 1; set = 1; next
+        }
+        { print }
+        END {
+            if (!set) print key ".insecure = off"
+            if (!hasca) print key ".cafile = " cafile
+        }
+    ' "$conf" "$conf" >"$tmp"; then
+        echo "ERROR: could not rewrite $conf - bridge TLS not updated"
+        rm -f "$tmp"
+        return 1
+    fi
+
+    if cmp -s "$tmp" "$conf"; then
+        rm -f "$tmp"
+        return 0
+    fi
+
+    chown --reference="$conf" "$tmp" 2>/dev/null || true
+    chmod --reference="$conf" "$tmp" 2>/dev/null || true
+    if ! mv -f "$tmp" "$conf"; then
+        echo "ERROR: could not install new $conf"
+        rm -f "$tmp"
+        return 1
+    fi
+
+    BRIDGE_TLS_CHANGED=1
+    echo "enabled certificate verification for $key in $conf"
+}
+
 # ---- container swap, with a way back ---------------------------------------
 #
 # The upgrade path removes a container and then creates the new one, so a

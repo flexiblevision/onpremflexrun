@@ -1227,6 +1227,106 @@ class TestEnsureBridgeTopics:
 
 
 # --------------------------------------------------------------------------
+# ensure_bridge_tls - installed devices verify the cloud broker's certificate
+# --------------------------------------------------------------------------
+
+CA_BUNDLE = '/etc/ssl/certs/ca-certificates.crt'
+
+INSECURE_CONF = (
+    'plugins.vmq_bridge = on\n'
+    'vmq_bridge.ssl.gke = mqtt-dev.flexiblevision.com:443\n'
+    'vmq_bridge.ssl.gke.password = device-token\n'
+    'vmq_bridge.ssl.gke.insecure = on\n'
+    'vmq_bridge.ssl.gke.tls_version = tlsv1.2\n'
+    'vmq_bridge.ssl.gke.topic.1 = devices/+/system/sync out 0\n')
+
+
+class TestEnsureBridgeTls:
+
+    @pytest.fixture
+    def conf(self, sh):
+        path = sh.tmp / 'vernemq-local.conf'
+        path.write_text(INSECURE_CONF)
+        os.chmod(str(path), 0o644)
+        return path
+
+    def _apply(self, sh, conf):
+        return sh('. %s\nensure_bridge_tls %s\n'
+                  'echo "rc=$? changed=$BRIDGE_TLS_CHANGED"' % (LIB, conf))
+
+    def test_insecure_bridge_is_made_to_verify(self, sh, conf):
+        result = self._apply(sh, conf)
+        assert 'changed=1' in result.stdout
+        assert conf.read_text() == INSECURE_CONF.replace(
+            'vmq_bridge.ssl.gke.insecure = on\n',
+            'vmq_bridge.ssl.gke.insecure = off\n'
+            'vmq_bridge.ssl.gke.cafile = %s\n' % CA_BUNDLE)
+
+    def test_is_idempotent(self, sh, conf):
+        self._apply(sh, conf)
+        once = conf.read_text()
+        assert 'changed=0' in self._apply(sh, conf).stdout
+        assert conf.read_text() == once
+
+    def test_existing_cafile_is_kept(self, sh, conf):
+        conf.write_text(INSECURE_CONF + 'vmq_bridge.ssl.gke.cafile = /vernemq/etc/private-ca.pem\n')
+        self._apply(sh, conf)
+        text = conf.read_text()
+        assert 'vmq_bridge.ssl.gke.insecure = off\n' in text
+        assert re.findall(r'^vmq_bridge\.ssl\.gke\.cafile = (.*)$', text, re.M) == \
+            ['/vernemq/etc/private-ca.pem']
+
+    def test_missing_insecure_line_is_added(self, sh, conf):
+        conf.write_text(INSECURE_CONF.replace('vmq_bridge.ssl.gke.insecure = on\n', ''))
+        self._apply(sh, conf)
+        assert conf.read_text().endswith(
+            'vmq_bridge.ssl.gke.insecure = off\n'
+            'vmq_bridge.ssl.gke.cafile = %s\n' % CA_BUNDLE)
+
+    def test_tcp_bridge_is_left_alone(self, sh, conf):
+        tcp = INSECURE_CONF.replace('vmq_bridge.ssl.', 'vmq_bridge.tcp.')
+        conf.write_text(tcp)
+        result = self._apply(sh, conf)
+        assert 'rc=0 changed=0' in result.stdout
+        assert conf.read_text() == tcp
+
+    def test_mode_is_kept_for_the_broker_container(self, sh, conf):
+        self._apply(sh, conf)
+        assert stat.S_IMODE(os.stat(str(conf)).st_mode) == 0o644
+
+    def test_no_config_is_left_for_setup(self, sh):
+        path = sh.tmp / 'nope.conf'
+        assert 'rc=0' in self._apply(sh, path).stdout
+        assert not path.exists()
+
+    def test_fresh_config_already_verifies(self, sh):
+        """build.sh and the upgrade must agree."""
+        out = sh.tmp / 'fresh.conf'
+        (sh.tmp / 'home').mkdir(exist_ok=True)
+        (sh.tmp / 'home' / 'fvconfig.json').write_text('{"environ": "cloud", "device_id": "FV-T"}')
+        _write_stub(sh.stubs, 'docker', 'exit 1\n')
+        result = sh('sh %s --allow-placeholder' % BUILD_SH,
+                    env={'CONFIG_FILE': str(out), 'BRIDGE_PASSWORD': 'x'})
+        assert result.returncode == 0, result.stdout + result.stderr
+        text = out.read_text()
+        assert 'vmq_bridge.ssl.gke.insecure = off\n' in text
+        assert 'vmq_bridge.ssl.gke.cafile = %s\n' % CA_BUNDLE in text
+        assert 'changed=0' in self._apply(sh, out).stdout
+
+    def test_fresh_local_cloud_config_has_no_tls(self, sh):
+        out = sh.tmp / 'fresh.conf'
+        (sh.tmp / 'home').mkdir(exist_ok=True)
+        (sh.tmp / 'home' / 'fvconfig.json').write_text(
+            '{"environ": "local", "device_id": "FV-T", "cloud_domain": "10.0.0.5"}')
+        _write_stub(sh.stubs, 'docker', 'exit 1\n')
+        result = sh('sh %s' % BUILD_SH, env={'CONFIG_FILE': str(out)})
+        assert result.returncode == 0, result.stdout + result.stderr
+        text = out.read_text()
+        assert 'vmq_bridge.tcp.gke = 10.0.0.5:31883\n' in text
+        assert 'insecure' not in text and 'cafile' not in text
+
+
+# --------------------------------------------------------------------------
 # install_crontab - one atomic replace, site entries preserved
 # --------------------------------------------------------------------------
 
