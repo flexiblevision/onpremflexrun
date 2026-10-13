@@ -10,7 +10,7 @@
     },
     "x86": {
       "backend": "1.1021",
-      "frontend": "1.1027",
+      "frontend": "1.1028",
       "nodecreator": "0.51",
       "prediction": "0.51",
       "predictlite": "1.999",
