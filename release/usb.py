@@ -2,7 +2,8 @@
 Write a published release onto a USB stick, for a device with no route to the
 release service.
 
-    python3 -m release.usb /media/$USER/STICK                # what stable is, x86
+    ./release_cut_usb.sh                     # finds the stick, asks which release
+    python3 -m release.usb /media/$USER/STICK --channel stable
     python3 -m release.usb /media/$USER/STICK --channel beta
     python3 -m release.usb /media/$USER/STICK --counter 39 --arch arm
 
@@ -141,6 +142,26 @@ def removable_target(path, mounts_file='/proc/mounts', sys_root='/sys'):
     return found[0]
 
 
+def find_stick(mounts_file='/proc/mounts', sys_root='/sys'):
+    """The one mounted removable drive. Guessing between two would write
+    several GB to whichever came first."""
+    points = []
+    with open(mounts_file) as handle:
+        for line in handle:
+            fields = line.split()
+            if len(fields) < 2 or not _is_removable(fields[0], sys_root):
+                continue
+            point = fields[1].replace('\\040', ' ')
+            if point not in points:
+                points.append(point)
+    if not points:
+        raise UsbError('no USB stick is mounted - plug one in, or give its path')
+    if len(points) > 1:
+        raise UsbError('more than one USB stick is mounted - give the path of the one to write:\n  '
+                       + '\n  '.join(points))
+    return points[0]
+
+
 # --- the release ------------------------------------------------------------
 
 def published_release(arch, channel='stable', counter=None, releases_path=RELEASES_JSON):
@@ -156,6 +177,42 @@ def published_release(arch, channel='stable', counter=None, releases_path=RELEAS
     if not entry:
         raise UsbError('release {} is not published for {}'.format(counter, arch))
     return int(counter), base64.b64decode(entry['manifest_b64']), entry['signature']
+
+
+def channel_choices(arch, releases_path=RELEASES_JSON):
+    """[(channel, counter, release version)] for each channel with a release."""
+    with open(releases_path) as handle:
+        channels = (json.load(handle).get('channels') or {}).get(arch) or {}
+    choices = []
+    for channel in ('stable', 'beta'):
+        if channels.get(channel) is None:
+            continue
+        counter, raw, _ = published_release(arch, channel, releases_path=releases_path)
+        choices.append((channel, counter, json.loads(raw).get('release', '?')))
+    return choices
+
+
+def ask_release(arch, read=input, write=sys.stderr.write, releases_path=RELEASES_JSON):
+    """Counter the person picks, from what each channel serves."""
+    choices = channel_choices(arch, releases_path)
+    if not choices:
+        raise UsbError('nothing is promoted for {} - pass --counter'.format(arch))
+    write('\nWhich release goes on the stick?\n')
+    for n, (channel, counter, version) in enumerate(choices, 1):
+        write('  {}) {} - release {} (counter {})\n'.format(n, channel, version, counter))
+    write('  or type a counter number\n')
+    while True:
+        answer = read('choice [1]: ').strip() or '1'
+        if answer.isdigit() and 1 <= int(answer) <= len(choices):
+            return choices[int(answer) - 1][1]
+        if answer.isdigit():
+            try:
+                published_release(arch, counter=int(answer), releases_path=releases_path)
+                return int(answer)
+            except UsbError as exc:
+                write('{}\n'.format(exc))
+                continue
+        write('not a choice\n')
 
 
 def write_signed(directory, raw, signature, keys_dir=KEYS_DIR):
@@ -312,16 +369,25 @@ def write_bundle(target, arch='x86', channel='stable', counter=None, resolver=No
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description='Write a published release onto a USB stick.')
-    parser.add_argument('target', help='where the USB stick is mounted, e.g. /media/$USER/STICK')
+    parser.add_argument('target', nargs='?',
+                        help='where the USB stick is mounted; found when only one is')
     parser.add_argument('--arch', default='x86', choices=sorted(PLATFORMS))
     which = parser.add_mutually_exclusive_group()
-    which.add_argument('--channel', default='stable', choices=('stable', 'beta'))
+    which.add_argument('--channel', choices=('stable', 'beta'),
+                       help='asked at a terminal, otherwise stable')
     which.add_argument('--counter', type=int, help='a specific published release')
     args = parser.parse_args(argv)
 
     from release.registry import DockerHubResolver
     try:
-        write_bundle(args.target, arch=args.arch, channel=args.channel, counter=args.counter,
+        target = args.target or find_stick()
+        if args.channel is None and args.counter is None:
+            if sys.stdin.isatty():
+                args.counter = ask_release(args.arch)
+            else:
+                args.channel = 'stable'
+        print('writing to {}'.format(target))
+        write_bundle(target, arch=args.arch, channel=args.channel or 'stable', counter=args.counter,
                      resolver=DockerHubResolver(use_docker_config=True))
     except UsbError as exc:
         print('error: {}'.format(exc), file=sys.stderr)

@@ -90,6 +90,83 @@ class TestPublishedRelease:
             usb.published_release('x86', counter=99999)
 
 
+class TestFindStick:
+
+    def test_the_one_stick_is_found(self, stick):
+        assert usb.find_stick(stick['mounts'], stick['sys']) == stick['target']
+
+    def test_a_label_with_spaces(self, stick, tmp_path):
+        spaced = tmp_path / 'media' / 'alec' / 'FV Release'
+        spaced.mkdir()
+        open(stick['mounts'], 'w').write(
+            '/dev/nvme0n1p2 / ext4 rw 0 0\n/dev/sdb1 {} ext4 rw 0 0\n'.format(
+                str(spaced).replace(' ', '\\040')))
+        assert usb.find_stick(stick['mounts'], stick['sys']) == str(spaced)
+
+    def test_no_stick_is_refused(self, stick):
+        open(stick['mounts'], 'w').write('/dev/nvme0n1p2 / ext4 rw 0 0\n')
+        with pytest.raises(usb.UsbError, match='no USB stick'):
+            usb.find_stick(stick['mounts'], stick['sys'])
+
+    def test_two_sticks_are_not_guessed_between(self, stick):
+        disk = stick['disk'].parent.parent / 'block' / 'sdc'
+        (disk / 'sdc1').mkdir(parents=True)
+        (disk / 'sdc1' / 'partition').write_text('1')
+        (disk / 'removable').write_text('1')
+        os.symlink(str(disk / 'sdc1'), os.path.join(stick['sys'], 'class', 'block', 'sdc1'))
+        with open(stick['mounts'], 'a') as handle:
+            handle.write('/dev/sdc1 /media/alec/OTHER exfat rw 0 0\n')
+        with pytest.raises(usb.UsbError, match='more than one') as raised:
+            usb.find_stick(stick['mounts'], stick['sys'])
+        assert '/media/alec/OTHER' in str(raised.value)
+
+
+@pytest.fixture
+def releases(tmp_path):
+    def entry(counter, version):
+        raw = json.dumps({'counter': counter, 'release': version}).encode()
+        return {'manifest_b64': base64.b64encode(raw).decode(), 'signature': 'sig'}
+    path = tmp_path / 'releases.json'
+    path.write_text(json.dumps({
+        'channels': {'x86': {'stable': 38, 'beta': 42}, 'arm': {'stable': None, 'beta': None}},
+        'releases': {'x86': {'38': entry(38, '1.34'), '40': entry(40, '1.36'),
+                             '42': entry(42, '1.38')}, 'arm': {}}}))
+    return str(path)
+
+
+class TestAskRelease:
+
+    def _ask(self, releases, answers, arch='x86'):
+        replies = iter(answers)
+        shown = []
+        counter = usb.ask_release(arch, read=lambda _: next(replies),
+                                  write=shown.append, releases_path=releases)
+        return counter, ''.join(shown)
+
+    def test_each_channel_is_offered_with_its_version(self, releases):
+        _, shown = self._ask(releases, [''])
+        assert 'stable - release 1.34 (counter 38)' in shown
+        assert 'beta - release 1.38 (counter 42)' in shown
+
+    def test_blank_takes_stable(self, releases):
+        assert self._ask(releases, [''])[0] == 38
+
+    def test_a_channel_by_number(self, releases):
+        assert self._ask(releases, ['2'])[0] == 42
+
+    def test_a_published_counter_typed_directly(self, releases):
+        assert self._ask(releases, ['40'])[0] == 40
+
+    def test_an_unpublished_counter_asks_again(self, releases):
+        counter, shown = self._ask(releases, ['41', 'x', '2'])
+        assert counter == 42
+        assert 'not published' in shown and 'not a choice' in shown
+
+    def test_an_arch_with_nothing_promoted_is_refused(self, releases):
+        with pytest.raises(usb.UsbError, match='nothing is promoted'):
+            self._ask(releases, [''], arch='arm')
+
+
 class TestWriteSigned:
 
     def test_a_published_release_verifies(self, tmp_path):
