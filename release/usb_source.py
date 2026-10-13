@@ -14,6 +14,7 @@ import json
 import os
 import subprocess
 import sys
+import tarfile
 
 from release import manifest as manifest_mod
 from release import verify as verify_mod
@@ -115,6 +116,56 @@ def prove_image(path, item, signed_digest, arch):
     return body['config']['digest']
 
 
+def saved_manifests(tar_path):
+    """{digest: manifest} for each image manifest in a `docker save` tar,
+    each checked against its digest."""
+    found = {}
+    try:
+        with tarfile.open(tar_path) as tar:
+            def blob(digest):
+                handle = tar.extractfile('blobs/sha256/' + digest.split(':', 1)[1])
+                raw = handle.read() if handle else b''
+                if sha256_digest(raw) != digest:
+                    raise UsbSourceError('{} holds a blob that does not match {}'.format(tar_path, digest))
+                return json.loads(raw)
+
+            pending = [m['digest'] for m in json.load(tar.extractfile('index.json')).get('manifests') or []]
+            while pending:
+                digest = pending.pop()
+                body = blob(digest)
+                if 'manifests' in body:
+                    pending.extend(m['digest'] for m in body['manifests'])
+                elif 'config' in body:
+                    found[digest] = body
+    except (KeyError, tarfile.TarError, ValueError, AttributeError):
+        return {}
+    return found
+
+
+def loaded_id(tar_path, config, runner):
+    """The local id of the image just loaded from tar_path, if it is the one
+    whose config the release signed.
+
+    The classic image store names an image by its config digest. The containerd
+    store (Docker 29's default) names it by its manifest - here the one `docker
+    save` wrote, not the registry's - so that manifest is read from the tar and
+    must name the signed config."""
+    try:
+        if runner(['docker', 'image', 'inspect', '--format', '{{.Id}}', config]) == config:
+            return config
+    except UsbSourceError:
+        pass
+    for digest, body in sorted(saved_manifests(tar_path).items()):
+        if (body.get('config') or {}).get('digest') != config:
+            continue
+        try:
+            if runner(['docker', 'image', 'inspect', '--format', '{{.Id}}', digest]) == digest:
+                return digest
+        except UsbSourceError:
+            continue
+    raise UsbSourceError('{} did not load as the signed image {}'.format(os.path.basename(tar_path), config))
+
+
 def prepare(path, arch, state, trust_dir, now, runner=run, log=print, roots=MEDIA_ROOTS):
     """(parsed, local image ids, flex-run bundle, packages dir) for an install.
 
@@ -144,12 +195,10 @@ def prepare(path, arch, state, trust_dir, now, runner=run, log=print, roots=MEDI
         item = (index.get('images') or {}).get(component)
         if not item:
             raise UsbSourceError('the stick has no image for {}'.format(component))
-        image_id = prove_image(path, item, entry['digest'], arch)
+        config = prove_image(path, item, entry['digest'], arch)
+        tar_path = os.path.join(path, item['tar'])
         log('[usb] loading {}'.format(component))
-        runner(['docker', 'load', '--quiet', '--input', os.path.join(path, item['tar'])])
-        loaded = runner(['docker', 'image', 'inspect', '--format', '{{.Id}}', image_id])
-        if loaded != image_id:
-            raise UsbSourceError('{} loaded as {} - not the signed image'.format(component, loaded))
-        local_refs[component] = image_id
+        runner(['docker', 'load', '--quiet', '--input', tar_path])
+        local_refs[component] = loaded_id(tar_path, config, runner)
 
     return parsed, local_refs, os.path.join(path, index.get('flexrun') or 'flexrun.bundle'), packages

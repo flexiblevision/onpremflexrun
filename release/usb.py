@@ -266,7 +266,8 @@ def flexrun_bundle(commit, path, repo=REPO, runner=run):
         runner(['git', 'cat-file', '-e', commit + '^{commit}'], cwd=repo)
     except UsbError:
         runner(['git', 'fetch', 'origin', commit], cwd=repo)
-    ref = 'refs/flexrun-usb/' + commit
+    # A branch, so a device whose code still clones the bundle gets the commit.
+    ref = 'refs/heads/flexrun-usb-' + commit
     runner(['git', 'update-ref', ref, commit], cwd=repo)
     try:
         runner(['git', 'bundle', 'create', path, ref], cwd=repo)
@@ -328,7 +329,11 @@ def write_bundle(target, arch='x86', channel='stable', counter=None, resolver=No
         log('  pulling {}'.format(ref))
         runner(['docker', 'pull', ref])
         image_id = runner(['docker', 'image', 'inspect', '--format', '{{.Id}}', ref])
-        if image_id != config:
+        # Classic store: the config digest. Containerd store: the manifest.
+        proven = {config, entry['digest']}
+        if platform_manifest is not None:
+            proven.add(sha256_digest(platform_manifest))
+        if image_id not in proven:
             raise UsbError('{} pulled as {} but the registry says {}'.format(ref, image_id, config))
         size = int(runner(['docker', 'image', 'inspect', '--format', '{{.Size}}', ref]))
         index_images[component] = {'reference': ref, 'image_id': image_id, 'size': size,

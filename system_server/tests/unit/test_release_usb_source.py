@@ -8,9 +8,11 @@ image it loads is the one the release signed.
 import base64
 import datetime
 import hashlib
+import io
 import json
 import os
 import sys
+import tarfile
 
 import pytest
 from cryptography.hazmat.primitives import hashes, serialization
@@ -136,6 +138,67 @@ class FakeDocker:
         return ''
 
 
+def saved_tar(path, config, blob_bytes=None):
+    """A `docker save` OCI tar whose one manifest names config. Returns its digest."""
+    manifest = json.dumps({'schemaVersion': 2, 'config': {'digest': config}, 'layers': []}).encode()
+    digest = digest_of(manifest)
+    index = json.dumps({'schemaVersion': 2, 'manifests': [{'digest': digest}]}).encode()
+    with tarfile.open(str(path), 'w') as tar:
+        for name, data in (('blobs/sha256/' + digest.split(':')[1], blob_bytes or manifest),
+                           ('index.json', index)):
+            info = tarfile.TarInfo(name)
+            info.size = len(data)
+            tar.addfile(info, io.BytesIO(data))
+    return digest
+
+
+class ContainerdDocker(FakeDocker):
+    """Docker 29's containerd store: images are known by manifest, not config."""
+
+    def __init__(self, known):
+        super().__init__()
+        self.known = set(known)
+
+    def __call__(self, cmd):
+        self.calls.append(cmd)
+        if cmd[:3] == ['docker', 'image', 'inspect']:
+            if cmd[-1] not in self.known:
+                raise us.UsbSourceError('Error response from daemon: No such image: ' + cmd[-1])
+            return cmd[-1]
+        return ''
+
+
+class TestContainerdStore:
+
+    def _stick(self, device, **tar_kwargs):
+        path = write_release(device['stick'], device['key'], counter=40)
+        saved = {}
+        for component in manifest_mod.FOUNDATIONAL:
+            config = json.loads(registry_manifest(component))['config']['digest']
+            saved[component] = saved_tar(path / 'images' / (component + '.tar'), config, **tar_kwargs)
+        return path, saved
+
+    def _prepare(self, device, path, docker):
+        return us.prepare(str(path), 'x86', state(installed=38, high_water=38), device['trust'], NOW,
+                          runner=docker, log=lambda *_: None, roots=device['roots'])
+
+    def test_each_image_runs_by_the_manifest_it_loaded_as(self, device):
+        path, saved = self._stick(device)
+        _, refs, _, _ = self._prepare(device, path, ContainerdDocker(saved.values()))
+        assert refs == saved
+
+    def test_a_saved_manifest_naming_another_config_is_refused(self, device):
+        path, _ = self._stick(device)
+        other = saved_tar(path / 'images' / 'backend.tar', 'sha256:' + 'e' * 64)
+        with pytest.raises(us.UsbSourceError, match='did not load as the signed image'):
+            self._prepare(device, path, ContainerdDocker([other]))
+
+    def test_a_blob_that_does_not_match_its_digest_is_refused(self, device):
+        path, saved = self._stick(device, blob_bytes=b'{"config": {"digest": "sha256:x"}}')
+        with pytest.raises(us.UsbSourceError):
+            self._prepare(device, path, ContainerdDocker(saved.values()))
+
+
 class TestPrepare:
 
     def _prepare(self, device, path, docker=None, **kwargs):
@@ -164,7 +227,7 @@ class TestPrepare:
     def test_an_image_that_loads_as_something_else_is_refused(self, device):
         path = write_release(device['stick'], device['key'], counter=40)
         backend_id = json.loads(registry_manifest('backend'))['config']['digest']
-        with pytest.raises(us.UsbSourceError, match='not the signed image'):
+        with pytest.raises(us.UsbSourceError, match='did not load as the signed image'):
             self._prepare(device, path, FakeDocker({backend_id: 'sha256:' + '0' * 64}),
                           installed=38, high_water=38)
 
