@@ -21,8 +21,7 @@ CONFIG="$HOME/fvconfig.json"
 LIVE_TREE="$HOME/flex-run"
 TMP_TREE="$HOME/flex-run-temp"
 
-# Files that must exist in a freshly cloned tree for it to be usable. If any is
-# missing we are not looking at flex-run and must not copy over the live tree.
+# Without all of these the clone is not flex-run and must not replace the live tree.
 SENTINELS='deploy.py requirements.txt system_server/server.py system_server/upgrade_runner.py upgrades/system_container_upgrades.sh upgrades/lib/deploy_common.sh'
 
 log()  { echo "[upgrade_flex_run] $*"; }
@@ -87,18 +86,16 @@ rm -rf "$TMP_TREE"
 # Shallow sha fetch is cheaper but not all remotes serve it; fall back to a full
 # clone rather than dropping back to branch tip.
 clone_pinned() {
+    mkdir -p "$TMP_TREE" || return 1
+    git -C "$TMP_TREE" init --quiet || return 1
+
+    # Not clone: git 2.43 clones only refs/heads from a bundle; older sticks use refs/flexrun-usb/.
     if [ -n "$SOURCE" ]; then
-        # Unbundle, not clone: git 2.43 clones only refs/heads from a bundle, and
-        # older sticks keep the commit under refs/flexrun-usb/.
-        mkdir -p "$TMP_TREE" || return 1
-        git -C "$TMP_TREE" init --quiet || return 1
         git -C "$TMP_TREE" bundle unbundle "$SOURCE" >/dev/null || return 1
         git -C "$TMP_TREE" checkout --quiet "$PIN_COMMIT" || return 1
         return 0
     fi
 
-    mkdir -p "$TMP_TREE" || return 1
-    git -C "$TMP_TREE" init --quiet || return 1
     git -C "$TMP_TREE" remote add origin "$REPO_URL" || return 1
 
     if git -C "$TMP_TREE" fetch --quiet --depth 1 origin "$PIN_COMMIT" 2>/dev/null; then
@@ -150,7 +147,6 @@ if [ -n "$PIN_COMMIT" ] && [ "$COMMIT" != "$PIN_COMMIT" ]; then
     exit 15
 fi
 
-# check there is room before starting the copy
 # A copy that runs out of space part-way leaves a tree matching no commit.
 NEED_KB="$(du -sk "$TMP_TREE" | awk '{print $1}')"
 FREE_KB="$(df -Pk "$LIVE_TREE" | awk 'NR==2 {print $4}')"
@@ -186,8 +182,7 @@ if [ -x "$LIVE_TREE/setup/provision_trust.sh" ]; then
         || log "WARNING: could not provision release signing keys"
 fi
 
-# Let filesystem writes settle before the caller executes the scripts we just
-# replaced.
+# Let writes settle before the caller runs the replaced scripts.
 sleep 3
 
 # sh still holds this replaced file open; without this it would run the new tail.
