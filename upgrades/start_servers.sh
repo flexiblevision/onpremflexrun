@@ -74,7 +74,7 @@ fi
 # forever hands its children our environment. A service left holding one run's
 # plan feeds it to any later upgrade_system.sh it spawns, which then ignores its
 # own version arguments.
-unset FLEXRUN_PLAN FLEXRUN_RUN_ID FLEXRUN_RECORDER
+unset FLEXRUN_PLAN FLEXRUN_RUN_ID FLEXRUN_RECORDER FLEXRUN_PACKAGES FLEXRUN_SOURCE FLEXRUN_PIN_COMMIT
 
 #restart worker server
 forever stop $HOME/flex-run/system_server/worker.py

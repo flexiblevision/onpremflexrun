@@ -78,6 +78,35 @@ class TestSuccessfulRefreshProceeds:
         # The seven version arguments must be passed through in order.
         assert system['cmd'][2:] == ['1.9.3'] * 7
 
+    def test_a_previous_usb_runs_settings_do_not_reach_an_online_run(self, monkeypatch):
+        """A service restarted by a USB install inherits its FLEXRUN_PACKAGES, and
+        the next online upgrade then looked for packages on a stick that was gone."""
+        monkeypatch.setenv('FLEXRUN_PACKAGES', '/media/old-stick/packages')
+        monkeypatch.setenv('FLEXRUN_SOURCE', '/media/old-stick/flexrun.bundle')
+        monkeypatch.setenv('FLEXRUN_PIN_COMMIT', 'a' * 40)
+        monkeypatch.setenv('FLEXRUN_TRUST_DIR', '/etc/flexrun/keys')
+        fake_run, calls = _sequence(refresh_rc=0, system_rc=0)
+        with patch('subprocess.run', side_effect=fake_run), \
+             patch.object(upgrade_runner, '_mark_failed'):
+            upgrade_runner.run('run-online', ['1.9.3'] * 7, commit='b' * 40)
+
+        refresh, system = calls
+        assert 'FLEXRUN_SOURCE' not in refresh['env']
+        assert refresh['env']['FLEXRUN_PIN_COMMIT'] == 'b' * 40
+        assert 'FLEXRUN_PACKAGES' not in system['env']
+        assert system['env']['FLEXRUN_TRUST_DIR'] == '/etc/flexrun/keys'
+
+    def test_a_usb_run_still_passes_its_own_settings(self):
+        fake_run, calls = _sequence(refresh_rc=0, system_rc=0)
+        with patch('subprocess.run', side_effect=fake_run), \
+             patch.object(upgrade_runner, '_mark_failed'):
+            upgrade_runner.run('run-usb', ['1.9.3'] * 7, commit='b' * 40,
+                               source='/media/stick/flexrun.bundle', packages='/media/stick/packages')
+
+        refresh, system = calls
+        assert refresh['env']['FLEXRUN_SOURCE'] == '/media/stick/flexrun.bundle'
+        assert system['env']['FLEXRUN_PACKAGES'] == '/media/stick/packages'
+
     def test_container_upgrade_failure_is_recorded(self):
         fake_run, calls = _sequence(refresh_rc=0, system_rc=2)
         with patch('subprocess.run', side_effect=fake_run), \

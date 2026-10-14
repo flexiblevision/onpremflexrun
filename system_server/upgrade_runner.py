@@ -226,6 +226,17 @@ def _run_copy(script, env):
         os.unlink(copy)
 
 
+# Set by a runner for its own children. One inherited from an earlier run - a
+# service restarted by a USB install keeps the stick's FLEXRUN_PACKAGES - would
+# make an online upgrade look for packages on a stick that is gone.
+PER_RUN_ENV = ('FLEXRUN_PIN_COMMIT', 'FLEXRUN_SOURCE', 'FLEXRUN_PACKAGES',
+               'FLEXRUN_PLAN', 'FLEXRUN_RUN_ID', 'FLEXRUN_RECORDER')
+
+
+def _clean_env():
+    return {k: v for k, v in os.environ.items() if k not in PER_RUN_ENV}
+
+
 def run(run_id, versions, plan_path=None, commit=None, source=None, packages=None):
     home = os.environ['HOME']
     flex_run = os.path.join(home, 'flex-run', 'upgrades', 'upgrade_flex_run.sh')
@@ -235,7 +246,7 @@ def run(run_id, versions, plan_path=None, commit=None, source=None, packages=Non
 
     # Without the pin the refresh takes the fvconfig branch tip, which need not
     # hold the code the release was signed against - or even this runner.
-    refresh_env = dict(os.environ)
+    refresh_env = _clean_env()
     if commit:
         refresh_env['FLEXRUN_PIN_COMMIT'] = commit
     # A USB release: flex-run comes from the stick, not GitHub.
@@ -252,7 +263,7 @@ def run(run_id, versions, plan_path=None, commit=None, source=None, packages=Non
         return refresh.returncode
 
     # The shell scripts record their own step progress against this id.
-    env = dict(os.environ, FLEXRUN_RUN_ID=run_id)
+    env = dict(_clean_env(), FLEXRUN_RUN_ID=run_id)
 
     # Set only when a verified manifest drove this run. Without it the deploy
     # scripts fall back to the positional versions, which is how an upgrade
