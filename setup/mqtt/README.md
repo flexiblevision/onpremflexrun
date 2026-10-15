@@ -81,7 +81,7 @@ print('OK')
 ### vernemq-local.conf
 
 Local VerneMQ configuration including:
-- **Listener**: TCP port 1883 (local devices)
+- **Listener**: TCP port 1883 on `127.0.0.1` only — local services use host networking. The cluster listener and Erlang node ports are loopback-only too, and each device has its own `distributed_cookie`.
 - **Webhooks**: JWT authentication via capture-service
 - **Bridge**: TLS connection to cloud broker on port 443
 

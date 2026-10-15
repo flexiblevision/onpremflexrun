@@ -130,9 +130,21 @@ if [ ! -r "$TOPICS_FILE" ]; then
 fi
 TOPIC_BLOCK="$(awk -v key="$BRIDGE_KEY" '!/^[[:space:]]*(#|$)/ { n++; print key ".topic." n " = " $1 " " $2 " " $3 }' "$TOPICS_FILE")"
 
+# The node cookie is the only thing guarding the broker's Erlang node interface,
+# and the image ships VerneMQ's public default. Keep a device's own across
+# rebuilds; mint one on a fresh box.
+BROKER_COOKIE="$(grep -E '^distributed_cookie' "$CONFIG_FILE" 2>/dev/null | sed 's/.*= *//')"
+if [ -z "$BROKER_COOKIE" ] || [ "$BROKER_COOKIE" = "vmq" ]; then
+    BROKER_COOKIE="$(head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n')"
+fi
+
 cat > "$CONFIG_FILE" <<EOF
-## Basic listener config
-listener.tcp.default = 0.0.0.0:1883
+## Listeners: loopback only. On-prem trusts every MQTT client and the node
+## interface runs code for anyone holding the cookie, so neither may face the
+## plant network. Local services (capdev, Node-RED) use host networking.
+listener.tcp.default = 127.0.0.1:1883
+listener.vmq.clustering = 127.0.0.1:44053
+distributed_cookie = ${BROKER_COOKIE}
 allow_anonymous = off
 
 ## Webhook plugin configuration

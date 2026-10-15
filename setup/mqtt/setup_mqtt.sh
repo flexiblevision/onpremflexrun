@@ -40,6 +40,21 @@ if [ ! -f "$CONFIG_FILE" ]; then
     fi
 fi
 
+# A box set up before the hardening keeps its generated config, so bring it to
+# the same listeners and a private cookie in place. Idempotent; a listener set
+# deliberately to something other than the old 0.0.0.0 default is left alone.
+harden_config() {
+    f="$1"
+    sed -i 's/^listener\.tcp\.default *= *0\.0\.0\.0:1883 *$/listener.tcp.default = 127.0.0.1:1883/' "$f"
+    grep -q '^listener\.vmq\.clustering' "$f" || printf '\nlistener.vmq.clustering = 127.0.0.1:44053\n' >> "$f"
+    cookie="$(grep -E '^distributed_cookie' "$f" | sed 's/.*= *//')"
+    if [ -z "$cookie" ] || [ "$cookie" = "vmq" ]; then
+        sed -i '/^distributed_cookie/d' "$f"
+        printf 'distributed_cookie = %s\n' "$(head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n')" >> "$f"
+    fi
+}
+harden_config "$CONFIG_FILE"
+
 # Stop and remove existing container if present
 if docker ps -a --format '{{.Names}}' | grep -q "^${CONTAINER_NAME}$"; then
     echo "Removing existing container..."
@@ -58,10 +73,12 @@ docker run -d \
     --name "$CONTAINER_NAME" \
     --restart unless-stopped \
     --network host \
+    -e ERL_EPMD_ADDRESS=127.0.0.1 \
+    -e "ERL_FLAGS=-kernel inet_dist_use_interface {127,0,0,1}" \
     --log-opt max-size=50m \
     --log-opt max-file=5 \
     -v "$CONFIG_FILE:/vernemq/etc/conf.d/local.conf:ro" \
     "$IMAGE_NAME"
 
-echo "MQTT broker started on localhost:1883"
+echo "MQTT broker started on 127.0.0.1:1883 (not reachable from the plant network)"
 echo "Config mounted from: $CONFIG_FILE"
