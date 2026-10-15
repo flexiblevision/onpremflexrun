@@ -21,7 +21,8 @@ already owns `device_id` binding under normal user auth. On-prem already calls
 
 ```jsonc
 PUT /api/assembly/stations/device/<device_id>
-{ "domains": ["inspection", "anomaly", "time_machine"] }
+{ "domains": ["inspection", "anomaly", "time_machine"],
+  "timezone": "America/Chicago" }
 
 // 200 — placed
 { "place": { "site_id": "SITE-FRE-02", "site_name": "Fremont Plant 2",
@@ -38,6 +39,12 @@ PUT /api/assembly/stations/device/<device_id>
 
 `GET` on the same path reads the place without reporting domains — for the
 indicator, and for a device that has nothing new to say.
+
+`timezone` is the device timezone from system settings, resolved as the
+webserver's `utils/device_time.name()` does, and omitted when it is not a known
+zone. It is the one source for how the site's data is presented: cloud records
+it on the device's site and refuses to change it there, so a change here shows in
+cloud on the next sync.
 
 Resolution is one query: a station denormalizes `site_id` and `line_id`, so
 `stations_db.find_one({'device_id': ...})` is the whole lookup. Names come from

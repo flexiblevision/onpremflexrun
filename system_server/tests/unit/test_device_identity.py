@@ -1,6 +1,6 @@
 """Domain reporting and place caching for the device identity sync."""
 import pytest
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch, MagicMock, mock_open
 
 from worker_scripts import device_identity as di
 
@@ -42,6 +42,54 @@ class TestReportedDomains:
             assert di.reported_domains() == []
 
 
+class TestDeviceTimezone:
+    """The zone sent is the one on-prem itself presents data in."""
+
+    def _with(self, setting=None, kiosk=None, host=None):
+        utils = patch.object(di.utils_db, 'find_one',
+                             return_value={'name': setting} if setting else None)
+        kiosk_coll = MagicMock()
+        kiosk_coll.find_one.return_value = (
+            {'cfg': {'localization': {'timezone': kiosk}}} if kiosk else None)
+        client = patch.object(di, '_client', {'fvonprem': {'kiosk_site_config': kiosk_coll}})
+        opener = patch('builtins.open', mock_open(read_data=host)) if host \
+            else patch('builtins.open', side_effect=FileNotFoundError)
+        return utils, client, opener
+
+    @pytest.mark.unit
+    def test_the_system_setting_wins(self):
+        utils, client, opener = self._with('America/Chicago', 'Europe/Berlin', 'UTC')
+        with utils, client, opener:
+            assert di.device_timezone() == 'America/Chicago'
+
+    @pytest.mark.unit
+    def test_then_the_legacy_kiosk_zone_then_the_host(self):
+        utils, client, opener = self._with(None, 'Europe/Berlin', 'UTC')
+        with utils, client, opener:
+            assert di.device_timezone() == 'Europe/Berlin'
+        utils, client, opener = self._with(None, None, 'Asia/Tokyo\n')
+        with utils, client, opener:
+            assert di.device_timezone() == 'Asia/Tokyo'
+
+    @pytest.mark.unit
+    def test_an_unknown_zone_is_not_reported(self):
+        utils, client, opener = self._with('Mars/Olympus')
+        with utils, client, opener:
+            assert di.device_timezone() is None
+
+    @pytest.mark.unit
+    def test_no_zone_omits_the_field(self):
+        res = MagicMock(status_code=200)
+        res.json.return_value = {'place': PLACE}
+        with patch.object(di, 'device_id', return_value='FV-I-1'), \
+             patch.object(di.addon_state, 'enabled', return_value=[]), \
+             patch.object(di, 'device_timezone', return_value=None), \
+             patch.object(di.utils_db, 'update_one'), \
+             patch('requests.put', return_value=res) as put:
+            di.push_device_identity('https://cloud.example', 'tok')
+        assert put.call_args[1]['json'] == {'domains': []}
+
+
 class TestPushDeviceIdentity:
     @pytest.mark.unit
     def test_reports_domains_and_caches_the_place(self):
@@ -50,13 +98,15 @@ class TestPushDeviceIdentity:
                                  'unavailable_domains': ['anomaly', 'waveform']}
         with patch.object(di, 'device_id', return_value='FV-I-1'), \
              patch.object(di.addon_state, 'enabled', return_value=['assembly']), \
+             patch.object(di, 'device_timezone', return_value='America/Chicago'), \
              patch.object(di.utils_db, 'update_one') as update, \
              patch('requests.put', return_value=res) as put:
             assert di.push_device_identity('https://cloud.example', 'tok') == PLACE
 
         assert put.call_args[0][0] == \
             'https://cloud.example/api/assembly/stations/device/FV-I-1'
-        assert put.call_args[1]['json'] == {'domains': ['assembly']}
+        assert put.call_args[1]['json'] == {'domains': ['assembly'],
+                                            'timezone': 'America/Chicago'}
         cached = update.call_args[0][1]['$set']
         assert cached['place'] == PLACE
         assert cached['unavailable_domains'] == ['anomaly', 'waveform']

@@ -1,10 +1,13 @@
-"""Report enabled domains to the cloud; cache the place it returns.
+"""Report enabled domains and the timezone to the cloud; cache the place it returns.
 
-Domains are a device fact, place is a cloud fact. See DEVICE_PLACEMENT.md.
+Domains and timezone are device facts, place is a cloud fact. See DEVICE_PLACEMENT.md.
+The device timezone is the one source for how the site's data is presented, in
+cloud as on-prem, so the cloud never sets its own.
 """
 import os
 import sys
 import time
+from zoneinfo import ZoneInfo
 
 import requests
 from pymongo import MongoClient
@@ -45,6 +48,35 @@ def reported_domains():
                    if name in ADDON_DOMAINS})
 
 
+def device_timezone():
+    """The zone on-prem presents data in, resolved as the webserver's
+    utils/device_time.name() does: the system setting, the legacy kiosk zone,
+    then the host's. None when none is a known zone."""
+    candidates = []
+    try:
+        rec = utils_db.find_one({'type': 'timezone'}) or {}
+        candidates.append(rec.get('name'))
+        kiosk = _client['fvonprem']['kiosk_site_config'].find_one({'_id': 'site'}) or {}
+        candidates.append(((kiosk.get('cfg') or {}).get('localization') or {}).get('timezone'))
+    except Exception as error:
+        print('device timezone lookup failed: {}'.format(error))
+    try:
+        with open('/etc/timezone') as fh:
+            candidates.append(fh.read().strip())
+    except Exception:
+        pass
+    name = next((c for c in candidates if c), None)
+    if not name:
+        return None
+    try:
+        ZoneInfo(name)
+    except Exception:
+        # The cloud refuses an unknown zone, and with it the domain report
+        print('device timezone {!r} is not a known zone; not reported'.format(name))
+        return None
+    return name
+
+
 def cached_place():
     """Where the cloud last said this device is, or None."""
     doc = utils_db.find_one({'type': PLACE_TYPE}, {'_id': 0})
@@ -52,10 +84,11 @@ def cached_place():
 
 
 def push_device_identity(cloud_domain, access_token):
-    """PUT the domains, cache the place. Never raises."""
+    """PUT the domains and timezone, cache the place. Never raises."""
     try:
         dev_id = device_id()
         domains = reported_domains()
+        tz = device_timezone()
     except Exception as error:
         print('device identity lookup failed: {}'.format(error))
         return None
@@ -65,7 +98,10 @@ def push_device_identity(cloud_domain, access_token):
     url = '{}/api/assembly/stations/device/{}'.format(
         cloud_domain.rstrip('/'), dev_id)
     try:
-        res = requests.put(url, json={'domains': domains},
+        payload = {'domains': domains}
+        if tz:
+            payload['timezone'] = tz
+        res = requests.put(url, json=payload,
                            headers={'Authorization': 'Bearer ' + access_token},
                            timeout=TIMEOUT)
         res.raise_for_status()
