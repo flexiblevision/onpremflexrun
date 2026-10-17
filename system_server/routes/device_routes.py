@@ -31,6 +31,30 @@ def _mongo():
     return _mongo_client
 
 
+OFFER_TTL = 600
+OFFER_TIMEOUT = 4
+_offer_cache = {'key': None, 'at': 0, 'offer': None}
+
+
+def _channel_offer(channel, high_water):
+    # device_info is polled and read by the hotspot page; a network check per
+    # read would stall both, so the offer is cached.
+    import time
+    key = (channel, high_water)
+    now = time.time()
+    if _offer_cache['key'] == key and now - _offer_cache['at'] < OFFER_TTL:
+        return _offer_cache['offer']
+    try:
+        import upgrade_runner
+        from release import fetch as fetch_mod
+        offer = fetch_mod.available(upgrade_runner._device_arch(), high_water,
+                                    channel=channel, timeout=OFFER_TIMEOUT)
+    except Exception as e:
+        offer = {'reachable': False, 'detail': str(e)}
+    _offer_cache.update(key=key, at=now, offer=offer)
+    return offer
+
+
 def _release_identity():
     """What this device is running and where it takes it from.
 
@@ -41,7 +65,8 @@ def _release_identity():
     because mongo is down.
     """
     identity = {'release': None, 'release_counter': None, 'release_channel': None,
-                'cloud': None, 'release_control': None, 'rollback_targets': []}
+                'cloud': None, 'release_control': None, 'rollback_targets': [],
+                'release_available': None, 'release_update_available': None}
 
     try:
         import cloud_env
@@ -66,7 +91,14 @@ def _release_identity():
 
     try:
         from release import state as release_state
-        summary = release_state.summary(_mongo()['fvonprem']['utils'])
+        collection = _mongo()['fvonprem']['utils']
+        offer = _channel_offer(identity['release_channel'],
+                               release_state.read(collection)['high_water'])
+        summary = release_state.summary(collection, available=offer)
+        # Left None when the channel could not be reached: unknown, not up to date.
+        if offer.get('reachable') and isinstance(offer.get('counter'), int):
+            identity['release_available'] = offer.get('release')
+            identity['release_update_available'] = summary.get('update_available')
         installed = summary.get('installed') or {}
         identity['release'] = installed.get('release')
         identity['release_counter'] = installed.get('counter')
