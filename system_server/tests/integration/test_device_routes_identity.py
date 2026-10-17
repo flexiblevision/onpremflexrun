@@ -119,13 +119,54 @@ class TestReleaseIdentity:
              patch('cloud_env.release_control_available', return_value=True), \
              patch('cloud_env.get_cloud_domain',
                    return_value='https://clouddeploy.api.flexiblevision.com'), \
-             patch('pymongo.MongoClient', return_value=client):
+             patch('pymongo.MongoClient', return_value=client), \
+             patch.object(dr, '_channel_offer', return_value={'reachable': False}):
             identity = dr._release_identity()
 
         assert identity == {'release': '1.4', 'release_counter': 8,
                             'release_channel': 'beta', 'cloud': 'dev',
                             'release_control': True,
-                            'rollback_targets': [{'counter': 5, 'release': '1.1'}]}
+                            'rollback_targets': [{'counter': 5, 'release': '1.1'}],
+                            'release_available': None,
+                            'release_update_available': None}
+
+    def _identity_with_offer(self, offer):
+        collection = MagicMock()
+        collection.find_one.return_value = {
+            'installed': {'counter': 8, 'release': '1.4'}, 'high_water': 8, 'history': []}
+        client = MagicMock()
+        client.__getitem__.return_value = {'utils': collection}
+        with patch('upgrade_runner._device_channel', return_value='beta'), \
+             patch('cloud_env.release_control_available', return_value=True), \
+             patch('cloud_env.get_cloud_domain',
+                   return_value='https://clouddeploy.api.flexiblevision.com'), \
+             patch('pymongo.MongoClient', return_value=client), \
+             patch.object(dr, '_channel_offer', return_value=offer):
+            return dr._release_identity()
+
+    @pytest.mark.integration
+    def test_a_newer_release_on_the_channel_is_offered(self):
+        identity = self._identity_with_offer(
+            {'reachable': True, 'counter': 9, 'release': '1.5'})
+        assert identity['release_available'] == '1.5'
+        assert identity['release_update_available'] is True
+
+    @pytest.mark.integration
+    def test_an_unreachable_channel_is_unknown_not_up_to_date(self):
+        identity = self._identity_with_offer({'reachable': False, 'detail': 'timeout'})
+        assert identity['release_available'] is None
+        assert identity['release_update_available'] is None
+
+    @pytest.mark.integration
+    def test_the_channel_is_asked_once_per_ttl(self):
+        dr._offer_cache.update(key=None, at=0, offer=None)
+        with patch('release.fetch.available',
+                   return_value={'reachable': True, 'counter': 9}) as fetch, \
+             patch('upgrade_runner._device_arch', return_value='x86'):
+            dr._channel_offer('beta', 8)
+            dr._channel_offer('beta', 8)
+        assert fetch.call_count == 1
+        dr._offer_cache.update(key=None, at=0, offer=None)
 
     @pytest.mark.integration
     def test_a_local_cloud_device_reports_no_release_control(self):
