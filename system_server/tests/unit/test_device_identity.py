@@ -1,4 +1,6 @@
 """Domain reporting and place caching for the device identity sync."""
+import sys
+
 import pytest
 from unittest.mock import patch, MagicMock, mock_open
 
@@ -76,6 +78,32 @@ class TestDeviceTimezone:
         utils, client, opener = self._with('Mars/Olympus')
         with utils, client, opener:
             assert di.device_timezone() is None
+
+    @pytest.mark.unit
+    def test_imports_on_a_python_without_zoneinfo(self, monkeypatch):
+        """Python 3.8 devices have no zoneinfo; failing the import took the
+        whole system server down with it."""
+        import importlib
+        monkeypatch.setitem(sys.modules, 'zoneinfo', None)
+        try:
+            reloaded = importlib.reload(di)
+            assert reloaded.ZoneInfo is None
+        finally:
+            monkeypatch.delitem(sys.modules, 'zoneinfo')
+            importlib.reload(di)
+
+    @pytest.mark.unit
+    def test_without_zoneinfo_the_system_zone_files_decide(self, tmp_path):
+        (tmp_path / 'America').mkdir()
+        (tmp_path / 'America' / 'Chicago').write_bytes(b'TZif')
+        (tmp_path / 'UTC').write_bytes(b'TZif')
+        with patch.object(di, 'ZoneInfo', None), patch.object(di, 'ZONEINFO_DIR', str(tmp_path)):
+            assert di.known_zone('America/Chicago')
+            assert di.known_zone('UTC')
+            assert not di.known_zone('Mars/Olympus')
+            assert not di.known_zone('America')
+            assert not di.known_zone('../../etc/passwd')
+            assert not di.known_zone('/etc/passwd')
 
     @pytest.mark.unit
     def test_no_zone_omits_the_field(self):

@@ -7,7 +7,12 @@ cloud as on-prem, so the cloud never sets its own.
 import os
 import sys
 import time
-from zoneinfo import ZoneInfo
+
+try:
+    from zoneinfo import ZoneInfo
+except ImportError:
+    # Python 3.8 devices; an import error here takes the whole system server down.
+    ZoneInfo = None
 
 import requests
 from pymongo import MongoClient
@@ -48,6 +53,21 @@ def reported_domains():
                    if name in ADDON_DOMAINS})
 
 
+ZONEINFO_DIR = '/usr/share/zoneinfo'
+
+
+def known_zone(name):
+    if ZoneInfo is not None:
+        try:
+            ZoneInfo(name)
+            return True
+        except Exception:
+            return False
+    parts = name.split('/')
+    return not name.startswith('/') and '..' not in parts and \
+        os.path.isfile(os.path.join(ZONEINFO_DIR, *parts))
+
+
 def device_timezone():
     """The zone on-prem presents data in, resolved as the webserver's
     utils/device_time.name() does: the system setting, the legacy kiosk zone,
@@ -68,9 +88,7 @@ def device_timezone():
     name = next((c for c in candidates if c), None)
     if not name:
         return None
-    try:
-        ZoneInfo(name)
-    except Exception:
+    if not known_zone(name):
         # The cloud refuses an unknown zone, and with it the domain report
         print('device timezone {!r} is not a known zone; not reported'.format(name))
         return None
