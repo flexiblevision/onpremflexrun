@@ -1,4 +1,22 @@
-./system_server/creds.txt
+system_server/creds.txt
+
+# Python bytecode - was tracked until now; stale .pyc can shadow a source file
+__pycache__/
+*.py[cod]
+
+# macOS resource forks. Pre-existing ._* files stay tracked; this stops new ones.
+._*
+
+# Test and build output. These were tracked, so every test run - local or CI -
+# produced a binary diff in the working tree.
+.coverage
+# pytest-cov writes .coverage.<host>.<pid>.<rand> per subprocess and combines
+# them at the end; an interrupted run leaves them behind
+.coverage.*
+coverage.xml
+htmlcov/
+.pytest_cache/
+npm-debug.log
 
 # MQTT certificates - contain private keys
 setup/mqtt/ssl/
@@ -13,3 +31,24 @@ setup/mqtt/vernemq-local.conf
 
 # Release notes
 release_notes/
+
+# guided release tool scratch (release/cut.py)
+.release-work/
+
+# Key material. The repo is public, and system_server/timemachine/server.key
+# was committed in 2022 and is still in origin/master.
+*.key
+*.pem
+# Public release-signing keys are the deliberate exception: a device
+# cannot verify a manifest without them, so they ship in the tree.
+!release/keys/*.pem
+*.crt
+*.p12
+*.pfx
+cosign.key
+!setup/mqtt/ssl/*.example
+
+# scratch/working artifacts, not part of the system
+*.dc.html
+canvas.json
+onprem-release-pipeline.html

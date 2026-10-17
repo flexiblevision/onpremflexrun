@@ -1,0 +1,46 @@
+{
+  "schema": "flexrun.addon/v1",
+  "name": "assembly",
+  "label": "Assembly Guidance",
+  "description": "On-screen step-by-step assembly guidance client.",
+  "tier": "enterprise",
+  "entitlement": "assembly_guidance",
+  "kind": "container",
+  "arches": ["x86", "arm"],
+  "component": "assembly-client",
+  "container": {
+    "name": "assembly-client",
+    "default_tag": "1",
+    "restart": "unless-stopped",
+    "gpu": "none",
+    "ports": [{"host": 3021, "container": 3021}],
+    "volumes": [
+      {
+        "host": "/home/visioncell/Documents",
+        "container": "/Documents",
+        "create": false
+      }
+    ],
+    "log_opts": {"max-size": "50m", "max-file": "5"}
+  },
+  "health": {
+    "type": "http",
+    "host": "172.17.0.1",
+    "port": 3021,
+    "path": "/",
+    "timeout": 2
+  },
+  "ui": {
+    "icon": "ViewCarousel",
+    "order": 20,
+    "manage": "toggle"
+  },
+  "legacy_routes": {
+    "manage": "/manage_assembly_guidance",
+    "status": "/assembly_guidance_status"
+  },
+  "extra_routes": [
+    "/assembly/upload",
+    "/assembly/media/<string:assembly_id>/<path:filename>"
+  ]
+}

@@ -1,0 +1,114 @@
+"""Time machine events -> the prediction sync -> a domain envelope.
+
+Writes a small record into `img_analytics` so the event rides the sync every
+other domain uses. The mp4 goes to the device's bucket first (zip_push); the
+record names that bucket and object so the envelope's media_ref resolves.
+"""
+import datetime
+import os
+
+from pymongo import MongoClient
+
+MONGODB_HOST = os.environ.get('MONGO_SERVER', '172.17.0.1')
+MONGODB_PORT = int(os.environ.get('MONGO_PORT', 27017))
+
+_client = MongoClient(host=MONGODB_HOST, port=MONGODB_PORT,
+                      serverSelectionTimeoutMS=5000)
+analytics_coll = _client['fvonprem']['img_analytics']
+utils_coll     = _client['fvonprem']['utils']
+
+DOMAIN = 'time_machine'
+
+_stats = {'recorded': 0, 'skipped_no_id': 0, 'skipped_no_time': 0, 'failed': 0}
+
+
+def stats():
+    return dict(_stats)
+
+
+def _ms():
+    return int(round(datetime.datetime.now().timestamp() * 1000))
+
+
+def _iso_from_seconds(value):
+    """Epoch seconds -> ISO-8601 UTC. record_start_time is seconds, not ms."""
+    return datetime.datetime.fromtimestamp(
+        int(value), tz=datetime.timezone.utc).isoformat()
+
+
+def device_place():
+    """This device's placement from the device identity sync, or {}.
+
+    The cloud spine never resolves place itself (DEVICE_PLACEMENT.md): a record
+    without metadata.site_id is dropped as missing_station, which is how every
+    time machine clip was lost after a successful upload.
+    """
+    try:
+        doc = utils_coll.find_one({'type': 'device_place'}, {'_id': 0})
+        return (doc or {}).get('place') or {}
+    except Exception as error:
+        print('timemachine device place lookup failed: {}'.format(error))
+        return {}
+
+
+def build_record(event, device_id=None, upload=None):
+    """The analytics record for one pushed event, or None if unattributable.
+
+    upload: {'bucket', 'path'} of the uploaded mp4. The spine builds media_ref
+    as gs://<bucket>/<filepath_mp4>, and falls back to the deployment-wide
+    bucket when there is none - the wrong bucket for a device's clip.
+    """
+    event_id = event.get('id')
+    if not event_id:
+        _stats['skipped_no_id'] += 1
+        return None
+
+    started = event.get('record_start_time')
+    if not started:
+        _stats['skipped_no_time'] += 1
+        return None
+
+    ended = event.get('record_end_time')
+    serial = event.get('serial_number')
+    # same mapping as inspection's prediction_caller._place_metadata
+    place = device_place()
+
+    record = {
+        'id': event_id,
+        'domain': DOMAIN,
+        'event_ts': _iso_from_seconds(started),
+        'end_ts': _iso_from_seconds(ended) if ended else None,
+        'serial_number': serial,
+        'bucket': (upload or {}).get('bucket'),
+        'filepath_mp4': (upload or {}).get('path') or event.get('filepath_mp4'),
+        'local_filepath_mp4': event.get('filepath_mp4') if upload else None,
+        'duration': event.get('duration'),
+        'triggers': event.get('triggers'),
+        'camera': event.get('camera'),
+        'metadata': {k: v for k, v in {
+            'device_id': device_id or event.get('device_id'),
+            'workstation': event.get('workstation') or place.get('station_id'),
+            'line_id': event.get('line_id') or place.get('line_id'),
+            'site_id': event.get('site_id') or place.get('site_id'),
+        }.items() if v},
+        'synced': False,
+        'modified': _ms(),
+    }
+    return {k: v for k, v in record.items() if v is not None}
+
+
+def record_event(event, device_id=None, upload=None):
+    """Queue one pushed event for the sync. Idempotent on `id`; never raises."""
+    try:
+        record = build_record(event, device_id, upload)
+        if record is None:
+            return False
+        analytics_coll.update_one({'id': record['id']}, {'$set': record},
+                                  upsert=True)
+        _stats['recorded'] += 1
+        return True
+    except Exception as error:
+        _stats['failed'] += 1
+        print('timemachine analytics record failed for {}: {}'.format(
+            event.get('id'), error))
+        return False

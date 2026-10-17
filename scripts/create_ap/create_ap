@@ -319,10 +319,12 @@ can_transmit_to_channel() {
     CHANNEL_NUM=$2
 
     if [[ $USE_IWCONFIG -eq 0 ]]; then
+        # iw >= 5.8 prints the frequency with a fraction ("2412.0 MHz [1]"),
+        # which the original unfractioned patterns never match.
         if [[ $FREQ_BAND == 2.4 ]]; then
-            CHANNEL_INFO=$(get_adapter_info ${IFACE} | grep " 24[0-9][0-9] MHz \[${CHANNEL_NUM}\]")
+            CHANNEL_INFO=$(get_adapter_info ${IFACE} | grep -E " 24[0-9]{2}(\.[0-9]+)? MHz \[${CHANNEL_NUM}\]")
         else
-            CHANNEL_INFO=$(get_adapter_info ${IFACE} | grep " \(49[0-9][0-9]\|5[0-9]\{3\}\) MHz \[${CHANNEL_NUM}\]")
+            CHANNEL_INFO=$(get_adapter_info ${IFACE} | grep -E " (49[0-9]{2}|5[0-9]{3})(\.[0-9]+)? MHz \[${CHANNEL_NUM}\]")
         fi
         [[ -z "${CHANNEL_INFO}" ]] && return 1
         [[ "${CHANNEL_INFO}" == *no\ IR* ]] && return 1
@@ -1564,15 +1566,27 @@ if [[ $NO_VIRT -eq 0 ]]; then
     fi
 
     if is_wifi_connected ${WIFI_IFACE}; then
-        WIFI_IFACE_FREQ=$(iw dev ${WIFI_IFACE} link | grep -i freq | awk '{print $2}')
+        # iw >= 5.8 prints a fractional frequency ("freq: 5805.0"). Both
+        # ieee80211_frequency_to_channel and is_5ghz_frequency do integer
+        # arithmetic on this, so drop the fraction before using it.
+        WIFI_IFACE_FREQ=$(iw dev ${WIFI_IFACE} link | grep -i freq | awk '{print $2}' | cut -d. -f1)
         WIFI_IFACE_CHANNEL=$(ieee80211_frequency_to_channel ${WIFI_IFACE_FREQ})
         echo -n "${WIFI_IFACE} is already associated with channel ${WIFI_IFACE_CHANNEL} (${WIFI_IFACE_FREQ} MHz)"
+        # Following the station onto its channel is only valid if the radio may
+        # actually start an AP there. 5GHz is routinely flagged "no IR", so on a
+        # 5GHz station link this would pin the AP to a channel it cannot beacon
+        # on and abort. When that is the case keep the configured channel and let
+        # the multi-channel interface combination carry the AP on its own band.
+        PREV_FREQ_BAND=$FREQ_BAND
         if is_5ghz_frequency $WIFI_IFACE_FREQ; then
             FREQ_BAND=5
         else
             FREQ_BAND=2.4
         fi
-        if [[ $WIFI_IFACE_CHANNEL -ne $CHANNEL ]]; then
+        if ! can_transmit_to_channel ${WIFI_IFACE} ${WIFI_IFACE_CHANNEL}; then
+            echo ", but the adapter cannot start an AP there; staying on channel ${CHANNEL}"
+            FREQ_BAND=$PREV_FREQ_BAND
+        elif [[ $WIFI_IFACE_CHANNEL -ne $CHANNEL ]]; then
             echo ", fallback to channel ${WIFI_IFACE_CHANNEL}"
             CHANNEL=$WIFI_IFACE_CHANNEL
         else
