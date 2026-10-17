@@ -44,6 +44,13 @@ def no_placeholder_credentials():
 
 
 @pytest.fixture(autouse=True)
+def no_expected_bridge_address():
+    # Otherwise cloud_env reads this machine's fvconfig and mongo.
+    with patch.object(mq, 'expected_bridge_address', return_value=None):
+        yield
+
+
+@pytest.fixture(autouse=True)
 def reset_monitor_state():
     """The module keeps monitor and metrics state in globals."""
     mq._health_monitor_running = False
@@ -209,6 +216,66 @@ class TestUpdateBridgeConfig:
         with patch('os.path.exists', return_value=True), \
              patch('builtins.open', opener):
             assert mq.update_bridge_config('new-token')['success'] is True
+
+    @pytest.mark.unit
+    def test_the_endpoint_follows_the_cloud(self):
+        opener = mock_open(read_data=SSL_CONFIG.replace(
+            'mqtt.flexiblevision.com', 'mqtt-dev.flexiblevision.com'))
+        with patch('os.path.exists', return_value=True), \
+             patch('builtins.open', opener), \
+             patch.object(mq, 'expected_bridge_address',
+                          return_value='mqtt.flexiblevision.com:443'):
+            mq.update_bridge_config('new-token', 'dev-42')
+
+        written = _written(opener)
+        assert 'vmq_bridge.ssl.gke = mqtt.flexiblevision.com:443\n' in written
+        assert 'mqtt-dev' not in written
+        assert 'vmq_bridge.ssl.gke.password = new-token' in written
+        assert 'vmq_bridge.ssl.gke.client_id = bridge-dev-42' in written
+
+    @pytest.mark.unit
+    def test_an_unknown_cloud_keeps_the_built_endpoint(self):
+        opener = mock_open(read_data=SSL_CONFIG.replace(
+            'mqtt.flexiblevision.com', 'broker.example'))
+        with patch('os.path.exists', return_value=True), \
+             patch('builtins.open', opener):
+            mq.update_bridge_config('new-token')
+
+        assert 'vmq_bridge.ssl.gke = broker.example:443' in _written(opener)
+
+
+class TestBridgeAddressStale:
+    def _stale(self, configured, expected, local=False):
+        with patch.object(mq, 'get_configured_bridge_address', return_value=configured), \
+             patch.object(mq, 'expected_bridge_address', return_value=expected), \
+             patch.object(mq, '_is_local_bridge', return_value=local):
+            return mq.bridge_address_stale()
+
+    @pytest.mark.unit
+    def test_a_bridge_left_on_the_old_cloud_is_stale(self):
+        assert self._stale('mqtt-dev.flexiblevision.com:443', 'mqtt.flexiblevision.com:443')
+
+    @pytest.mark.unit
+    def test_a_bridge_on_the_current_cloud_is_not(self):
+        assert not self._stale('mqtt.flexiblevision.com:443', 'mqtt.flexiblevision.com:443')
+
+    @pytest.mark.unit
+    def test_an_unknown_cloud_is_never_stale(self):
+        assert not self._stale('broker.example:443', None)
+
+    @pytest.mark.unit
+    def test_no_config_is_not_stale(self):
+        # Nothing to rewrite; refreshing would only fail
+        assert not self._stale(None, 'mqtt.flexiblevision.com:443')
+
+    @pytest.mark.unit
+    def test_a_local_cloud_bridge_is_never_stale(self):
+        assert not self._stale('10.0.0.5:31883', 'mqtt.flexiblevision.com:443', local=True)
+
+    @pytest.mark.unit
+    def test_reads_the_endpoint_line_not_its_settings(self):
+        with patch('builtins.open', mock_open(read_data=SSL_CONFIG)):
+            assert mq.get_configured_bridge_address() == 'mqtt.flexiblevision.com:443'
 
 
 class TestRestartVernemq:
@@ -702,6 +769,21 @@ class TestHealthMonitorLoop:
         assert len(seen) == 3
 
     @pytest.mark.unit
+    def test_a_cloud_switch_moves_a_healthy_bridge_at_once(self):
+        # Still connected to the old broker, so the health check alone never would
+        stale = iter([True, False, False])
+        with patch.object(mq, 'bridge_address_stale', side_effect=lambda: next(stale)):
+            _, refresh = self._run_loop(lambda: (True, 'ok'), checks=2)
+        refresh.assert_called_once()
+
+    @pytest.mark.unit
+    def test_a_failed_move_is_retried_on_the_next_tick(self):
+        stale = iter([True, True, False, False])
+        with patch.object(mq, 'bridge_address_stale', side_effect=lambda: next(stale)):
+            _, refresh = self._run_loop(lambda: (True, 'ok'), checks=2, refresh=False)
+        assert refresh.call_count == 2
+
+    @pytest.mark.unit
     def test_metrics_tracking_is_reset_on_entry(self):
         mq._last_check_time = 999.0
         mq._last_publish_count = 999
@@ -888,10 +970,16 @@ class TestBridgeHealthEndpoint:
     def test_reports_health_metrics_and_monitor_state(self, client):
         with patch.object(mq, 'is_bridge_healthy', return_value=(True, 'connected')), \
              patch.object(mq, 'get_bridge_metrics',
-                          return_value={'success': True, 'metrics': {'a': 1}}):
+                          return_value={'success': True, 'metrics': {'a': 1}}), \
+             patch.object(mq, 'get_configured_bridge_address',
+                          return_value='mqtt-dev.flexiblevision.com:443'), \
+             patch.object(mq, 'expected_bridge_address',
+                          return_value='mqtt.flexiblevision.com:443'):
             body = client.get('/mqtt/bridge/health').get_json()
 
         assert body == {'healthy': True, 'reason': 'connected', 'metrics': {'a': 1},
+                        'bridge_address': 'mqtt-dev.flexiblevision.com:443',
+                        'expected_bridge_address': 'mqtt.flexiblevision.com:443',
                         'monitor_running': False,
                         'check_interval': mq.HEALTH_CHECK_INTERVAL}
 

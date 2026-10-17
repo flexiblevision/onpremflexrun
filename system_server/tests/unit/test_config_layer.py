@@ -467,6 +467,26 @@ class TestGetCloudDomain:
         assert cloud_env.get_cloud_domain() == 'http://master'
 
 
+class TestGetBridgeAddress:
+    @pytest.mark.unit
+    @pytest.mark.parametrize('cloud', sorted(cloud_env.CLOUD_DOMAINS))
+    def test_each_named_cloud_has_its_own_broker(self, cloud, monkeypatch):
+        monkeypatch.setattr(cloud_env, 'get_cloud_domain',
+                            lambda: cloud_env.CLOUD_DOMAINS[cloud] + '/')
+
+        assert cloud_env.get_bridge_address() == cloud_env.MQTT_BRIDGES[cloud]
+
+    @pytest.mark.unit
+    def test_the_brokers_differ(self):
+        assert len(set(cloud_env.MQTT_BRIDGES.values())) == len(cloud_env.CLOUD_DOMAINS)
+
+    @pytest.mark.unit
+    def test_a_bespoke_cloud_has_none(self, monkeypatch):
+        monkeypatch.setattr(cloud_env, 'get_cloud_domain', lambda: 'https://staging.example')
+
+        assert cloud_env.get_bridge_address() is None
+
+
 class TestGetCloudFunctionsBase:
     @pytest.mark.unit
     def test_a_cloud_device_uses_the_functions_proxy(self, home):

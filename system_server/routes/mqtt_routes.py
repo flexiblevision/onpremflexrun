@@ -60,6 +60,38 @@ def get_device_id():
     return None
 
 
+def expected_bridge_address():
+    """The broker of the cloud this device now talks to, or None if unknown."""
+    try:
+        import cloud_env
+        return cloud_env.get_bridge_address()
+    except Exception as e:
+        log.warning(f"Failed to resolve bridge address: {e}")
+        return None
+
+
+def get_configured_bridge_address():
+    """The broker the cloud bridge config points at, or None."""
+    try:
+        with open("/root/flex-run/setup/mqtt/vernemq-local.conf") as f:
+            for line in f:
+                m = re.match(r'\s*vmq_bridge\.ssl\.gke\s*=\s*(\S+)', line)
+                if m:
+                    return m.group(1)
+    except Exception as e:
+        log.warning(f"Failed to read bridge address: {e}")
+    return None
+
+
+def bridge_address_stale() -> bool:
+    """True once the device has switched cloud but the bridge has not followed."""
+    expected = expected_bridge_address()
+    if not expected or _is_local_bridge():
+        return False
+    configured = get_configured_bridge_address()
+    return bool(configured) and configured != expected
+
+
 def update_bridge_config(token: str, device_id: str = None) -> dict:
     """
     Update VerneMQ bridge configuration with new token.
@@ -98,6 +130,16 @@ def update_bridge_config(token: str, device_id: str = None) -> dict:
                 r'(vmq_bridge\.(?:ssl|tcp)\.gke\.client_id)\s*=\s*.*',
                 lambda m: f'{m.group(1)} = bridge-{device_id}',
                 new_config
+            )
+
+        # Follow the cloud: the token is for the broker cloud_domain names
+        address = expected_bridge_address()
+        if address:
+            new_config = re.sub(
+                r'^(vmq_bridge\.ssl\.gke)\s*=\s*\S+[ \t]*$',
+                lambda m: f'{m.group(1)} = {address}',
+                new_config,
+                flags=re.M
             )
 
         # Write updated config
@@ -355,6 +397,17 @@ def _health_monitor_loop():
             if not _health_monitor_running:
                 break
 
+            # A bridge to the old cloud stays connected, so health alone never moves it
+            if bridge_address_stale():
+                log.warning(f"[Bridge Health] Cloud switched, moving bridge from "
+                            f"{get_configured_bridge_address()} to {expected_bridge_address()}")
+                if _do_bridge_refresh():
+                    consecutive_failures = 0
+                    _last_check_time = 0
+                    _last_publish_count = 0
+                    time.sleep(15)
+                continue
+
             is_healthy, reason = is_bridge_healthy()
 
             if is_healthy:
@@ -490,6 +543,8 @@ class BridgeHealth(Resource):
             "healthy": is_healthy,
             "reason": reason,
             "metrics": metrics_result.get("metrics", {}),
+            "bridge_address": get_configured_bridge_address(),
+            "expected_bridge_address": expected_bridge_address(),
             "monitor_running": _health_monitor_running,
             "check_interval": HEALTH_CHECK_INTERVAL
         }

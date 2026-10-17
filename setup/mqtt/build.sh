@@ -13,7 +13,7 @@ set -e
 #   BRIDGE_ADDRESS=mqtt.flexiblevision.com:443 BRIDGE_PASSWORD=secret ./build.sh
 #
 # Inputs (environment variables):
-#   BRIDGE_ADDRESS    bridge endpoint host:port   (default: mqtt-dev.flexiblevision.com:443)
+#   BRIDGE_ADDRESS    bridge endpoint host:port   (default: the broker of cloud_domain)
 #   BRIDGE_USERNAME   bridge username             (default: bridge)
 #   BRIDGE_CLIENT_ID  bridge client id            (default: local-bridge)
 #   BRIDGE_PASSWORD   bridge password/token       (required unless --allow-placeholder)
@@ -68,7 +68,14 @@ if [ "$ENVIRON_CFG" = "local" ]; then
     DEFAULT_CLIENT_ID="backend-bridge-${DEVICE_ID_CFG}"
     ALLOW_PLACEHOLDER=1
 else
-    DEFAULT_BRIDGE_ADDRESS="mqtt-dev.flexiblevision.com:443"
+    # Keep in step with cloud_env.MQTT_BRIDGES; system_server moves a stale bridge
+    # when the device switches cloud. No cloud_domain means the prod default.
+    case "${CLOUD_DOMAIN_CFG%/}" in
+        https://v1.cloud.flexiblevision.com|""|null)
+            DEFAULT_BRIDGE_ADDRESS="mqtt.flexiblevision.com:443" ;;
+        *)
+            DEFAULT_BRIDGE_ADDRESS="mqtt-dev.flexiblevision.com:443" ;;
+    esac
     DEFAULT_CLIENT_ID="local-bridge"
 fi
 

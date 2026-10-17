@@ -62,6 +62,19 @@ CLOUD_DOMAINS = {
 }
 STABLE_CLOUD = 'prod'
 
+# Each cloud's MQTT broker, which the device's VerneMQ bridges to. Not derivable
+# from the domain: the brokers sit behind their own load balancers.
+MQTT_BRIDGES = {
+    'prod': 'mqtt.flexiblevision.com:443',
+    'dev': 'mqtt-dev.flexiblevision.com:443',
+}
+
+
+def get_bridge_address():
+    """The broker for the cloud this device talks to, or None when that cloud
+    is not a named one - a bespoke cloud keeps whatever build.sh was given."""
+    return MQTT_BRIDGES.get(cloud_name(get_cloud_domain()))
+
 
 def cloud_name(domain):
     """Which named cloud a domain is, or None for anything else.
