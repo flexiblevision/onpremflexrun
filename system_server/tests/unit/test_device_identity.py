@@ -9,6 +9,7 @@ from worker_scripts import device_identity as di
 
 PLACE = {'site_id': 'SITE-1', 'line_id': 'L1', 'station_id': 'ST-03',
          'site_name': 'Fremont', 'line_name': 'Final A', 'station_name': 'Solder'}
+REPORT = {'assembly': {'enabled': True, 'healthy': True, 'last_error': None}}
 
 
 class TestReportedDomains:
@@ -42,6 +43,41 @@ class TestReportedDomains:
     def test_nothing_enabled_reports_nothing(self):
         with patch.object(di.addon_state, 'enabled', return_value=[]):
             assert di.reported_domains() == []
+
+
+class TestAddonReport:
+    def _report(self, records, health):
+        with patch.object(di.addon_state, 'all_records', return_value=records), \
+             patch.object(di.addon_runtime, 'health', side_effect=health) as probe:
+            return di.addon_report(), probe
+
+    @pytest.mark.unit
+    def test_an_enabled_addon_that_is_not_answering_says_so(self):
+        # The removed-container case: intent says on, the probe says no.
+        report, _ = self._report(
+            {'anomaly_visual': {'name': 'anomaly_visual', 'enabled': True}},
+            lambda name: False)
+        assert report['anomaly'] == {'enabled': True, 'healthy': False, 'last_error': None}
+
+    @pytest.mark.unit
+    def test_every_domain_addon_is_reported_and_only_enabled_ones_probed(self):
+        report, probe = self._report(
+            {'assembly': {'enabled': True}, 'timemachine': {'enabled': False,
+                                                           'last_error': 'down'}},
+            lambda name: True)
+        assert sorted(report) == ['anomaly', 'assembly', 'time_machine', 'waveform']
+        assert report['assembly']['healthy'] is True
+        assert report['time_machine'] == {'enabled': False, 'healthy': None,
+                                          'last_error': 'down'}
+        assert report['waveform'] == {'enabled': False, 'healthy': None, 'last_error': None}
+        probe.assert_called_once_with('assembly')
+
+    @pytest.mark.unit
+    def test_a_probe_that_raises_is_unknown_not_down(self):
+        def boom(name):
+            raise RuntimeError('registry missing')
+        report, _ = self._report({'assembly': {'enabled': True}}, boom)
+        assert report['assembly']['healthy'] is None
 
 
 class TestDeviceTimezone:
@@ -111,11 +147,12 @@ class TestDeviceTimezone:
         res.json.return_value = {'place': PLACE}
         with patch.object(di, 'device_id', return_value='FV-I-1'), \
              patch.object(di.addon_state, 'enabled', return_value=[]), \
+             patch.object(di, 'addon_report', return_value={}), \
              patch.object(di, 'device_timezone', return_value=None), \
              patch.object(di.utils_db, 'update_one'), \
              patch('requests.put', return_value=res) as put:
             di.push_device_identity('https://cloud.example', 'tok')
-        assert put.call_args[1]['json'] == {'domains': []}
+        assert put.call_args[1]['json'] == {'domains': [], 'addons': {}}
 
 
 class TestPushDeviceIdentity:
@@ -126,6 +163,7 @@ class TestPushDeviceIdentity:
                                  'unavailable_domains': ['anomaly', 'waveform']}
         with patch.object(di, 'device_id', return_value='FV-I-1'), \
              patch.object(di.addon_state, 'enabled', return_value=['assembly']), \
+             patch.object(di, 'addon_report', return_value=REPORT), \
              patch.object(di, 'device_timezone', return_value='America/Chicago'), \
              patch.object(di.utils_db, 'update_one') as update, \
              patch('requests.put', return_value=res) as put:
@@ -133,7 +171,7 @@ class TestPushDeviceIdentity:
 
         assert put.call_args[0][0] == \
             'https://cloud.example/api/assembly/stations/device/FV-I-1'
-        assert put.call_args[1]['json'] == {'domains': ['assembly'],
+        assert put.call_args[1]['json'] == {'domains': ['assembly'], 'addons': REPORT,
                                             'timezone': 'America/Chicago'}
         cached = update.call_args[0][1]['$set']
         assert cached['place'] == PLACE
@@ -146,6 +184,7 @@ class TestPushDeviceIdentity:
                                  'reason': 'device is not assigned to a station on a line'}
         with patch.object(di, 'device_id', return_value='FV-I-1'), \
              patch.object(di.addon_state, 'enabled', return_value=[]), \
+             patch.object(di, 'addon_report', return_value={}), \
              patch.object(di.utils_db, 'update_one') as update, \
              patch('requests.put', return_value=res):
             assert di.push_device_identity('https://cloud.example', 'tok') is None
@@ -156,6 +195,7 @@ class TestPushDeviceIdentity:
     def test_an_unreachable_cloud_never_raises(self):
         with patch.object(di, 'device_id', return_value='FV-I-1'), \
              patch.object(di.addon_state, 'enabled', return_value=[]), \
+             patch.object(di, 'addon_report', return_value={}), \
              patch.object(di.utils_db, 'update_one') as update, \
              patch('requests.put', side_effect=ConnectionError('offline')):
             assert di.push_device_identity('https://cloud.example', 'tok') is None

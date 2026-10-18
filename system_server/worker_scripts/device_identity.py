@@ -20,6 +20,7 @@ from pymongo import MongoClient
 settings_path = os.environ['HOME'] + '/flex-run'
 sys.path.append(settings_path)
 
+from addons import runtime as addon_runtime
 from addons import state as addon_state
 
 MONGODB_HOST = os.environ.get('MONGO_SERVER', '172.17.0.1')
@@ -51,6 +52,28 @@ def reported_domains():
     """Add-on domains this device has enabled."""
     return sorted({ADDON_DOMAINS[name] for name in addon_state.enabled()
                    if name in ADDON_DOMAINS})
+
+
+def addon_report():
+    """Per domain: recorded intent and whether it answers now.
+
+    Intent alone let a removed container read as running in the cloud.
+    healthy is None when not probed (disabled) or the probe itself failed.
+    """
+    records = addon_state.all_records()
+    report = {}
+    for name, domain in ADDON_DOMAINS.items():
+        record = records.get(name) or {}
+        enabled = bool(record.get('enabled'))
+        healthy = None
+        if enabled:
+            try:
+                healthy = bool(addon_runtime.health(name))
+            except Exception as error:
+                print('{} health probe raised: {}'.format(name, error))
+        report[domain] = {'enabled': enabled, 'healthy': healthy,
+                          'last_error': record.get('last_error')}
+    return report
 
 
 ZONEINFO_DIR = '/usr/share/zoneinfo'
@@ -106,6 +129,7 @@ def push_device_identity(cloud_domain, access_token):
     try:
         dev_id = device_id()
         domains = reported_domains()
+        addons = addon_report()
         tz = device_timezone()
     except Exception as error:
         print('device identity lookup failed: {}'.format(error))
@@ -116,7 +140,7 @@ def push_device_identity(cloud_domain, access_token):
     url = '{}/api/assembly/stations/device/{}'.format(
         cloud_domain.rstrip('/'), dev_id)
     try:
-        payload = {'domains': domains}
+        payload = {'domains': domains, 'addons': addons}
         if tz:
             payload['timezone'] = tz
         res = requests.put(url, json=payload,
@@ -134,6 +158,7 @@ def push_device_identity(cloud_domain, access_token):
         {'$set': {'place': body.get('place'),
                   'domains': body.get('domains') or [],
                   'unavailable_domains': body.get('unavailable_domains') or [],
+                  'down_domains': body.get('down_domains') or [],
                   'reason': body.get('reason'),
                   'synced_at': int(time.time())}},
         upsert=True)

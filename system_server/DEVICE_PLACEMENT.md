@@ -22,6 +22,10 @@ already owns `device_id` binding under normal user auth. On-prem already calls
 ```jsonc
 PUT /api/assembly/stations/device/<device_id>
 { "domains": ["inspection", "anomaly", "time_machine"],
+  "addons": { "anomaly":      { "enabled": true,  "healthy": true,  "last_error": null },
+              "time_machine": { "enabled": true,  "healthy": false, "last_error": null },
+              "assembly":     { "enabled": false, "healthy": null,  "last_error": null },
+              "waveform":     { "enabled": false, "healthy": null,  "last_error": null } },
   "timezone": "America/Chicago" }
 
 // 200 — placed
@@ -29,9 +33,11 @@ PUT /api/assembly/stations/device/<device_id>
              "line_id": "L1", "line_name": "Final Assembly A",
              "station_id": "ST-03", "station_name": "Solder & Inspect",
              "org_id": "org_fv" },
-  "domains": ["anomaly", "inspection", "time_machine"],
+  "domains": ["anomaly", "inspection"],
   "reported_domains": ["anomaly", "time_machine"],
-  "unavailable_domains": ["assembly", "waveform"] }
+  "down_domains": ["time_machine"],
+  "unavailable_domains": ["assembly", "waveform", "time_machine"],
+  "addons": { ... } }
 
 // 200 — not placed on a line
 { "place": null, "reason": "device is not assigned to a station on a line" }
@@ -72,7 +78,16 @@ station until `assembly` is in its domains.
 add-on set rather than merging, so a capability turned off on the device
 disappears from the cloud next sync. Two fields, kept separate so they are never
 confused: `reported_domains` is exactly what the device said, `domains` is the
-effective set (baseline ∪ reported) that the UI gates on.
+effective set (baseline ∪ reported, less `down_domains`) that the UI gates on.
+
+**Enabled is not running.** `addons` carries each add-on's recorded intent and
+its live health probe (`addons.runtime.health`, the same one the Features page
+shows). An add-on enabled but answering `healthy: false` is in `down_domains`,
+not `domains` — intent alone kept removed containers badged as running. `healthy:
+null` (not probed, or the probe raised) is not down. A device that sends no
+`addons` reads as before. Once a device has reported, a station edit from the UI
+cannot overwrite `domains`; rebinding the station to other hardware clears the
+report.
 
 **One device, several domains.** A station node may run worker guidance,
 inspection and time machine at once. `station.domains` is already an array and
@@ -106,7 +121,8 @@ Reading the two lists together is the whole setup story:
 |---|---|
 | `domains` | what this station can do now |
 | `reported_domains` | what the device turned on |
-| `unavailable_domains` | what it could do, once enabled on the device |
+| `down_domains` | turned on, but not answering |
+| `unavailable_domains` | what it could do, once enabled (or running) on the device |
 
 ## Touch points
 
