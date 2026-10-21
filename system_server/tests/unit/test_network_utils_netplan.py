@@ -91,6 +91,8 @@ class TestBuildSetNetplan:
         with patch.object(nu.interfaces_db, 'find', return_value=self.INTERFACES), \
              patch.object(nu.os.path, 'exists', return_value=True), \
              patch.object(nu, 'remove_conflicting_netplans'), \
+             patch.object(nu, 'max_mtu', return_value=9194), \
+             patch.object(nu, 'link_peers', return_value=[]), \
              patch('builtins.open', opener), \
              patch('os.system'):
             nu.build_set_netplan()
@@ -140,6 +142,72 @@ class TestBuildSetNetplan:
         opener.assert_not_called()
         system.assert_not_called()
         assert 'netplan path does not exist' in capsys.readouterr().out
+
+
+class TestApplyNetplan:
+    def _run(self, stanzas, max_mtu=9194, peers=(), jumbo=True, small=True):
+        writes = []
+
+        def ping(cmd, **kw):
+            ok = jumbo if '-M' in cmd else small
+            return MagicMock(returncode=0 if ok else 1)
+
+        with patch.object(nu, 'max_mtu', return_value=max_mtu), \
+             patch.object(nu, 'link_peers', return_value=list(peers)), \
+             patch.object(nu, '_write_netplan',
+                          side_effect=lambda s: writes.append([x['mtu'] for x in s])), \
+             patch.object(nu.subprocess, 'run', side_effect=ping), \
+             patch.object(nu.interfaces_db, 'update_one') as update:
+            nu.apply_netplan(stanzas)
+        return writes, update
+
+    @pytest.mark.unit
+    def test_a_nic_that_cannot_take_jumbo_gets_the_standard_mtu(self):
+        writes, _ = self._run([{'iname': 'enp1s0', 'ip_string': '[]'}], max_mtu=1500)
+        assert writes == [[1500]]
+
+    @pytest.mark.unit
+    def test_an_unknown_max_mtu_is_treated_as_standard(self):
+        writes, _ = self._run([{'iname': 'enp1s0', 'ip_string': '[]'}], max_mtu=None)
+        assert writes == [[1500]]
+
+    @pytest.mark.unit
+    def test_a_link_with_no_peers_keeps_jumbo(self):
+        writes, update = self._run([{'iname': 'enp1s0', 'ip_string': '[]'}])
+        assert writes == [[9000]]
+        update.assert_not_called()
+
+    @pytest.mark.unit
+    def test_a_peer_that_passes_jumbo_keeps_it(self):
+        writes, _ = self._run([{'iname': 'enp1s0', 'ip_string': '[]'}], peers=['192.168.9.20'])
+        assert writes == [[9000]]
+
+    @pytest.mark.unit
+    def test_a_peer_that_drops_jumbo_falls_back_and_is_remembered(self):
+        # The case that broke model sync: both NICs accept 9000, the link carries 1500.
+        writes, update = self._run([{'iname': 'enp9s0', 'ip_string': '[]'}],
+                                   peers=['192.168.9.20'], jumbo=False)
+        assert writes == [[9000], [1500]]
+        update.assert_called_once_with({'iname': 'enp9s0'}, {'$set': {'mtu': 1500}})
+
+    @pytest.mark.unit
+    def test_an_unreachable_peer_says_nothing_about_the_mtu(self):
+        writes, _ = self._run([{'iname': 'enp1s0', 'ip_string': '[]'}],
+                              peers=['192.168.9.20'], small=False, jumbo=False)
+        assert writes == [[9000]]
+
+    @pytest.mark.unit
+    def test_only_the_failing_interface_falls_back(self):
+        stanzas = [{'iname': 'enp1s0', 'ip_string': '[]', 'mtu': 9000},
+                   {'iname': 'enp2s0', 'ip_string': '[]'}]
+        with patch.object(nu, 'carries_jumbo', side_effect=lambda i, p: i == 'enp2s0'):
+            writes, _ = self._run(stanzas, peers=['10.0.0.2'])
+        assert writes == [[9000, 9000], [1500, 9000]]
+
+    @pytest.mark.unit
+    def test_a_stored_mtu_is_used_without_probing_the_nic(self):
+        writes, _ = self._run([{'iname': 'enp1s0', 'ip_string': '[]', 'mtu': 1500}])
+        assert writes == [[1500]]
 
 
 class TestSetIps:

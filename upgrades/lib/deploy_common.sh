@@ -511,7 +511,7 @@ $CRON_BEGIN
 @reboot sudo sh $HOME/flex-run/scripts/mediasystem_server.sh
 */5 * * * * sudo sh $HOME/flex-run/scripts/filesystem_server.sh >/dev/null 2>&1
 */5 * * * * sudo sh $HOME/flex-run/scripts/mediasystem_server.sh >/dev/null 2>&1
-@reboot sleep 30 && sudo sh $HOME/flex-run/scripts/hotspot.sh
+* * * * * sudo sh $HOME/flex-run/scripts/hotspot.sh >/dev/null 2>&1
 @reboot sudo sh $HOME/flex-run/scripts/allocate_usbfs_memory.sh
 @reboot sleep 50 && sudo sh $HOME/flex-run/scripts/restart_localprediction.sh
 @reboot sudo sh $HOME/flex-run/scripts/start_job_watcher.sh

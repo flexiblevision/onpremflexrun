@@ -1,11 +1,17 @@
 import os
 import re
+import json
 import subprocess
 import datetime
 from pymongo import MongoClient
 
 client = MongoClient("172.17.0.1")
 interfaces_db = client["fvonprem"]["interfaces"]
+
+JUMBO_MTU = 9000
+STANDARD_MTU = 1500
+# ICMP payload that fills a jumbo frame: 20 bytes IP header, 8 ICMP
+JUMBO_PROBE = JUMBO_MTU - 28
 
 def is_valid_ip(ip):
     if not ip: return False
@@ -44,6 +50,78 @@ def remove_conflicting_netplans():
                 print(f'Failed to remove {filepath}: {e}')
 
 
+def max_mtu(iname):
+    try:
+        out = subprocess.run(['ip', '-d', '-j', 'link', 'show', iname],
+                             capture_output=True, text=True, timeout=5).stdout
+        return json.loads(out)[0].get('max_mtu')
+    except Exception:
+        return None
+
+def link_peers(iname):
+    try:
+        out = subprocess.run(['ip', '-4', '-j', 'neigh', 'show', 'dev', iname],
+                             capture_output=True, text=True, timeout=5).stdout
+        return [n['dst'] for n in json.loads(out) if n.get('lladdr')]
+    except Exception:
+        return []
+
+def _ping(iname, peer, size=None, tries=1):
+    cmd = ['ping', '-c', '1', '-W', '1', '-I', iname]
+    if size:
+        cmd += ['-M', 'do', '-s', str(size)]
+    for _ in range(tries):
+        if subprocess.run(cmd + [peer], stdout=subprocess.DEVNULL,
+                          stderr=subprocess.DEVNULL).returncode == 0:
+            return True
+    return False
+
+def carries_jumbo(iname, peer):
+    # A peer that does not answer at all says nothing about the MTU. Retried
+    # because the link renegotiates after netplan apply.
+    if not _ping(iname, peer, tries=5):
+        return True
+    return _ping(iname, peer, JUMBO_PROBE, tries=2)
+
+def pick_mtu(iname, stored=None):
+    if stored:
+        return stored
+    return JUMBO_MTU if (max_mtu(iname) or 0) >= JUMBO_MTU else STANDARD_MTU
+
+def _write_netplan(stanzas):
+    with open ('/etc/netplan/fv-net-init.yaml', 'w') as f:
+        f.write('network:\n')
+        f.write('  version: 2\n')
+        f.write('  renderer: NetworkManager\n')
+        f.write('  ethernets:')
+        for s in stanzas:
+            f.write('\n    '+s['iname']+':\n')
+            f.write('      dhcp4: false\n')
+            f.write('      mtu: {}\n'.format(s['mtu']))
+            f.write('      addresses: '+s['ip_string'])
+    os.system("sudo netplan apply")
+
+def apply_netplan(stanzas):
+    """Jumbo frames only where the NIC takes them and every peer on the link
+    passes one. A switch or peer that drops oversized frames returns no ICMP,
+    so TCP stalls on the first full-size segment instead of shrinking."""
+    for s in stanzas:
+        s['mtu'] = pick_mtu(s['iname'], s.get('mtu'))
+    peers = {s['iname']: link_peers(s['iname']) for s in stanzas}
+
+    _write_netplan(stanzas)
+
+    dropped = [s for s in stanzas if s['mtu'] == JUMBO_MTU and
+               not all(carries_jumbo(s['iname'], p) for p in peers[s['iname']])]
+    if not dropped:
+        return
+    for s in dropped:
+        print('{} drops jumbo frames, using MTU {}'.format(s['iname'], STANDARD_MTU))
+        s['mtu'] = STANDARD_MTU
+        # Stored so the next rebuild does not go back to 9000 and break the link again.
+        interfaces_db.update_one({'iname': s['iname']}, {'$set': {'mtu': STANDARD_MTU}})
+    _write_netplan(stanzas)
+
 def set_static_ips(network=None):
     ips = []
     interface_name = get_interface_name_ref()
@@ -55,18 +133,7 @@ def set_static_ips(network=None):
     ip_string = ip_string + ']'
 
     remove_conflicting_netplans()
-
-    with open ('/etc/netplan/fv-net-init.yaml', 'w') as f:
-        f.write('network:\n')
-        f.write('  version: 2\n')
-        f.write('  renderer: NetworkManager\n')
-        f.write('  ethernets:\n')
-        f.write('    '+interface_name+':\n')
-        f.write('      dhcp4: false\n')
-        f.write('      mtu: 9000\n')
-        f.write('      addresses: '+ip_string)
-
-    os.system("sudo netplan apply")
+    apply_netplan([{'iname': interface_name, 'ip_string': ip_string}])
 
 def set_ips(settings):
     store_netplan_settings(settings)
@@ -84,18 +151,8 @@ def build_set_netplan():
 
     if os.path.exists('/etc/netplan/'):
         remove_conflicting_netplans()
-        with open ('/etc/netplan/fv-net-init.yaml', 'w') as f:
-            f.write('network:\n')
-            f.write('  version: 2\n')
-            f.write('  renderer: NetworkManager\n')
-            f.write('  ethernets:')
-            for i in interfaces:
-                f.write('\n    '+i['iname']+':\n')
-                f.write('      dhcp4: false\n')
-                f.write('      mtu: 9000\n')
-                f.write('      addresses: '+i['ip_string'])
-
-        os.system("sudo netplan apply")
+        apply_netplan([{'iname': i['iname'], 'ip_string': i['ip_string'], 'mtu': i.get('mtu')}
+                       for i in interfaces])
     else:
         print('netplan path does not exist')
 

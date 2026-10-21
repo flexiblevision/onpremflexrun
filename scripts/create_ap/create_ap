@@ -1572,20 +1572,18 @@ if [[ $NO_VIRT -eq 0 ]]; then
         WIFI_IFACE_FREQ=$(iw dev ${WIFI_IFACE} link | grep -i freq | awk '{print $2}' | cut -d. -f1)
         WIFI_IFACE_CHANNEL=$(ieee80211_frequency_to_channel ${WIFI_IFACE_FREQ})
         echo -n "${WIFI_IFACE} is already associated with channel ${WIFI_IFACE_CHANNEL} (${WIFI_IFACE_FREQ} MHz)"
-        # Following the station onto its channel is only valid if the radio may
-        # actually start an AP there. 5GHz is routinely flagged "no IR", so on a
-        # 5GHz station link this would pin the AP to a channel it cannot beacon
-        # on and abort. When that is the case keep the configured channel and let
-        # the multi-channel interface combination carry the AP on its own band.
-        PREV_FREQ_BAND=$FREQ_BAND
+        # The AP can only share the radio on the station's own channel. 5GHz is
+        # routinely flagged "no IR", and an AP on another channel makes the radio
+        # hop between the two: the uplink fell to 31 KB/s with 1.6 s latency.
+        # No hotspot is better than that.
         if is_5ghz_frequency $WIFI_IFACE_FREQ; then
             FREQ_BAND=5
         else
             FREQ_BAND=2.4
         fi
         if ! can_transmit_to_channel ${WIFI_IFACE} ${WIFI_IFACE_CHANNEL}; then
-            echo ", but the adapter cannot start an AP there; staying on channel ${CHANNEL}"
-            FREQ_BAND=$PREV_FREQ_BAND
+            echo
+            die "The adapter cannot start an AP on channel ${WIFI_IFACE_CHANNEL}, and another channel would starve ${WIFI_IFACE}."
         elif [[ $WIFI_IFACE_CHANNEL -ne $CHANNEL ]]; then
             echo ", fallback to channel ${WIFI_IFACE_CHANNEL}"
             CHANNEL=$WIFI_IFACE_CHANNEL
