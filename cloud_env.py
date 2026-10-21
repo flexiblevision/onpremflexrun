@@ -183,14 +183,45 @@ def _clean(raw):
     return out
 
 
-def release_control_available(cfg=None):
-    """Whether this device takes signed releases at all.
-
-    A local-cloud device has no release service to read from, so it upgrades
-    the way it did before signed releases and offers no channel or rollback.
-    """
+def is_local_cloud(cfg=None):
     cfg = _site_config() if cfg is None else cfg
-    return cfg.get('environ') != 'local'
+    return cfg.get('environ') == 'local'
+
+
+RELEASE_PROBE_TIMEOUT = 2
+_release_probe_cache = {'at': None, 'value': False}
+
+
+def release_service_reachable():
+    """Whether the release service answers at all, cached for CACHE_TTL.
+
+    Any HTTP response counts: this asks whether there is a route, not whether
+    a release is on offer. device_info calls through here, so it must be cheap.
+    """
+    now = time.monotonic()
+    at = _release_probe_cache['at']
+    if at is not None and now - at < CACHE_TTL:
+        return _release_probe_cache['value']
+    try:
+        import requests
+        requests.head(DEFAULT_FUNCTIONS_BASE, timeout=RELEASE_PROBE_TIMEOUT)
+        reachable = True
+    except Exception:
+        reachable = False
+    _release_probe_cache.update(at=now, value=reachable)
+    return reachable
+
+
+def release_control_available(cfg=None):
+    """Whether this device takes signed releases right now.
+
+    A local-cloud device usually sits on a LAN with only the master, so it
+    takes them only while it can reach the release service - typically when
+    Wi-Fi is up. Otherwise it upgrades the pre-signed-release way.
+    """
+    if not is_local_cloud(cfg):
+        return True
+    return release_service_reachable()
 
 
 def release_override_allowed(cfg=None):

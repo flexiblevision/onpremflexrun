@@ -586,9 +586,9 @@ class TestReleaseChannel:
         assert sorted(body['cloud_choices']) == ['dev', 'prod']
 
 
-class TestLocalCloudOffersNoReleaseControl:
-    """A local-cloud device has no release service to read from: no channel, no
-    rollback, and the screens are told so they can hide the controls."""
+class TestOfflineLocalCloudOffersNoReleaseControl:
+    """A local-cloud device that cannot reach the release service: no channel,
+    no rollback, and the screens are told so they can hide the controls."""
 
     @pytest.fixture(autouse=True)
     def local(self):
@@ -623,6 +623,41 @@ class TestLocalCloudOffersNoReleaseControl:
             response = client.post('/rollback', json={'counter': 37})
         assert response.status_code == 403
         popen.assert_not_called()
+
+
+class TestOnlineLocalCloudTakesReleases:
+    """A local-cloud device on Wi-Fi takes signed releases and can roll back,
+    but its channel stays put: a move writes cloud_domain, which would repoint
+    it away from its master."""
+
+    @pytest.fixture(autouse=True)
+    def local_online(self):
+        with patch('cloud_env.is_local_cloud', return_value=True), \
+             patch('cloud_env.release_control_available', return_value=True):
+            yield
+
+    @pytest.mark.integration
+    def test_channel_is_reported_but_fixed(self, client):
+        body = client.get('/release_channel').get_json()
+        assert body['release_control'] is True
+        assert body['changeable'] is False
+
+    @pytest.mark.integration
+    def test_channel_cannot_be_moved(self, client):
+        with patch('cloud_env.set_override') as write:
+            response = client.put('/release_channel', json={'channel': 'beta'})
+        assert response.status_code == 403
+        write.assert_not_called()
+
+    @pytest.mark.integration
+    def test_rollback_runs(self, client):
+        with patch('upgrade_runner.lock_holder', return_value=None), \
+             patch('upgrade_runner.log_path', return_value=None), \
+             patch('release.state.known_counters', return_value={37}), \
+             patch('subprocess.Popen') as popen:
+            response = client.post('/rollback', json={'counter': 37})
+        assert response.status_code == 202
+        assert popen.call_args[0][0][-3:] == ['--rollback', popen.call_args[0][0][-2], '37']
 
 
 class TestUsbReleases:

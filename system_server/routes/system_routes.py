@@ -459,7 +459,8 @@ class ReleaseChannel(Resource):
             available = cloud_env.release_control_available()
             return {'channel': upgrade_runner._device_channel() if available else None,
                     'release_control': available,
-                    'changeable': available and cloud_env.release_override_allowed(),
+                    'changeable': (available and not cloud_env.is_local_cloud()
+                                   and cloud_env.release_override_allowed()),
                     'choices': list(cloud_env.CHANNELS),
                     'cloud_domain': domain,
                     'cloud': cloud_env.cloud_name(domain),
@@ -474,7 +475,9 @@ class ReleaseChannel(Resource):
         from flask import request
         import cloud_env
 
-        if not cloud_env.release_control_available():
+        # A channel move also writes cloud_domain, which would repoint a local
+        # cloud away from its master.
+        if cloud_env.is_local_cloud() or not cloud_env.release_control_available():
             return {'error': 'release channels are not available on a local-cloud device'}, 403
 
         body = request.get_json(silent=True) or {}
@@ -526,7 +529,7 @@ class Rollback(Resource):
         import cloud_env
 
         if not cloud_env.release_control_available():
-            return {'error': 'rollback is not available on a local-cloud device'}, 403
+            return {'error': 'rollback needs the release service - connect this device to the internet'}, 403
 
         body = request.get_json(silent=True) or {}
         target = body.get('counter')

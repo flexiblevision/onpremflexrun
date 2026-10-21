@@ -505,7 +505,8 @@ def _release_or_legacy(run_id, channel=None):
     try:
         import cloud_env
         if not cloud_env.release_control_available():
-            print('[upgrade_runner] local-cloud device - upgrading from the version endpoint')
+            print('[upgrade_runner] local-cloud device with no route to the release '
+                  'service - upgrading from the version endpoint')
             return run(run_id, _legacy_versions())
     except ImportError:
         pass

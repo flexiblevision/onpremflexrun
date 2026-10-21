@@ -1363,10 +1363,34 @@ class TestCleanEfiScript:
 
 
 class TestReleaseControlAvailable:
-    """Signed releases need the release service; a local cloud has none."""
+    """Signed releases need the release service; a local cloud has it only
+    while it has a route out."""
 
-    @pytest.mark.parametrize('environ,want', [('local', False), ('cloud', True), (None, True)])
-    def test_only_local_cloud_goes_without(self, environ, want):
-        import cloud_env
+    @pytest.fixture(autouse=True)
+    def fresh_probe(self):
+        cloud_env._release_probe_cache.update(at=None, value=False)
+        yield
+        cloud_env._release_probe_cache.update(at=None, value=False)
+
+    @pytest.mark.parametrize('environ', ['cloud', None])
+    def test_a_cloud_device_always_has_it_without_probing(self, environ):
         cfg = {} if environ is None else {'environ': environ}
-        assert cloud_env.release_control_available(cfg) is want
+        with patch('requests.head') as head:
+            assert cloud_env.release_control_available(cfg) is True
+        head.assert_not_called()
+
+    def test_a_local_device_has_it_when_the_service_answers(self):
+        with patch('requests.head', return_value=MagicMock(status_code=404)):
+            assert cloud_env.release_control_available({'environ': 'local'}) is True
+
+    def test_a_local_device_goes_without_when_offline(self):
+        import requests
+        with patch('requests.head', side_effect=requests.ConnectionError('no route')):
+            assert cloud_env.release_control_available({'environ': 'local'}) is False
+
+    def test_the_probe_is_cached(self):
+        with patch('requests.head') as head:
+            cloud_env.release_control_available({'environ': 'local'})
+            cloud_env.release_control_available({'environ': 'local'})
+        assert head.call_count == 1
+        assert head.call_args[1]['timeout'] == cloud_env.RELEASE_PROBE_TIMEOUT
