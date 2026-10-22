@@ -47,6 +47,8 @@ def _load_controller(alias='_gpio_controller_under_test', so_exists=True):
     injected = {'flask_socketio': stub} if stub else {}
 
     sys.path.insert(0, GPIO_DIR)
+    # tcp/ has its own gpio_helper; another test's import must not satisfy ours.
+    sys.modules.pop('gpio_helper', None)
     sys.modules[alias] = module
     for name, value in injected.items():
         sys.modules[name] = value
@@ -156,8 +158,10 @@ class TestGpioConstruction:
 
     @pytest.mark.unit
     @pytest.mark.gpio
-    def test_the_debounce_delay_is_one_millisecond(self, gpio):
-        assert gpio.debounce_delay == .001
+    def test_the_debounce_delay_is_ten_milliseconds(self, gpio):
+        # 1ms polling maximised collisions with pin writes; 10ms is still ~25
+        # reads per part at 4 parts/s.
+        assert gpio.debounce_delay == .01
 
 
 class TestDriverWrappers:
@@ -183,6 +187,191 @@ class TestDriverWrappers:
 
         assert gpio._set_gpio(1, 5, 0) == -1
         assert gpio._read_gpi(2) == -1
+
+
+class TestDriverIsSerialised:
+    """gpio.so has no locking; concurrent calls corrupt reads and drop writes."""
+
+    def _blocked_while_held(self, call_driver):
+        import threading
+        done = threading.Event()
+        with gc.gpio_lock:
+            worker = threading.Thread(target=lambda: (call_driver(), done.set()))
+            worker.start()
+            assert not done.wait(.05)
+        assert done.wait(1)
+        worker.join()
+
+    @pytest.mark.unit
+    @pytest.mark.gpio
+    def test_a_write_waits_for_the_lock(self, gpio, driver):
+        self._blocked_while_held(lambda: gpio._set_gpio(1, 5, 0))
+
+    @pytest.mark.unit
+    @pytest.mark.gpio
+    def test_a_single_read_waits_for_the_lock(self, gpio, driver):
+        self._blocked_while_held(lambda: gpio._read_gpi(2))
+        self._blocked_while_held(lambda: gpio._read_gpo(2))
+
+    @pytest.mark.unit
+    @pytest.mark.gpio
+    def test_the_poll_read_waits_for_the_lock(self, gpio):
+        with patch.object(gc, 'read_all_gpio_states_as_json', return_value={}):
+            self._blocked_while_held(gpio._read_all_gpio_locked)
+
+
+class TestOutputCommands:
+    @pytest.mark.unit
+    @pytest.mark.gpio
+    def test_on_drives_the_pin_low_and_records_it(self, gpio, driver, pins, emit):
+        driver.set_gpio.reset_mock()
+        emit.reset_mock()
+
+        assert gpio.set_output_pin(3, True) == 0
+
+        driver.set_gpio.assert_called_once_with(1, 3, 0)
+        pins.update_one.assert_called_with({'type': 'gpio_pin_state'},
+                                           {'$set': {'GPO3': True}}, True)
+        assert gpio.cur_pin_state['GPO3'] is True
+        emit.assert_called()
+
+    @pytest.mark.unit
+    @pytest.mark.gpio
+    def test_off_drives_the_pin_high(self, gpio, driver, pins, emit):
+        driver.set_gpio.reset_mock()
+        gpio.set_output_pin(3, False)
+        driver.set_gpio.assert_called_once_with(1, 3, 1)
+        assert gpio.cur_pin_state['GPO3'] is False
+
+    @pytest.mark.unit
+    @pytest.mark.gpio
+    def test_toggle_flips_the_hardware_state(self, gpio, driver, pins, emit):
+        driver.set_gpio.reset_mock()
+        driver.read_gpo.return_value = 1  # high = off
+
+        assert gpio.toggle_output_pin(4) is True
+        driver.set_gpio.assert_called_once_with(1, 4, 0)
+
+        driver.set_gpio.reset_mock()
+        driver.read_gpo.return_value = 0
+        assert gpio.toggle_output_pin(4) is False
+        driver.set_gpio.assert_called_once_with(1, 4, 1)
+
+    @pytest.mark.unit
+    @pytest.mark.gpio
+    def test_an_input_is_asserted_when_low(self, gpio, driver):
+        # read_gpi returns the masked bit as 0/1 for every pin, never the pin
+        # number; the old `state != pin_num` test was right only for pin 1.
+        driver.read_gpi.return_value = 0
+        assert gpio.input_asserted(5) is True
+        driver.read_gpi.return_value = 1
+        assert gpio.input_asserted(5) is False
+
+
+class TestPulsePassFail:
+    @pytest.mark.unit
+    @pytest.mark.gpio
+    @pytest.mark.parametrize('verdict,pin', [('PASS', 5), ('FAIL', 6)])
+    def test_the_verdict_pin_is_held_then_released(self, gpio, driver, pins, emit, verdict, pin):
+        driver.set_gpio.reset_mock()
+        with patch('time.sleep', new=thread_aware_sleep_mock()) as sleep:
+            assert gpio.pulse_pass_fail(verdict) == verdict
+
+        assert driver.set_gpio.call_args_list == [call(1, pin, 0), call(1, 5, 1), call(1, 6, 1)]
+        sleep.assert_called_once_with(.5)
+        assert gpio.cur_pin_state['GPO5'] is False
+        assert gpio.cur_pin_state['GPO6'] is False
+
+    @pytest.mark.unit
+    @pytest.mark.gpio
+    def test_the_lock_is_not_held_during_the_hold(self, gpio, driver, pins, emit):
+        # Holding it would freeze the poll loop for the whole pulse.
+        held = []
+        with patch('time.sleep', new=thread_aware_sleep_mock()) as sleep:
+            sleep.side_effect = lambda s: held.append(gc.gpio_lock._is_owned())
+            gpio.pulse_pass_fail('PASS')
+        assert held == [False]
+
+    @pytest.mark.unit
+    @pytest.mark.gpio
+    def test_an_unrecognised_verdict_still_releases_both_pins(self, gpio, driver, pins, emit):
+        driver.set_gpio.reset_mock()
+        with patch('time.sleep', new=thread_aware_sleep_mock()) as sleep:
+            gpio.pulse_pass_fail('UNKNOWN')
+
+        assert driver.set_gpio.call_args_list == [call(1, 5, 1), call(1, 6, 1)]
+        sleep.assert_not_called()
+
+
+class TestPinApi:
+    @pytest.fixture
+    def http(self):
+        return gc.app.test_client()
+
+    @pytest.fixture
+    def controller(self):
+        with patch.object(gc, 'init_gpio') as gpio:
+            yield gpio
+
+    @pytest.mark.unit
+    @pytest.mark.gpio
+    def test_set_drives_the_pin(self, http, controller):
+        controller.set_output_pin.return_value = 0
+
+        resp = http.post('/api/gpio/set', json={'pin': '2', 'state': True})
+
+        assert resp.get_json() == {'state': 'on', 'rc': 0}
+        controller.set_output_pin.assert_called_once_with(2, True)
+
+    @pytest.mark.unit
+    @pytest.mark.gpio
+    def test_only_an_exact_true_turns_a_pin_on(self, http, controller):
+        controller.set_output_pin.return_value = 0
+        assert http.post('/api/gpio/set', json={'pin': 2, 'state': 'on'}).get_json()['state'] == 'off'
+
+    @pytest.mark.unit
+    @pytest.mark.gpio
+    @pytest.mark.parametrize('body', [{}, {'pin': 0}, {'pin': 9}, {'pin': 'x'}, {'pin': None}])
+    def test_a_bad_pin_is_rejected(self, http, controller, body):
+        assert http.post('/api/gpio/set', json=body).status_code == 400
+        controller.set_output_pin.assert_not_called()
+
+    @pytest.mark.unit
+    @pytest.mark.gpio
+    def test_remote_callers_cannot_drive_pins(self, http, controller):
+        resp = http.post('/api/gpio/set', json={'pin': 2, 'state': True},
+                         environ_base={'REMOTE_ADDR': '10.0.0.9'})
+
+        assert resp.status_code == 403
+        controller.set_output_pin.assert_not_called()
+
+    @pytest.mark.unit
+    @pytest.mark.gpio
+    def test_toggle(self, http, controller):
+        controller.toggle_output_pin.return_value = True
+        assert http.post('/api/gpio/toggle', json={'pin': 4}).get_json() == {'state': True}
+
+    @pytest.mark.unit
+    @pytest.mark.gpio
+    def test_input(self, http, controller):
+        controller.input_asserted.return_value = True
+        assert http.get('/api/gpio/input/3').get_json() == {'asserted': True}
+        controller.input_asserted.assert_called_once_with(3)
+
+    @pytest.mark.unit
+    @pytest.mark.gpio
+    def test_state(self, http, controller):
+        state = {'inputs': [1] * 8, 'outputs': [0] * 8}
+        controller._read_all_gpio_locked.return_value = state
+        assert http.get('/api/gpio/state').get_json() == state
+
+    @pytest.mark.unit
+    @pytest.mark.gpio
+    def test_pass_fail(self, http, controller):
+        controller.pulse_pass_fail.return_value = 'FAIL'
+        assert http.post('/api/gpio/pass_fail', json={'pass_fail': 'FAIL'}).get_json() == \
+            {'pass_fail': 'FAIL'}
+        controller.pulse_pass_fail.assert_called_once_with('FAIL')
 
 
 class TestAllowInference:

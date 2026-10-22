@@ -11,7 +11,7 @@ from worker_scripts.job_manager import find_utility
 import settings
 
 if platform.processor() != 'aarch64':
-    from gpio.gpio_helper import toggle_pin, set_pin_state, read_pin
+    from gpio.gpio_client import toggle_pin, set_pin_state, read_pin
 
 class MacId(Resource):
     def get(self):

@@ -150,16 +150,16 @@ sys.modules['setup.management'] = _mock_management
 # Individual tests will mock database connections as needed
 
 # Mock GPIO module to prevent loading hardware-specific .so files
-_mock_gpio_helper = MagicMock()
-_mock_gpio_helper.toggle_pin = MagicMock(return_value=True)
-_mock_gpio_helper.set_pin_state = MagicMock(return_value=True)
-_mock_gpio_helper.read_pin = MagicMock(return_value=0)
+_mock_gpio_client = MagicMock()
+_mock_gpio_client.toggle_pin = MagicMock(return_value=True)
+_mock_gpio_client.set_pin_state = MagicMock(return_value=True)
+_mock_gpio_client.read_pin = MagicMock(return_value=0)
 
 _mock_gpio_package = MagicMock()
-_mock_gpio_package.gpio_helper = _mock_gpio_helper
+_mock_gpio_package.gpio_client = _mock_gpio_client
 
 sys.modules['gpio'] = _mock_gpio_package
-sys.modules['gpio.gpio_helper'] = _mock_gpio_helper
+sys.modules['gpio.gpio_client'] = _mock_gpio_client
 
 @pytest.fixture(scope='session')
 def mock_settings():

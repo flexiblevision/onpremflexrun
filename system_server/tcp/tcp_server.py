@@ -4,7 +4,6 @@ import os
 import threading
 import time
 import requests
-from ctypes import *
 from pymongo import MongoClient
 from gpio_helper import *
 from gpio_csv_logger import log_signal
@@ -39,33 +38,12 @@ def read_gpio_state(type):
     else:
         return {'error': 'Invalid state type requested'}    
 
-import platform 
+import platform
 if platform.processor() != 'aarch64':
-    so_file = os.environ['HOME']+"/flex-run/system_server/gpio/gpio.so"
-    functions = CDLL(so_file)
-
     def set_pass_fail_pins(data):
         if 'pass_fail' in data:
-            new_pin_state = {}
             print(data['pass_fail'], ' <======================')
-            if data['pass_fail'] == 'PASS':
-                #set pass pin
-                print(functions.set_gpio(1, 5, 0), 'PASS PIN ON')
-                new_pin_state['GPO5'] = True
-            if data['pass_fail'] == 'FAIL':
-                #set fail pin
-                print(functions.set_gpio(1, 6, 0), 'FAIL PIN ON')
-                new_pin_state['GPO6'] = True
-
-            pin_state_ref.update_one({'type': 'gpio_pin_state'}, {'$set': new_pin_state}, True)
-            time.sleep(.5)
-
-            print(functions.set_gpio(1, 5, 1), 'PASS PIN OFF')
-            print(functions.set_gpio(1, 6, 1), 'FAIL PIN OFF')
-            new_pin_state['GPO5'] = False
-            new_pin_state['GPO6'] = False
-            pin_state_ref.update_one({'type': 'gpio_pin_state'}, {'$set': new_pin_state}, True)
-            return data['pass_fail']
+            return pulse_pass_fail(data['pass_fail'])
         return
 
 
@@ -196,6 +174,8 @@ def handle_connection(connections, client_address, valid_commands=None, config=N
 
 def create_server(host=SERVER_HOST, port=SERVER_PORT):
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    # Without it a forever restart hits TIME_WAIT on 5300 and crash-loops.
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     server_address = (host, port)
     print('starting server on port', server_address)
     sock.bind(server_address)

@@ -12,7 +12,6 @@ import os
 import socket
 import sys
 import pytest
-from testsupport import thread_aware_sleep_mock
 from unittest.mock import patch, MagicMock, call
 
 
@@ -32,6 +31,8 @@ def _load_tcp_server():
     module = importlib.util.module_from_spec(spec)
 
     sys.path.insert(0, TCP_DIR)
+    # gpio/ has its own gpio_helper; another test's import must not satisfy ours.
+    sys.modules.pop('gpio_helper', None)
     sys.modules['_tcp_server_under_test'] = module
     try:
         with patch('ctypes.CDLL', return_value=MagicMock()):
@@ -113,70 +114,25 @@ class TestReadGpioState:
 class TestSetPassFailPins:
     @pytest.mark.unit
     @pytest.mark.gpio
-    def test_a_pass_pulses_pin_five(self):
-        with patch.object(ts, 'functions') as driver, \
-             patch.object(ts, 'pin_state_ref') as pins, \
-             patch('time.sleep', new=thread_aware_sleep_mock()):
+    def test_the_verdict_is_pulsed_by_the_controller(self):
+        with patch.object(ts, 'pulse_pass_fail', return_value='PASS') as pulse:
             assert ts.set_pass_fail_pins({'pass_fail': 'PASS'}) == 'PASS'
 
-        # Pin driven low (asserted), then high again (released).
-        assert call(1, 5, 0) in driver.set_gpio.call_args_list
-        assert call(1, 5, 1) in driver.set_gpio.call_args_list
-        assert pins.update_one.call_count == 2
-
-    @pytest.mark.unit
-    @pytest.mark.gpio
-    def test_a_fail_pulses_pin_six(self):
-        with patch.object(ts, 'functions') as driver, \
-             patch.object(ts, 'pin_state_ref'), \
-             patch('time.sleep', new=thread_aware_sleep_mock()):
-            assert ts.set_pass_fail_pins({'pass_fail': 'FAIL'}) == 'FAIL'
-
-        assert call(1, 6, 0) in driver.set_gpio.call_args_list
-
-    @pytest.mark.unit
-    @pytest.mark.gpio
-    def test_both_pins_are_always_released(self):
-        # A pin left asserted latches the reject gate open on the next part.
-        with patch.object(ts, 'functions') as driver, \
-             patch.object(ts, 'pin_state_ref') as pins, \
-             patch('time.sleep', new=thread_aware_sleep_mock()):
-            ts.set_pass_fail_pins({'pass_fail': 'PASS'})
-
-        released = pins.update_one.call_args[0][1]['$set']
-        assert released['GPO5'] is False
-        assert released['GPO6'] is False
-        assert driver.set_gpio.call_args_list[-2:] == [call(1, 5, 1), call(1, 6, 1)]
-
-    @pytest.mark.unit
-    @pytest.mark.gpio
-    def test_the_pulse_is_held_before_release(self):
-        with patch.object(ts, 'functions'), \
-             patch.object(ts, 'pin_state_ref'), \
-             patch('time.sleep', new=thread_aware_sleep_mock()) as sleep:
-            ts.set_pass_fail_pins({'pass_fail': 'FAIL'})
-
-        sleep.assert_called_once_with(.5)
+        pulse.assert_called_once_with('PASS')
 
     @pytest.mark.unit
     @pytest.mark.gpio
     def test_a_result_without_a_verdict_touches_nothing(self):
-        with patch.object(ts, 'functions') as driver, \
-             patch.object(ts, 'pin_state_ref') as pins:
+        with patch.object(ts, 'pulse_pass_fail') as pulse:
             assert ts.set_pass_fail_pins({'other': 1}) is None
 
-        driver.set_gpio.assert_not_called()
-        pins.update_one.assert_not_called()
+        pulse.assert_not_called()
 
     @pytest.mark.unit
     @pytest.mark.gpio
-    def test_an_unrecognised_verdict_still_releases_both_pins(self):
-        with patch.object(ts, 'functions') as driver, \
-             patch.object(ts, 'pin_state_ref'), \
-             patch('time.sleep', new=thread_aware_sleep_mock()):
-            assert ts.set_pass_fail_pins({'pass_fail': 'UNKNOWN'}) == 'UNKNOWN'
-
-        assert driver.set_gpio.call_args_list == [call(1, 5, 1), call(1, 6, 1)]
+    def test_the_driver_is_never_loaded_here(self):
+        # gpio_controller owns gpio.so; a second caller corrupts its reads.
+        assert not hasattr(ts, 'functions')
 
 
 class TestHelpPayload:
@@ -492,6 +448,13 @@ class TestServerLifecycle:
         with patch('socket.socket', return_value=MagicMock()) as factory:
             ts.create_server()
         factory.assert_called_once_with(socket.AF_INET, socket.SOCK_STREAM)
+
+    @pytest.mark.unit
+    def test_the_port_is_reusable_across_restarts(self):
+        sock = MagicMock()
+        with patch('socket.socket', return_value=sock):
+            ts.create_server()
+        sock.setsockopt.assert_called_once_with(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
 
     @pytest.mark.unit
     def test_each_connection_is_closed_after_being_served(self):
