@@ -11,11 +11,105 @@ from worker_scripts.job_manager import find_utility
 import settings
 
 if platform.processor() != 'aarch64':
-    from gpio.gpio_helper import toggle_pin, set_pin_state, read_pin
+    from gpio.gpio_client import toggle_pin, set_pin_state, read_pin
 
 class MacId(Resource):
     def get(self):
         return get_mac_id()
+
+
+_mongo_client = None
+
+def _mongo():
+    # One client per process: a new one per call leaked a pool and its monitor threads.
+    global _mongo_client
+    if _mongo_client is None:
+        from pymongo import MongoClient
+        _mongo_client = MongoClient(os.environ.get('MONGO_SERVER', '172.17.0.1'),
+                                    int(os.environ.get('MONGO_PORT', 27017)),
+                                    serverSelectionTimeoutMS=5000)
+    return _mongo_client
+
+
+OFFER_TTL = 600
+OFFER_TIMEOUT = 4
+_offer_cache = {'key': None, 'at': 0, 'offer': None}
+
+
+def _channel_offer(channel, high_water):
+    # device_info is polled and read by the hotspot page; a network check per
+    # read would stall both, so the offer is cached.
+    import time
+    key = (channel, high_water)
+    now = time.time()
+    if _offer_cache['key'] == key and now - _offer_cache['at'] < OFFER_TTL:
+        return _offer_cache['offer']
+    try:
+        import upgrade_runner
+        from release import fetch as fetch_mod
+        offer = fetch_mod.available(upgrade_runner._device_arch(), high_water,
+                                    channel=channel, timeout=OFFER_TIMEOUT)
+    except Exception as e:
+        offer = {'reachable': False, 'detail': str(e)}
+    _offer_cache.update(key=key, at=now, offer=offer)
+    return offer
+
+
+def _release_identity():
+    """What this device is running and where it takes it from.
+
+    Three answers support asks for in the same breath as the serial, so they
+    ride along with it rather than costing three more calls. Each is resolved
+    independently and each degrades to None: device_info is read by the
+    hotspot page and the cloud, and none of them should lose an IP address
+    because mongo is down.
+    """
+    identity = {'release': None, 'release_counter': None, 'release_channel': None,
+                'cloud': None, 'release_control': None, 'rollback_targets': [],
+                'release_available': None, 'release_update_available': None}
+
+    try:
+        import cloud_env
+        identity['release_control'] = cloud_env.release_control_available()
+    except Exception as e:
+        print('could not tell whether release control is available: {}'.format(e))
+
+    try:
+        import upgrade_runner
+        identity['release_channel'] = upgrade_runner._device_channel()
+    except Exception as e:
+        print('could not resolve the release channel: {}'.format(e))
+
+    try:
+        import cloud_env
+        identity['cloud'] = cloud_env.cloud_name(cloud_env.get_cloud_domain())
+    except Exception as e:
+        print('could not resolve the cloud: {}'.format(e))
+
+    if identity['release_control'] is False:
+        return identity
+
+    try:
+        from release import state as release_state
+        collection = _mongo()['fvonprem']['utils']
+        offer = _channel_offer(identity['release_channel'],
+                               release_state.read(collection)['high_water'])
+        summary = release_state.summary(collection, available=offer)
+        # Left None when the channel could not be reached: unknown, not up to date.
+        if offer.get('reachable') and isinstance(offer.get('counter'), int):
+            identity['release_available'] = offer.get('release')
+            identity['release_update_available'] = summary.get('update_available')
+        installed = summary.get('installed') or {}
+        identity['release'] = installed.get('release')
+        identity['release_counter'] = installed.get('counter')
+        # The cloud offers these as rollback choices; it cannot read the history.
+        identity['rollback_targets'] = [
+            {'counter': t.get('counter'), 'release': t.get('release')}
+            for t in summary.get('rollback_targets') or []]
+    except Exception as e:
+        print('could not read the installed release: {}'.format(e))
+
+    return identity
 
 class DeviceInfo(Resource):
     def get(self):
@@ -71,6 +165,7 @@ class DeviceInfo(Resource):
                 pass
 
         info['presets'] = get_presets()
+        info.update(_release_identity())
 
         return info
 

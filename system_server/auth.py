@@ -63,7 +63,12 @@ def requires_auth(f):
     @wraps(f)
     def decorated(*args, **kwargs):
         token = get_token_auth_header()
-        jsonurl = urlopen("http://localhost:5000/api/capture/auth/jwks")
+        # Timed out deliberately. capdev serves this, so a capdev that is down
+        # or wedged used to hang every authenticated route here forever, one
+        # leaked thread per request - including /refresh_backend and
+        # /list_services, the two an operator needs to recover the device. Fail
+        # fast instead and leave a way back in.
+        jsonurl = urlopen("http://localhost:5000/api/capture/auth/jwks", timeout=5)
         jwks = json.loads(jsonurl.read())
         unverified_header = jwt.get_unverified_header(token)
         if ENVIRON != 'local':
@@ -81,6 +86,16 @@ def requires_auth(f):
         if ENVIRON == 'local':
             rsa_key = True
         if rsa_key:
+            # verify_exp is off deliberately, on both paths. These devices run
+            # on isolated factory networks with no reliable time source, so a
+            # skewed clock would reject valid tokens and lock operators out of
+            # /upgrade and /restart - a truck roll per device. A long-lived
+            # token is the accepted trade; the boundary is network and physical
+            # access, not token freshness. Do not "fix" this without first
+            # confirming the fleet has trustworthy time (timedatectl on a real
+            # unit) - and then prefer a generous leeway over strict expiry.
+            # There is no automatic revocation as a result: a lost token means
+            # re-provisioning the device.
             try:
                 if ENVIRON == 'local':
                     payload = jwt.decode(
