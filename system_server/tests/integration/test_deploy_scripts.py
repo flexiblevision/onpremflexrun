@@ -1471,6 +1471,99 @@ class TestInstallCrontab:
 
 
 # --------------------------------------------------------------------------
+# stop_forever_script / ensure_forever_script - no stale copy, never none
+# --------------------------------------------------------------------------
+
+WORKER = '/srv/flex-run/system_server/worker.py'
+SYNC_WORKER = '/srv/flex-run/system_server/worker_scripts/sync_worker.py'
+
+
+class TestForeverScripts:
+
+    @pytest.fixture
+    def fv(self, sh):
+        """A forever stub that keeps a real process list, one line per copy."""
+        listing, log = sh.tmp / 'forever.list', sh.tmp / 'forever.log'
+        listing.write_text('')
+        _write_stub(sh.stubs, 'forever', """
+            case "$1" in
+                list) cat "%(list)s" ;;
+                stop)
+                    echo "stop $2" >> "%(log)s"
+                    [ -n "$STUCK" ] && exit 0
+                    awk -v s="$2" '!done && index($0, s) && $0 !~ /STOPPED/ {done=1; next} {print}' \\
+                        "%(list)s" > "%(list)s.tmp" && mv "%(list)s.tmp" "%(list)s" ;;
+                start)
+                    echo "start $4" >> "%(log)s"
+                    echo "python3 $4 running" >> "%(list)s" ;;
+            esac
+            """ % {'list': listing, 'log': log})
+        _write_stub(sh.stubs, 'pkill', 'echo "pkill $*" >> %s\n' % log)
+        # An old copy still draining its last job after the TERM.
+        _write_stub(sh.stubs, 'pgrep', 'exit 0\n')
+        sh.listing, sh.log = listing, log
+        return sh
+
+    def _run(self, fv, body, **env):
+        return fv('. %s\n%s' % (LIB, body), env=env)
+
+    def _calls(self, fv):
+        return fv.log.read_text().splitlines() if fv.log.exists() else []
+
+    def _running(self, fv, script):
+        return [l for l in fv.listing.read_text().splitlines()
+                if script in l and 'STOPPED' not in l]
+
+    def test_stop_clears_every_managed_copy_and_terms_orphans(self, fv):
+        fv.listing.write_text(''.join('python3 %s running\n' % WORKER for _ in range(6)))
+        self._run(fv, 'stop_forever_script %s' % WORKER)
+        assert self._running(fv, WORKER) == []
+        assert self._calls(fv).count('stop %s' % WORKER) == 6
+        assert 'pkill -TERM -f python3 %s$' % WORKER in self._calls(fv)
+
+    def test_stop_leaves_other_services_running(self, fv):
+        fv.listing.write_text('python3 %s running\npython3 %s running\n' % (WORKER, SYNC_WORKER))
+        self._run(fv, 'stop_forever_script %s' % WORKER)
+        assert len(self._running(fv, SYNC_WORKER)) == 1
+
+    def test_stop_ignores_stopped_entries(self, fv):
+        fv.listing.write_text('python3 %s STOPPED\n' % WORKER)
+        self._run(fv, 'stop_forever_script %s' % WORKER)
+        assert not any(c.startswith('stop ') for c in self._calls(fv))
+
+    def test_stop_is_bounded_when_forever_never_lets_go(self, fv):
+        fv.listing.write_text('python3 %s running\n' % WORKER)
+        result = self._run(fv, 'stop_forever_script %s' % WORKER, STUCK='1')
+        assert result.returncode == 0
+        assert self._calls(fv).count('stop %s' % WORKER) == 20
+
+    def test_ensure_starts_one_when_forever_runs_none(self, fv):
+        # pgrep would see the draining old copy; that must not count as running.
+        result = self._run(fv, 'ensure_forever_script %s' % WORKER)
+        assert self._calls(fv) == ['start %s' % WORKER]
+        assert 'not running after restart' in result.stdout
+
+    def test_ensure_leaves_a_running_service_alone(self, fv):
+        fv.listing.write_text('python3 %s running\n' % WORKER)
+        self._run(fv, 'ensure_forever_script %s' % WORKER)
+        assert self._calls(fv) == []
+
+    def test_restart_through_boot_script_ends_with_new_copies_only(self, fv):
+        boot = fv.tmp / 'worker_server_start.sh'
+        boot.write_text(''.join('forever start -c python3 %s\n' % WORKER for _ in range(6)))
+        fv.listing.write_text(''.join('python3 %s running\n' % WORKER for _ in range(6)))
+        self._run(fv, 'stop_forever_script {w}\nsh {b}\nensure_forever_script {w}'
+                  .format(w=WORKER, b=boot))
+        calls = self._calls(fv)
+        assert len(self._running(fv, WORKER)) == 6
+        # Every old copy is stopped before the first new one starts.
+        last_stop = max(i for i, c in enumerate(calls) if c.startswith(('stop', 'pkill')))
+        first_start = min(i for i, c in enumerate(calls) if c.startswith('start'))
+        assert last_stop < first_start
+        assert calls.count('start %s' % WORKER) == 6
+
+
+# --------------------------------------------------------------------------
 # ensure_fstab_entry - a duplicate swap line breaks boot
 # --------------------------------------------------------------------------
 

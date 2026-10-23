@@ -649,3 +649,41 @@ configure_redis() {
 
     systemctl restart redis.service
 }
+
+# ---- forever-managed python services ---------------------------------------
+# An upgrade used to `forever stop` each service once, but that stops one
+# match per call and cannot see a copy that lost its monitor, so old copies
+# kept running the previous release's code alongside the new one.
+
+# stop_forever_script <script>
+#
+# Stops every copy of <script>, managed or orphaned. TERM, not KILL: an RQ
+# worker finishes its current job before it exits. Call before starting the
+# replacement, so the new copy is never matched.
+stop_forever_script() {
+    local script
+    local i
+
+    script="$1"
+    i=0
+    # STOPPED entries stay in `forever list` and would keep this loop going.
+    while [ "$i" -lt 20 ] && forever list 2>/dev/null | grep -F "$script" | grep -qv STOPPED; do
+        forever stop "$script" >/dev/null 2>&1
+        i=$((i + 1))
+    done
+    pkill -TERM -f "python3 $script\$" 2>/dev/null || true
+}
+
+# ensure_forever_script <script>
+#
+# Starts one copy of <script> if forever runs none. The last step of a restart:
+# whatever failed above, the service is not left with nothing running. Asks
+# forever rather than ps, because an old copy still draining its last job
+# after the TERM would look running and then exit.
+ensure_forever_script() {
+    if forever list 2>/dev/null | grep -F "$1" | grep -qv STOPPED; then
+        return 0
+    fi
+    echo "WARNING: $1 not running after restart - starting one copy"
+    forever start -c python3 "$1"
+}

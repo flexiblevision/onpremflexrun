@@ -76,29 +76,30 @@ fi
 # own version arguments.
 unset FLEXRUN_PLAN FLEXRUN_RUN_ID FLEXRUN_RECORDER FLEXRUN_PACKAGES FLEXRUN_SOURCE FLEXRUN_PIN_COMMIT
 
-#restart worker server
-forever stop $HOME/flex-run/system_server/worker.py
-forever start -c python3 $HOME/flex-run/system_server/worker.py
+restart_service() {
+    stop_forever_script "$1"
+    forever start -c python3 "$1"
+    ensure_forever_script "$1"
+}
 
-forever stop $HOME/flex-run/system_server/worker_scripts/sync_worker.py
-forever start -c python3 $HOME/flex-run/system_server/worker_scripts/sync_worker.py
+# Through the boot script, so an upgrade leaves the same worker count a reboot does.
+WORKER="$HOME/flex-run/system_server/worker.py"
+stop_forever_script "$WORKER"
+sh "$HOME/flex-run/scripts/worker_server_start.sh"
+ensure_forever_script "$WORKER"
 
-forever stop $HOME/flex-run/system_server/tcp/tcp_server.py
-forever start -c python3 $HOME/flex-run/system_server/tcp/tcp_server.py
-
-forever stop $HOME/flex-run/system_server/job_watcher.py
-forever start -c python3 $HOME/flex-run/system_server/job_watcher.py
+restart_service "$HOME/flex-run/system_server/worker_scripts/sync_worker.py"
+restart_service "$HOME/flex-run/system_server/tcp/tcp_server.py"
+restart_service "$HOME/flex-run/system_server/job_watcher.py"
 
 ARCH=$(arch)
 if [ "$ARCH" = "x86_64" ]; then
-    forever stop $HOME/flex-run/system_server/gpio/gpio_controller.py
-    forever start -c python3 $HOME/flex-run/system_server/gpio/gpio_controller.py
+    restart_service "$HOME/flex-run/system_server/gpio/gpio_controller.py"
 fi
 
 if [ -e /etc/vsftpd.conf ]
 then
-    forever stop $HOME/flex-run/system_server/ftp_worker.py
-    forever start -c python3 $HOME/flex-run/system_server/ftp_worker.py
+    restart_service "$HOME/flex-run/system_server/ftp_worker.py"
 else
     echo "ftp config not found"
 fi
