@@ -342,7 +342,10 @@ def write_bundle(target, arch='x86', channel='stable', counter=None, resolver=No
                                    'platform': ('registry/{}.platform'.format(component)
                                                 if platform_manifest is not None else None)}
 
-    needed = sum(i['size'] for i in index_images.values()) * SPACE_MARGIN + PACKAGES_ALLOWANCE
+    # A tar only exists once its save finished, so an interrupted run resumes from it.
+    pending = {c: i for c, i in index_images.items()
+               if not os.path.exists(os.path.join(root, i['tar']))}
+    needed = sum(i['size'] for i in pending.values()) * SPACE_MARGIN + PACKAGES_ALLOWANCE
     free = shutil.disk_usage(root).free
     if needed > free:
         raise UsbError('the stick needs {:.1f} GB free and has {:.1f} GB'
@@ -351,6 +354,9 @@ def write_bundle(target, arch='x86', channel='stable', counter=None, resolver=No
     for component, item in sorted(index_images.items()):
         final = os.path.join(root, item['tar'])
         partial = final + '.partial'
+        if component not in pending:
+            log('  {} already written'.format(item['tar']))
+            continue
         log('  writing {} ({:.1f} GB)'.format(item['tar'], item['size'] / 1e9))
         runner(['docker', 'save', '--output', partial, item['reference']])
         os.replace(partial, final)

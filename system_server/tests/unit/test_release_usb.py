@@ -312,6 +312,15 @@ class TestWriteBundle:
         with pytest.raises(usb.UsbError, match='already on this stick'):
             self._write(stick, release, tools)
 
+    def test_an_interrupted_write_keeps_the_tars_it_finished(self, stick, release):
+        tools = FakeTools({release['ref']: 'sha256:cfg-backend'}, {release['ref']: 1000})
+        root = self._write(stick, release, tools)
+        os.remove(os.path.join(root, 'bundle.json'))
+        tools.calls = []
+        self._write(stick, release, tools)
+        assert not any(c[:2] == ['docker', 'save'] for c in tools.calls)
+        assert os.path.exists(os.path.join(root, 'bundle.json'))
+
     def test_the_local_disk_is_never_written(self, stick, release, tmp_path):
         local = tmp_path / 'home'
         local.mkdir()
