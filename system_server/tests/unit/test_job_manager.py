@@ -288,14 +288,34 @@ class TestCloudCall:
     def test_cloud_call_targets_bq_when_not_local(self, mock_sleep, mock_post,
                                                   mock_mark_synced):
         """A cloud device sends analytics to the ingest queue, not the domain."""
-        from worker_scripts.job_manager import cloud_call, BQ_INGEST_PATH
+        from worker_scripts.job_manager import cloud_call
 
         mock_post.return_value = MagicMock(status_code=200)
 
-        with patch.dict('worker_scripts.job_manager.config', {'environ': 'cloud'}):
+        with patch.dict('worker_scripts.job_manager.config', {'environ': 'cloud'}), \
+                patch('worker_scripts.job_manager.ingest_path', return_value='https://ingest'):
             cloud_call('http://test.com/api', [{'id': 'rec1'}], {})
 
-        assert mock_post.call_args[0][0] == BQ_INGEST_PATH
+        assert mock_post.call_args[0][0] == 'https://ingest'
+
+    @pytest.mark.unit
+    @patch('worker_scripts.job_manager.mark_as_synced')
+    @patch('requests.post')
+    @patch('time.sleep', new_callable=thread_aware_sleep_mock)
+    def test_cloud_call_local_cluster_posts_to_master(self, mock_sleep, mock_post,
+                                                      mock_mark_synced):
+        """A local-cloud device uploads to its master and never resolves ingest."""
+        from worker_scripts.job_manager import cloud_call
+
+        mock_post.return_value = MagicMock(status_code=200)
+        master = 'http://192.168.8.10/api/capture/devices/upload_prediction'
+
+        with patch.dict('worker_scripts.job_manager.config', {'environ': 'local'}), \
+                patch('worker_scripts.job_manager.ingest_path') as ingest:
+            cloud_call(master, [{'id': 'rec1'}], {})
+
+        assert mock_post.call_args[0][0] == master
+        ingest.assert_not_called()
 
     @pytest.mark.unit
     @patch('worker_scripts.job_manager.mark_as_synced')
@@ -530,23 +550,64 @@ class TestBatchSize:
         assert isinstance(BATCH_SIZE, int)
 
 
-class TestBQIngestPath:
-    """Tests for BigQuery ingest path configuration"""
+PROD_CLOUD = 'https://v1.cloud.flexiblevision.com'
+DEV_CLOUD = 'https://clouddeploy.api.flexiblevision.com'
+DEV_TRACK = {'latest_stable_ref': 'latest_stable_version_check_dev'}
+PROD_TRACK = {'latest_stable_ref': 'latest_stable_version'}
+
+
+class TestIngestPath:
+    """ingest_path - analytics go to the cloud the device talks to"""
+
+    @pytest.fixture(autouse=True)
+    def _fresh_probe(self):
+        with patch('worker_scripts.job_manager._lb_reachable', None):
+            yield
+
+    def _resolve(self, domain, track, lb_up=True):
+        from worker_scripts.job_manager import ingest_path
+        probe = patch('worker_scripts.job_manager.requests.get',
+                      side_effect=None if lb_up else Exception('down'))
+        with patch('cloud_env.get_cloud_domain', return_value=domain), \
+                patch('worker_scripts.job_manager.config', track), probe as get:
+            return ingest_path(), get
 
     @pytest.mark.unit
-    @patch('worker_scripts.job_manager.config', {'latest_stable_ref': 'latest_stable_version'})
-    def test_bq_ingest_path_prod(self):
-        """Test BQ ingest path for production"""
-        # This test verifies the module-level logic
-        # In actual implementation, this is set at import time
-        pass
+    def test_dev_track_repointed_to_prod_sends_to_prod(self):
+        """The release track fvconfig.json was installed with must not win
+        over the cloud_env override that repointed the device."""
+        path, _ = self._resolve(PROD_CLOUD, DEV_TRACK)
+        assert path == 'https://functions-proxy.flexiblevision.com/data-enqueue-prod'
 
     @pytest.mark.unit
-    @patch('worker_scripts.job_manager.config', {'latest_stable_ref': 'dev_version'})
-    def test_bq_ingest_path_dev(self):
-        """Test BQ ingest path for development"""
-        # This test verifies the module-level logic
-        pass
+    def test_prod_track_repointed_to_dev_sends_to_dev(self):
+        from worker_scripts.job_manager import INGEST_DIRECT
+        path, get = self._resolve(DEV_CLOUD, PROD_TRACK)
+        assert path == INGEST_DIRECT['dev']
+        get.assert_not_called()
+
+    @pytest.mark.unit
+    def test_prod_falls_back_to_direct_when_lb_unreachable(self):
+        from worker_scripts.job_manager import INGEST_DIRECT
+        path, _ = self._resolve(PROD_CLOUD, PROD_TRACK, lb_up=False)
+        assert path == INGEST_DIRECT['prod']
+
+    @pytest.mark.unit
+    def test_lb_probed_once_per_process(self):
+        from worker_scripts.job_manager import ingest_path
+        with patch('cloud_env.get_cloud_domain', return_value=PROD_CLOUD), \
+                patch('worker_scripts.job_manager.requests.get') as get:
+            ingest_path()
+            ingest_path()
+        assert get.call_count == 1
+
+    @pytest.mark.unit
+    @pytest.mark.parametrize('track, expected', [(PROD_TRACK, 'prod'), (DEV_TRACK, 'dev')])
+    def test_bespoke_cloud_keeps_release_track_rule(self, track, expected):
+        from worker_scripts.job_manager import _ingest_cloud
+        with patch('cloud_env.get_cloud_domain', return_value='https://self-hosted.example'), \
+                patch('worker_scripts.job_manager.config', track):
+            assert _ingest_cloud() == expected
 
 
 class TestBatchRecords:

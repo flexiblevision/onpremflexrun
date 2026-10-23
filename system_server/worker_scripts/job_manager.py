@@ -10,6 +10,7 @@ import os
 settings_path = os.environ['HOME']+'/flex-run'
 sys.path.append(settings_path)
 import settings
+import cloud_env
 
 from redis import Redis
 from rq import Queue, Retry, Worker
@@ -60,17 +61,36 @@ BATCH_SIZE        = 10
 # A whole batch is published as one Pub/Sub message, which caps at 10MB.
 MAX_BATCH_BYTES   = int(os.environ.get('MAX_BATCH_BYTES', 8 * 1024 * 1024))
 LB_DOMAIN         = "https://functions-proxy.flexiblevision.com"
-BQ_INGEST_PATH    = "https://data-ingest-queue-172198548516.us-central1.run.app"
-if config['latest_stable_ref'] == 'latest_stable_version':
-    #use prod endpoint
-    BQ_INGEST_DIRECT = "https://data-enqueue-prod-172198548516.us-central1.run.app"
-    try:
-        r = requests.get(LB_DOMAIN, timeout=5)
-        BQ_INGEST_PATH = LB_DOMAIN + "/data-enqueue-prod"
-        print(f"LB reachable, using proxy: {BQ_INGEST_PATH}")
-    except Exception:
-        BQ_INGEST_PATH = BQ_INGEST_DIRECT
-        print(f"LB unreachable, using direct: {BQ_INGEST_PATH}")
+INGEST_DIRECT     = {
+    'prod': "https://data-enqueue-prod-172198548516.us-central1.run.app",
+    'dev': "https://data-ingest-queue-172198548516.us-central1.run.app",
+}
+_lb_reachable     = None
+
+
+def _ingest_cloud():
+    """The cloud this device talks to, so analytics follow a cloud_env override
+    instead of the release track fvconfig.json was installed with."""
+    name = cloud_env.cloud_name(cloud_env.get_cloud_domain(config.get('cloud_domain')))
+    if name in INGEST_DIRECT:
+        return name
+    # A bespoke cloud has no named ingest; keep the release-track rule for it.
+    return 'prod' if config.get('latest_stable_ref') == 'latest_stable_version' else 'dev'
+
+
+def ingest_path():
+    """Resolved per call: a channel switch must not wait for a worker restart."""
+    global _lb_reachable
+    if _ingest_cloud() != 'prod':
+        return INGEST_DIRECT['dev']
+    if _lb_reachable is None:
+        try:
+            requests.get(LB_DOMAIN, timeout=5)
+            _lb_reachable = True
+        except Exception:
+            _lb_reachable = False
+        print(f"LB {'reachable' if _lb_reachable else 'unreachable'} for prod ingest")
+    return LB_DOMAIN + "/data-enqueue-prod" if _lb_reachable else INGEST_DIRECT['prod']
 
 if 'use_aws' in config and config['use_aws']:
     use_aws    = True
@@ -274,7 +294,7 @@ def cloud_call(url, analytics, headers):
         if config.get('environ') == 'local':
             res = requests.post(url, json=analytics, headers=headers, timeout=20)
         else:
-            res = requests.post(BQ_INGEST_PATH, json=analytics, headers=headers, timeout=20)
+            res = requests.post(ingest_path(), json=analytics, headers=headers, timeout=20)
         print(res)
         print('--------------------------------------')
         success = res.status_code == 200
