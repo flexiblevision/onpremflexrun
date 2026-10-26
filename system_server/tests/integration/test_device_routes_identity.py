@@ -5,6 +5,9 @@ reach it. The serial number has two sources: the id assigned at authorization,
 which is authoritative, and serial_number.sh as a fallback. Preferring the
 wrong one would re-register a commissioned device as a new one.
 """
+import os
+import subprocess
+
 import pytest
 from unittest.mock import patch, MagicMock, call
 
@@ -63,6 +66,7 @@ WITH_WIFI = b'eth0: flags=4163\nwlp2s0: flags=4163\n'
 def device_environment(tmp_path, monkeypatch):
     """Everything /device_info fans out to."""
     monkeypatch.setenv('HOME', str(tmp_path))
+    monkeypatch.setenv('FLEXRUN_DEVICE_ID_PATH', str(tmp_path / 'flexrun' / 'device_id'))
 
     with patch.object(dr, 'get_lan_ips', return_value=[]), \
          patch.object(dr, 'system_info', return_value='Dell OptiPlex'), \
@@ -290,13 +294,74 @@ class TestSerialNumber:
         with patch.object(dr, 'find_utility', side_effect=Exception('no mongo')):
             assert _info(client)['system_serial_number'] == 'SN-FALLBACK123'
 
-        assert 'Failed to check authorization' in capsys.readouterr().out
+        assert 'Failed to read the stored device_id' in capsys.readouterr().out
 
     @pytest.mark.integration
     def test_a_failing_serial_script_leaves_the_field_empty(self, client, device_environment):
         with patch('subprocess.Popen',
                    side_effect=popen_dispatch(serial_error=OSError('no script'))):
             assert _info(client)['system_serial_number'] == ''
+
+
+def _pin_path(tmp_path):
+    return tmp_path / 'flexrun' / 'device_id'
+
+
+class TestDeviceIdNeverChanges:
+    """One system, one ID. A deauthorize re-derived it from whichever NIC the
+    MAC fallback picked, moving a device off its workstation bindings."""
+
+    @pytest.mark.integration
+    def test_a_deauthorized_device_keeps_its_stored_id(self, client, device_environment):
+        def utility(kind):
+            if kind == 'device_authorized':
+                return [{'is_authorized': False}]
+            if kind == 'device_id':
+                return [{'id': 'FV-I-AC40EA03F0E2'}]
+            return []
+
+        with patch.object(dr, 'find_utility', side_effect=utility):
+            assert _info(client)['system_serial_number'] == 'FV-I-AC40EA03F0E2'
+
+    @pytest.mark.integration
+    def test_the_first_answer_is_pinned(self, client, device_environment, tmp_path):
+        assert _info(client)['system_serial_number'] == 'SN-FALLBACK123'
+        assert _pin_path(tmp_path).read_text().strip() == 'SN-FALLBACK123'
+
+    @pytest.mark.integration
+    def test_a_registered_device_is_pinned_to_its_registered_id(self, client, device_environment, tmp_path):
+        with patch.object(dr, 'find_utility', return_value=[{'id': 'dev-42'}]):
+            _info(client)
+        assert _pin_path(tmp_path).read_text().strip() == 'dev-42'
+
+    @pytest.mark.integration
+    def test_a_pinned_id_wins_over_a_changed_store_and_a_new_derivation(self, client, device_environment, tmp_path):
+        _pin_path(tmp_path).parent.mkdir(parents=True)
+        _pin_path(tmp_path).write_text('FV-I-AC40EA03F0E2\n')
+        with patch.object(dr, 'find_utility', return_value=[{'id': 'FV-I-AC40EA03F0E1'}]), \
+             patch('subprocess.Popen', side_effect=popen_dispatch(serial=b'SN-OTHERNIC\n')):
+            assert _info(client)['system_serial_number'] == 'FV-I-AC40EA03F0E2'
+
+    @pytest.mark.integration
+    def test_an_unreadable_store_does_not_pin_a_derived_id(self, client, device_environment, tmp_path):
+        # The derived ID may not be what the device registered as.
+        with patch.object(dr, 'find_utility', side_effect=Exception('no mongo')):
+            assert _info(client)['system_serial_number'] == 'SN-FALLBACK123'
+        assert not _pin_path(tmp_path).exists()
+
+
+SERIAL_SCRIPT = os.path.join(os.path.dirname(__file__), '..', '..', '..', 'scripts', 'serial_number.sh')
+
+
+@pytest.mark.integration
+def test_serial_script_returns_the_pinned_id_without_deriving(tmp_path):
+    pin = tmp_path / 'device_id'
+    pin.write_text('FV-I-AC40EA03F0E2\n')
+    result = subprocess.run(['sh', SERIAL_SCRIPT], capture_output=True, text=True,
+                            env={'PATH': '/usr/bin:/bin', 'FLEXRUN_DEVICE_ID_PATH': str(pin)})
+    assert result.returncode == 0
+    assert result.stdout == 'FV-I-AC40EA03F0E2\n'
+    assert result.stderr == ''
 
 
 class TestLastKnownIp:

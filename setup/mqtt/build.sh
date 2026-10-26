@@ -42,8 +42,9 @@ CLOUD_DOMAIN_CFG="$(jq -r '.cloud_domain' "$HOME/fvconfig.json" 2>/dev/null)"
 CLUSTER_MQTT_NODEPORT="${CLUSTER_MQTT_NODEPORT:-31883}"
 
 # Resolve a unique device id for the bridge client_id (fleet-safe, no manual input):
-# fvconfig -> edge Mongo (same source system_server uses) -> NIC MAC -> hostname.
-DEVICE_ID_CFG="$(jq -r '.device_id // empty' "$HOME/fvconfig.json" 2>/dev/null)"
+# pinned device ID -> fvconfig -> edge Mongo -> NIC MAC -> hostname.
+DEVICE_ID_CFG="$(head -n 1 "${FLEXRUN_DEVICE_ID_PATH:-/etc/flexrun/device_id}" 2>/dev/null || true)"
+[ -z "$DEVICE_ID_CFG" ] && DEVICE_ID_CFG="$(jq -r '.device_id // empty' "$HOME/fvconfig.json" 2>/dev/null)"
 if [ -z "$DEVICE_ID_CFG" ]; then
     DEVICE_ID_CFG="$(docker exec mongo mongo fvonprem --quiet --eval 'var x=db.utils.findOne({type:"device_id"}); if (x && x.id) print(x.id)' 2>/dev/null | tr -d '\r\n ')"
 fi
