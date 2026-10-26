@@ -9,8 +9,8 @@
       "vision": "1.1"
     },
     "x86": {
-      "backend": "1.1030",
-      "frontend": "1.1039",
+      "backend": "1.1031",
+      "frontend": "1.1040",
       "nodecreator": "0.51",
       "prediction": "0.51",
       "predictlite": "1.999",
