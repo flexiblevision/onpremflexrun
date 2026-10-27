@@ -269,13 +269,147 @@ class TestBridgeAddressStale:
         assert not self._stale(None, 'mqtt.flexiblevision.com:443')
 
     @pytest.mark.unit
-    def test_a_local_cloud_bridge_is_never_stale(self):
-        assert not self._stale('10.0.0.5:31883', 'mqtt.flexiblevision.com:443', local=True)
-
-    @pytest.mark.unit
     def test_reads_the_endpoint_line_not_its_settings(self):
         with patch('builtins.open', mock_open(read_data=SSL_CONFIG)):
             assert mq.get_configured_bridge_address() == 'mqtt.flexiblevision.com:443'
+
+    @pytest.mark.unit
+    def test_reads_a_local_tcp_endpoint_and_client_id(self):
+        with patch('builtins.open', mock_open(read_data=TCP_CONFIG)):
+            assert mq.get_configured_bridge_address() == '10.0.0.5:31883'
+        with patch('builtins.open', mock_open(read_data=TCP_CONFIG)):
+            assert mq.get_configured_client_id() == 'backend-local'
+
+
+class TestLocalBridgeStale:
+    HERE = {'127.0.0.1', 'localhost', '172.17.0.1', '192.168.9.10', '192.168.1.248'}
+
+    def _stale(self, configured, expected, client_id='backend-bridge-DEV-1', device_id='DEV-1'):
+        with patch.object(mq, '_is_local_bridge', return_value=True), \
+             patch.object(mq, 'get_configured_bridge_address', return_value=configured), \
+             patch.object(mq, 'expected_bridge_address', return_value=expected), \
+             patch.object(mq, 'get_configured_client_id', return_value=client_id), \
+             patch.object(mq, 'get_device_id', return_value=device_id), \
+             patch.object(mq, '_this_host_addresses', return_value=self.HERE):
+            return mq.bridge_address_stale()
+
+    @pytest.mark.unit
+    def test_a_bridge_left_on_the_old_master_is_stale(self):
+        assert self._stale('192.168.1.41:31883', '192.168.1.200:31883')
+
+    @pytest.mark.unit
+    def test_a_bridge_on_the_current_master_is_not(self):
+        assert not self._stale('192.168.1.248:31883', '192.168.1.248:31883')
+
+    @pytest.mark.unit
+    def test_a_master_bridging_to_itself_by_another_address_is_not(self):
+        assert not self._stale('172.17.0.1:31883', '192.168.9.10:31883')
+
+    @pytest.mark.unit
+    def test_a_client_id_naming_another_device_is_stale(self):
+        assert self._stale('192.168.1.248:31883', '192.168.1.248:31883',
+                           client_id='backend-bridge-DEV-2', device_id='DEV-1')
+
+    @pytest.mark.unit
+    def test_an_unknown_device_id_leaves_the_client_id_alone(self):
+        assert not self._stale('192.168.1.248:31883', '192.168.1.248:31883',
+                               client_id='backend-bridge-DEV-2', device_id=None)
+
+    @pytest.mark.unit
+    def test_an_unknown_master_is_not_stale(self):
+        assert not self._stale('192.168.1.41:31883', None)
+
+
+_real_expected_bridge_address = mq.expected_bridge_address
+
+
+class TestExpectedLocalBridgeAddress:
+    @pytest.mark.unit
+    @pytest.mark.parametrize('domain,want', [
+        ('http://192.168.1.248', '192.168.1.248:31883'),
+        ('http://192.168.1.248:80/', '192.168.1.248:31883'),
+        ('192.168.9.10', '192.168.9.10:31883'),
+        (None, None),
+    ])
+    def test_a_local_bridge_targets_the_master_nodeport(self, domain, want):
+        import cloud_env
+        with patch.object(mq, '_is_local_bridge', return_value=True), \
+             patch.object(cloud_env, 'get_cloud_domain', return_value=domain):
+            assert _real_expected_bridge_address() == want
+
+    @pytest.mark.unit
+    def test_a_cloud_bridge_still_asks_cloud_env_for_the_broker(self):
+        import cloud_env
+        with patch.object(mq, '_is_local_bridge', return_value=False), \
+             patch.object(cloud_env, 'get_bridge_address', return_value='mqtt.flexiblevision.com:443'):
+            assert _real_expected_bridge_address() == 'mqtt.flexiblevision.com:443'
+
+
+class TestUpdateLocalBridgeConfig:
+    def _update(self, config, expected, device_id, moved=True, other_device=True):
+        m = mock_open(read_data=config)
+        with patch('builtins.open', m), \
+             patch.object(mq, 'expected_bridge_address', return_value=expected), \
+             patch.object(mq, 'get_device_id', return_value=device_id), \
+             patch.object(mq, '_local_endpoint_moved', return_value=moved), \
+             patch.object(mq, '_client_id_names_another_device', return_value=other_device):
+            result = mq.update_local_bridge_config()
+        written = ''.join(c.args[0] for c in m().write.call_args_list)
+        return result, written
+
+    @pytest.mark.unit
+    def test_moves_the_endpoint_and_takes_this_devices_id(self):
+        result, written = self._update(TCP_CONFIG, '192.168.1.248:31883', 'DEV-1')
+        assert result == {'success': True, 'config_updated': True}
+        assert 'vmq_bridge.tcp.gke = 192.168.1.248:31883\n' in written
+        assert 'vmq_bridge.tcp.gke.client_id = backend-bridge-DEV-1\n' in written
+        assert 'vmq_bridge.tcp.gke.topic.1 = devices/+/system/update_software in 0' in written
+
+    @pytest.mark.unit
+    def test_an_up_to_date_config_is_not_rewritten(self):
+        result, written = self._update(TCP_CONFIG, '10.0.0.5:31883', 'local',
+                                       moved=False, other_device=False)
+        assert result == {'success': True, 'config_updated': False}
+        assert written == ''
+
+    @pytest.mark.unit
+    def test_unreadable_config_is_reported_not_raised(self):
+        with patch('builtins.open', side_effect=PermissionError('denied')):
+            result = mq.update_local_bridge_config()
+        assert result['success'] is False
+
+
+class TestBridgeSocketEstablished:
+    TCP = (
+        "  sl  local_address rem_address   st\n"
+        "   0: 0100007F:1F90 00000000:0000 0A\n"
+        "   1: 0A00000A:C4D2 F801A8C0:7C8B 01\n"
+    )
+
+    def _probe(self, endpoint, table=TCP, pid='4242'):
+        with patch('subprocess.run', return_value=_completed(stdout=pid + '\n')), \
+             patch('builtins.open', mock_open(read_data=table)):
+            return mq._bridge_socket_established(endpoint)
+
+    @pytest.mark.unit
+    def test_an_established_socket_to_the_endpoint_counts(self):
+        assert self._probe('192.168.1.248:31883') is True
+
+    @pytest.mark.unit
+    def test_no_socket_to_the_endpoint_is_false(self):
+        assert self._probe('192.168.1.41:31883') is False
+
+    @pytest.mark.unit
+    def test_a_socket_not_yet_established_is_false(self):
+        assert self._probe('192.168.1.248:31883', table=self.TCP.replace(' 01\n', ' 02\n')) is False
+
+    @pytest.mark.unit
+    def test_a_stopped_container_cannot_be_read(self):
+        assert self._probe('192.168.1.248:31883', pid='0') is None
+
+    @pytest.mark.unit
+    def test_an_unparsable_endpoint_cannot_be_read(self):
+        assert mq._bridge_socket_established('no-port-here') is None
 
 
 class TestRestartVernemq:
@@ -499,18 +633,29 @@ class TestIsBridgeHealthy:
         assert healthy is False
         assert reason == "Bridge 'gke' not configured"
 
-    @pytest.mark.unit
-    def test_configured_local_bridge_skips_the_netstat_probe(self):
-        # The local-cloud image has no netstat, so probing it would report a
-        # working bridge as dead and restart VerneMQ every minute.
+    def _local_health(self, established):
         with patch.object(mq, 'get_bridge_status', return_value={'success': True, 'status': 'gke'}), \
              patch.object(mq, '_is_local_bridge', return_value=True), \
-             patch.object(mq, 'check_tcp_connection_to_cloud') as probe:
-            healthy, reason = mq.is_bridge_healthy()
+             patch.object(mq, 'get_configured_bridge_address', return_value='192.168.1.248:31883'), \
+             patch.object(mq, '_bridge_socket_established', return_value=established), \
+             patch.object(mq, 'check_tcp_connection_to_cloud') as netstat:
+            result = mq.is_bridge_healthy()
+        netstat.assert_not_called()
+        return result
 
-        assert healthy is True
-        assert reason == 'Bridge configured (local-cloud tcp)'
-        probe.assert_not_called()
+    @pytest.mark.unit
+    def test_a_connected_local_bridge_is_healthy(self):
+        assert self._local_health(True) == (True, 'Bridge connected to 192.168.1.248:31883')
+
+    @pytest.mark.unit
+    def test_a_local_bridge_with_no_socket_is_unhealthy(self):
+        healthy, reason = self._local_health(False)
+        assert healthy is False
+        assert '192.168.1.248:31883' in reason
+
+    @pytest.mark.unit
+    def test_an_unreadable_local_socket_table_keeps_the_bridge_healthy(self):
+        assert self._local_health(None) == (True, 'Bridge configured (local-cloud tcp)')
 
     @pytest.mark.unit
     def test_placeholder_credentials_are_unhealthy_despite_a_connection(self):
@@ -649,6 +794,27 @@ class TestDoBridgeRefresh:
              patch.object(mq, 'restart_vernemq', return_value={'success': False, 'error': 'x'}):
             assert mq._do_bridge_refresh() is False
 
+    @pytest.mark.unit
+    def test_a_local_bridge_refreshes_without_a_token(self):
+        with patch.object(mq, '_is_local_bridge', return_value=True), \
+             patch.object(mq, 'get_access_token', return_value=None), \
+             patch.object(mq, 'update_bridge_config') as cloud_update, \
+             patch.object(mq, 'update_local_bridge_config', return_value={'success': True}) as update, \
+             patch.object(mq, 'restart_vernemq', return_value={'success': True}) as restart:
+            assert mq._do_bridge_refresh() is True
+
+        update.assert_called_once_with()
+        restart.assert_called_once()
+        cloud_update.assert_not_called()
+
+    @pytest.mark.unit
+    def test_a_failed_local_config_write_does_not_restart_vernemq(self):
+        with patch.object(mq, '_is_local_bridge', return_value=True), \
+             patch.object(mq, 'update_local_bridge_config', return_value={'success': False, 'error': 'ro'}), \
+             patch.object(mq, 'restart_vernemq') as restart:
+            assert mq._do_bridge_refresh() is False
+        restart.assert_not_called()
+
 
 class TestHealthMonitorLoop:
     """The loop is driven synchronously; sleep is the tick."""
@@ -721,6 +887,21 @@ class TestHealthMonitorLoop:
     def test_two_consecutive_failures_trigger_a_refresh(self):
         _, refresh = self._run_loop(lambda: (False, 'down'), checks=2)
         refresh.assert_called_once()
+
+    @pytest.mark.unit
+    def test_an_unreachable_master_is_retried_with_backoff_not_every_tick(self):
+        clock = iter(range(0, 10_000, mq.HEALTH_CHECK_INTERVAL))
+        with patch.object(mq, '_is_local_bridge', return_value=True), \
+             patch.object(mq, 'bridge_address_stale', return_value=False), \
+             patch('routes.mqtt_routes.time.monotonic', side_effect=lambda: next(clock)):
+            _, refresh = self._run_loop(lambda: (False, 'down'), checks=12, refresh=False)
+        assert refresh.call_count == 3
+
+    @pytest.mark.unit
+    def test_a_cloud_bridge_is_not_held_back_by_the_local_backoff(self):
+        with patch.object(mq, '_is_local_bridge', return_value=False):
+            _, refresh = self._run_loop(lambda: (False, 'down'), checks=6, refresh=False)
+        assert refresh.call_count == 5
 
     @pytest.mark.unit
     def test_the_failure_counter_resets_after_recovery(self):
