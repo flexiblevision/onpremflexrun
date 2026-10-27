@@ -14,6 +14,8 @@ fi
 BACKUP_DIR="$USER_HOME/Documents/flow_backups"
 CONTAINER_NAME="nodecreator"
 SOURCE_PATH="/root/.node-red/flows.json"
+# Images built from fv-nodecreator keep the flow here instead.
+LEGACY_SOURCE_PATH="/usr/src/nodecreator/lib/flows/onprem-flows.json"
 MAX_BACKUPS=10
 
 # Create backup directory if it doesn't exist
@@ -25,7 +27,8 @@ BACKUP_FILE="$BACKUP_DIR/${TIMESTAMP}_node_flow.json"
 
 # Copy flow from Docker container
 echo "Backing up Node-RED flows from $CONTAINER_NAME..."
-if sudo docker cp "$CONTAINER_NAME:$SOURCE_PATH" "$BACKUP_FILE"; then
+if sudo docker cp "$CONTAINER_NAME:$LEGACY_SOURCE_PATH" "$BACKUP_FILE" 2>/dev/null || \
+   sudo docker cp "$CONTAINER_NAME:$SOURCE_PATH" "$BACKUP_FILE"; then
     echo "Backup created: $BACKUP_FILE"
 
     # Count current backups

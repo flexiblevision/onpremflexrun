@@ -166,6 +166,54 @@ restore_state() {
     return 1
 }
 
+# Images built from fv-nodecreator ran Node-RED with `-u .` from /usr/src/nodecreator
+# and an explicit flow file; the current image uses /root/.node-red/flows.json.
+NODERED_DIR='/root/.node-red'
+LEGACY_NODERED_DIR='/usr/src/nodecreator'
+LEGACY_FLOW="$LEGACY_NODERED_DIR/lib/flows/onprem-flows.json"
+
+# save_flows
+# Stages the flow, its credentials and the key that decrypts them, under the
+# names the current image reads. Returns 1, like save_state, when a flow exists
+# that is not staged - including one at a path not probed here.
+save_flows() {
+    local dir="$NODERED_DIR"
+    local flow="$NODERED_DIR/flows.json"
+    local stray
+
+    if docker cp "nodecreator:$LEGACY_FLOW" "$STAGING/flows.json" 2>/dev/null; then
+        dir="$LEGACY_NODERED_DIR"
+        flow="$LEGACY_FLOW"
+        echo "saved nodecreator:$flow (legacy layout) to $STAGING/flows.json"
+    elif ! save_state nodecreator "$flow" flows.json; then
+        return 1
+    fi
+
+    save_state nodecreator "${flow%.json}_cred.json" flows_cred.json || return 1
+    save_state nodecreator "$dir/.config.runtime.json" .config.runtime.json || return 1
+
+    # docker diff also sees a stopped container, where the exec probe in
+    # save_state cannot. Palette nodes and the Node-RED library are not flows.
+    stray="$(docker diff nodecreator 2>/dev/null | awk '$1 != "D" { print $2 }' \
+        | grep -E '/[^/]*flows[^/]*\.json$' \
+        | grep -v -e '/node_modules/' -e "^$NODERED_DIR/lib/" -e '_cred\.json$' \
+        | grep -vxF "$flow")"
+    if [ -n "$stray" ]; then
+        echo "ERROR: nodecreator has flow files this upgrade would not carry over:"
+        echo "$stray"
+        echo "ERROR: leaving nodecreator in place - skipping its upgrade"
+        return 1
+    fi
+}
+
+# restore_flows - into a created, not yet started, container. Node-RED reads its
+# flow file once at startup, so a flow copied into a running one is not loaded.
+restore_flows() {
+    restore_state nodecreator "$NODERED_DIR/" flows.json &&
+        restore_state nodecreator "$NODERED_DIR/" flows_cred.json &&
+        restore_state nodecreator "$NODERED_DIR/" .config.runtime.json
+}
+
 # --- Begin Upgrades ---
 
 python3 "$r_path" -i "$uuid" -s "$num_steps"
@@ -310,23 +358,23 @@ if [ "$CREATOR_UPTD"  != 'True' ]; then
 
     REF_NODECREATOR="$(plan_ref nodecreator "fvonprem/$SYSTEM_ARCH-nodecreator:$CREATOR_UPTD")"
     if safe_pull "$REF_NODECREATOR" && \
-       save_state nodecreator /root/.node-red/flows.json flows.json && \
+       save_flows && \
        retire_container nodecreator; then
 
-        docker run -d --name=nodecreator -p 0.0.0.0:1880:1880 \
-        --restart unless-stopped --privileged -v /dev:/dev -v /sys:/sys \
-        --log-opt max-size=50m --log-opt max-file=5 \
-        -v /home/visioncell/Documents:/Documents \
-        --network host -d "$REF_NODECREATOR"
-
-        if smoke_running nodecreator; then
-            restore_state nodecreator /root/.node-red/ flows.json
+        # A failed restore rolls back: nodecreator_prev still holds its own flow.
+        if docker create --name=nodecreator -p 0.0.0.0:1880:1880 \
+               --restart unless-stopped --privileged -v /dev:/dev -v /sys:/sys \
+               --log-opt max-size=50m --log-opt max-file=5 \
+               -v /home/visioncell/Documents:/Documents \
+               --network host "$REF_NODECREATOR" >/dev/null && \
+           restore_flows && \
+           docker start nodecreator >/dev/null && \
+           smoke_running nodecreator; then
             report_component nodecreator upgraded "" "$CREATOR_UPTD" "$REF_NODECREATOR"
         discard_previous nodecreator
         else
             report_component nodecreator rolled_back "" "$CREATOR_UPTD" "$REF_NODECREATOR"
         rollback_container nodecreator
-            restore_state nodecreator /root/.node-red/ flows.json
         fi
     fi
 

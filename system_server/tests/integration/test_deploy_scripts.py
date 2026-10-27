@@ -1721,6 +1721,153 @@ class TestContainerStateStaging:
 
 
 # --------------------------------------------------------------------------
+# nodecreator flows - the one copy of a customer's Node-RED program
+# --------------------------------------------------------------------------
+
+LEGACY_FLOW = '/usr/src/nodecreator/lib/flows/onprem-flows.json'
+
+
+def _extract_functions(path, names):
+    """The named top-level functions, plus the constants they read."""
+    block = []
+    keep = False
+    for line in open(path).read().splitlines(True):
+        if line.startswith(('NODERED_DIR=', 'LEGACY_NODERED_DIR=', 'LEGACY_FLOW=')):
+            block.append(line)
+        if any(line.startswith(name + '()') for name in names):
+            keep = True
+        if keep:
+            block.append(line)
+        if keep and line.rstrip() == '}':
+            keep = False
+    return ''.join(block)
+
+
+class TestNodecreatorFlows:
+    """An upgrade from an fv-nodecreator image used to look only in
+    /root/.node-red, find nothing, and discard the container that held the
+    flow. These run against a fake container filesystem per container name."""
+
+    @pytest.fixture
+    def node(self, sh):
+        containers = sh.tmp / 'containers'
+        containers.mkdir()
+        staging = sh.tmp / 'staging'
+        staging.mkdir()
+        calls = sh.tmp / 'docker-calls.log'
+        diff = sh.tmp / 'docker-diff.txt'
+        helpers = sh.tmp / 'helpers.sh'
+        helpers.write_text(_extract_functions(
+            CONTAINER_UPGRADES, ('save_state', 'restore_state', 'save_flows', 'restore_flows')))
+
+        _write_stub(sh.stubs, 'docker', """
+            C=%s
+            echo "$@" >> %s
+            case "$1" in
+              inspect) [ -d "$C/$2" ] ;;
+              ps)      ls "$C" ;;
+              pull)    case "$2" in *vernemq*) exit 1 ;; esac ;;
+              cp)      case "$2" in
+                         *:*) src="$C/${2%%%%:*}${2#*:}"; [ -e "$src" ] && cp -r "$src" "$3" ;;
+                         *)   dest="$C/${3%%%%:*}${3#*:}"; [ -d "$dest" ] && cp "$2" "$dest" ;;
+                       esac ;;
+              exec)    [ "$3" = test ] && test "$4" "$C/$2$5" ;;
+              diff)    cat %s 2>/dev/null ;;
+              rename)  mv "$C/$2" "$C/$3" ;;
+              rm)      rm -rf "$C/$3" ;;
+              create)  for a in "$@"; do
+                         case "$a" in --name=*) mkdir -p "$C/${a#--name=}/root/.node-red" ;; esac
+                       done ;;
+            esac
+            """ % (containers, calls, diff))
+
+        def put(path, content, container='nodecreator'):
+            target = containers / container / path.lstrip('/')
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(content)
+
+        def get(path, container='nodecreator'):
+            target = containers / container / path.lstrip('/')
+            return target.read_text() if target.exists() else None
+
+        def call(snippet):
+            return sh('STAGING=%s\n. %s\n%s' % (staging, helpers, snippet))
+
+        sh.containers, sh.staging, sh.calls, sh.diff = containers, staging, calls, diff
+        sh.put, sh.get, sh.call = put, get, call
+        return sh
+
+    def test_a_legacy_flow_is_staged_with_its_credentials_and_key(self, node):
+        node.put(LEGACY_FLOW, 'legacy flow')
+        node.put('/usr/src/nodecreator/lib/flows/onprem-flows_cred.json', 'creds')
+        node.put('/usr/src/nodecreator/.config.runtime.json', 'key')
+        result = node.call('save_flows')
+        assert result.returncode == 0, result.stdout
+        assert (node.staging / 'flows.json').read_text() == 'legacy flow'
+        assert (node.staging / 'flows_cred.json').read_text() == 'creds'
+        assert (node.staging / '.config.runtime.json').read_text() == 'key'
+
+    def test_a_current_flow_is_staged_with_its_credentials_and_key(self, node):
+        node.put('/root/.node-red/flows.json', 'flow')
+        node.put('/root/.node-red/flows_cred.json', 'creds')
+        node.put('/root/.node-red/.config.runtime.json', 'key')
+        result = node.call('save_flows')
+        assert result.returncode == 0, result.stdout
+        assert (node.staging / 'flows.json').read_text() == 'flow'
+        assert (node.staging / 'flows_cred.json').read_text() == 'creds'
+        assert (node.staging / '.config.runtime.json').read_text() == 'key'
+
+    def test_a_flow_at_an_unknown_path_blocks_the_upgrade(self, node):
+        node.put('/root/.node-red/flows_line3.json', 'flow')
+        node.diff.write_text('C /root/.node-red\nA /root/.node-red/flows_line3.json\n')
+        result = node.call('save_flows')
+        assert result.returncode == 1
+        assert 'flows_line3.json' in result.stdout
+        assert 'leaving nodecreator in place' in result.stdout
+
+    def test_palette_nodes_and_the_library_do_not_block(self, node):
+        node.put('/root/.node-red/flows.json', 'flow')
+        node.diff.write_text(
+            'C /root/.node-red/flows.json\n'
+            'A /root/.node-red/node_modules/node-red-contrib-x/examples/flows.json\n'
+            'A /root/.node-red/lib/flows/saved-flows.json\n')
+        result = node.call('save_flows')
+        assert result.returncode == 0, result.stdout
+
+    def test_restore_lands_everything_where_the_current_image_reads_it(self, node):
+        (node.containers / 'nodecreator' / 'root' / '.node-red').mkdir(parents=True)
+        for name in ('flows.json', 'flows_cred.json', '.config.runtime.json'):
+            (node.staging / name).write_text(name)
+        result = node.call('restore_flows')
+        assert result.returncode == 0, result.stdout
+        for name in ('flows.json', 'flows_cred.json', '.config.runtime.json'):
+            assert node.get('/root/.node-red/' + name) == name
+
+    def test_a_legacy_device_upgrades_with_its_flow_loaded_at_first_start(self, node):
+        """End to end: the flow is in place before Node-RED starts, and the
+        container that held it is only discarded after that."""
+        node.put(LEGACY_FLOW, 'legacy flow')
+        home = node.tmp / 'home' / 'flex-run' / 'upgrades'
+        home.mkdir(parents=True)
+        (home / 'start_servers.sh').write_text('exit 0\n')
+        _write_stub(node.stubs, 'python3', 'exit 0\n')
+        _write_stub(node.stubs, 'jq', 'echo stub\n')
+        versions = ['True', 'True', 'True', 'x86', 'True', 'True', '0.51', 'True']
+        result = node('sh %s %s' % (CONTAINER_UPGRADES, ' '.join(versions)),
+                      env={'FLEXRUN_STAGING_DIR': str(node.staging),
+                           'FLEXRUN_RUN_ID': 'test-run'})
+
+        assert node.get('/root/.node-red/flows.json') == 'legacy flow', result.stdout
+        assert not (node.containers / 'nodecreator_prev').exists()
+        calls = node.calls.read_text().splitlines()
+        create = next(i for i, c in enumerate(calls) if c.startswith('create'))
+        restore = next(i for i, c in enumerate(calls)
+                       if c.startswith('cp') and c.endswith('nodecreator:/root/.node-red/'))
+        start = calls.index('start nodecreator')
+        assert create < restore < start
+
+
+# --------------------------------------------------------------------------
 # container swap and rollback - the edge that did not exist before
 # --------------------------------------------------------------------------
 
