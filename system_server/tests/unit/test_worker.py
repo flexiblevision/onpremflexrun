@@ -1,505 +1,181 @@
-"""
-Unit tests for worker.py RQ worker script
+"""The rq worker daemon entrypoint.
 
-These tests ensure the worker script can start up properly and has all
-required imports. This catches issues like missing imports that would
-cause the worker to fail in production.
+The previous version of this file read worker.py as text and asserted that
+certain substrings appeared in it - 'Connection' is in the import line,
+'Worker(' is in the body. It never imported the module, so worker.py sat at 0%
+coverage while 24 tests reported green, and a NameError at startup would have
+passed every one of them.
+
+These run the module: the import path as the daemon sees it, and the __main__
+block through runpy with run_name='__main__', which is how
+`forever start -c python3 worker.py` invokes it.
 """
-import pytest
-import sys
 import os
-from unittest.mock import Mock, patch, MagicMock, call
-from pathlib import Path
+import runpy
+import sys
+from contextlib import contextmanager
+
+import pytest
+from unittest.mock import patch, MagicMock
 
 
-class TestWorkerImports:
-    """Tests for worker.py imports and dependencies"""
+WORKER_PATH = os.path.abspath(
+    os.path.join(os.path.dirname(__file__), '..', '..', 'worker.py'))
 
-    @pytest.mark.unit
-    def test_worker_has_required_imports(self):
-        """Test that worker.py has all required imports available"""
-        # Mock the environment variable that worker.py requires
-        with patch.dict(os.environ, {'HOME': '/tmp'}):
-            # Mock redis and rq modules
-            mock_redis = MagicMock()
-            mock_redis.from_url.return_value = MagicMock()
 
-            mock_rq = MagicMock()
-            mock_worker = MagicMock()
-            mock_queue = MagicMock()
-            mock_connection = MagicMock()
+class _ConnectionShim:
+    """Stand-in for rq.Connection, which rq >= 2.0 removed."""
 
-            mock_rq.Worker = mock_worker
-            mock_rq.Queue = mock_queue
-            mock_rq.Connection = mock_connection
+    def __init__(self, connection=None):
+        self.connection = connection
 
-            with patch.dict('sys.modules', {
-                'redis': mock_redis,
-                'rq': mock_rq
-            }):
-                # Read the worker.py file content
-                worker_path = os.path.join(
-                    os.path.dirname(__file__),
-                    '..', '..',
-                    'worker.py'
-                )
+    def __enter__(self):
+        return self
 
-                with open(worker_path, 'r') as f:
-                    content = f.read()
+    def __exit__(self, *exc):
+        return False
 
-                # Check that Connection is imported
-                assert 'from rq import' in content, "Missing rq import"
 
-                # Check that redis is imported
-                assert 'import redis' in content or 'from redis import' in content, \
-                    "Missing redis import"
+@contextmanager
+def _rq_providing_connection():
+    """Let the logic tests run against either pinned or newer rq.
 
-                # Check that Connection is used
-                assert 'Connection' in content, "Connection is used but may not be imported"
+    requirements.txt pins rq==1.5.0, which has Connection. A newer rq in the
+    working environment does not, and worker.py would fail to import at all.
+    The pin itself is guarded by TestRqPinCompatibility; the rest of this file
+    is about the worker's behaviour, so the name is supplied when absent.
+    """
+    import rq
+    if hasattr(rq, 'Connection'):
+        yield rq
+        return
 
-    @pytest.mark.unit
-    def test_worker_connection_import_exists(self):
-        """Test that Connection is specifically imported from rq"""
-        worker_path = os.path.join(
-            os.path.dirname(__file__),
-            '..', '..',
-            'worker.py'
-        )
+    rq.Connection = _ConnectionShim
+    try:
+        yield rq
+    finally:
+        del rq.Connection
 
-        with open(worker_path, 'r') as f:
-            content = f.read()
 
-        # Check that Connection is in the imports
-        has_connection = (
-            'from rq import Worker, Queue, Connection' in content or
-            'from rq import Worker, Connection, Queue' in content or
-            'from rq import Queue, Worker, Connection' in content or
-            'from rq import Queue, Connection, Worker' in content or
-            'from rq import Connection, Worker, Queue' in content or
-            'from rq import Connection, Queue, Worker' in content or
-            'from rq import Connection' in content
-        )
+@pytest.fixture
+def worker():
+    with _rq_providing_connection():
+        sys.modules.pop('worker', None)
+        import worker as module
+        yield module
+    sys.modules.pop('worker', None)
 
-        assert has_connection, \
-            "Connection must be imported from rq module. " \
-            "Found 'with Connection(conn):' usage but Connection is not imported!"
+
+class TestRqPinCompatibility:
+    """worker.py cannot run on rq 2.x, and the pin is the only thing stopping it."""
 
     @pytest.mark.unit
-    def test_redis_import_exists(self):
-        """Test that redis is imported"""
-        worker_path = os.path.join(
-            os.path.dirname(__file__),
-            '..', '..',
-            'worker.py'
-        )
+    def test_the_pinned_rq_still_provides_the_connection_context(self):
+        # worker.py does `from rq import Worker, Queue, Connection`. rq 2.0
+        # removed Connection outright, so bumping the pin past 1.x turns every
+        # worker process into an ImportError at startup - six of them, on every
+        # device, with no route that reports the failure.
+        #
+        # This asserts the pin, not the interpreter's current site-packages: a
+        # developer machine that has drifted off requirements.txt is a local
+        # environment problem, while a bumped pin ships to the fleet.
+        import re
 
-        with open(worker_path, 'r') as f:
-            content = f.read()
+        requirements = os.path.join(
+            os.path.dirname(__file__), '..', '..', '..', 'requirements.txt')
+        with open(requirements) as f:
+            pinned = re.search(r'^rq==(\d+)\.(\d+)', f.read(), re.MULTILINE)
 
-        assert 'import redis' in content, "redis module must be imported"
+        assert pinned, 'requirements.txt no longer pins rq'
+        major = int(pinned.group(1))
+        assert major < 2, (
+            f'requirements.txt pins rq {pinned.group(0).split("==")[1]}, but rq 2.0 '
+            'removed rq.Connection, which worker.py imports. Port worker.py off '
+            'the Connection context manager before raising this pin.')
+
+
+class TestWorkerModule:
+    @pytest.mark.unit
+    def test_listens_on_the_default_queue(self, worker):
+        # Everything enqueued by the routes goes to 'default'; a mismatch here
+        # means jobs are accepted and never run.
+        assert worker.listen == ['default']
 
     @pytest.mark.unit
-    def test_rq_worker_import_exists(self):
-        """Test that Worker is imported from rq"""
-        worker_path = os.path.join(
-            os.path.dirname(__file__),
-            '..', '..',
-            'worker.py'
-        )
-
-        with open(worker_path, 'r') as f:
-            content = f.read()
-
-        assert 'Worker' in content, "Worker class must be imported from rq"
+    def test_connects_to_the_local_redis(self, worker):
+        assert worker.redis_url == 'redis://localhost:6379'
 
     @pytest.mark.unit
-    def test_rq_queue_import_exists(self):
-        """Test that Queue is imported from rq"""
-        worker_path = os.path.join(
-            os.path.dirname(__file__),
-            '..', '..',
-            'worker.py'
-        )
-
-        with open(worker_path, 'r') as f:
-            content = f.read()
-
-        assert 'Queue' in content, "Queue class must be imported from rq"
-
-
-class TestWorkerConfiguration:
-    """Tests for worker.py configuration"""
+    def test_a_connection_object_is_built_at_import(self, worker):
+        assert worker.conn is not None
+        assert hasattr(worker.conn, 'ping')
 
     @pytest.mark.unit
-    def test_worker_has_redis_url(self):
-        """Test that worker.py configures redis URL"""
-        worker_path = os.path.join(
-            os.path.dirname(__file__),
-            '..', '..',
-            'worker.py'
-        )
-
-        with open(worker_path, 'r') as f:
-            content = f.read()
-
-        assert 'redis_url' in content, "Worker must configure redis_url"
-        assert 'redis://localhost:6379' in content or 'redis://' in content, \
-            "Worker must have redis connection string"
+    def test_the_repo_root_is_on_the_path_so_settings_resolves(self, worker):
+        # worker.py appends $HOME/flex-run so `import settings` works when the
+        # daemon is started from an arbitrary cwd.
+        assert worker.settings_path == os.environ['HOME'] + '/flex-run'
+        assert worker.settings_path in sys.path
 
     @pytest.mark.unit
-    def test_worker_has_listen_queues(self):
-        """Test that worker.py configures listen queues"""
-        worker_path = os.path.join(
-            os.path.dirname(__file__),
-            '..', '..',
-            'worker.py'
-        )
-
-        with open(worker_path, 'r') as f:
-            content = f.read()
-
-        assert 'listen' in content, "Worker must configure listen queues"
-
-    @pytest.mark.unit
-    def test_worker_uses_main_guard(self):
-        """Test that worker.py uses if __name__ == '__main__' guard"""
-        worker_path = os.path.join(
-            os.path.dirname(__file__),
-            '..', '..',
-            'worker.py'
-        )
-
-        with open(worker_path, 'r') as f:
-            content = f.read()
-
-        assert "if __name__ == '__main__':" in content, \
-            "Worker should use __main__ guard to prevent execution on import"
+    def test_importing_does_not_start_working(self):
+        # Import must be inert: the module is imported by the test suite and
+        # by any tooling that inspects it.
+        with _rq_providing_connection() as rq:
+            with patch.object(rq, 'Worker') as rq_worker:
+                sys.modules.pop('worker', None)
+                import worker  # noqa: F401
+        rq_worker.assert_not_called()
+        sys.modules.pop('worker', None)
 
 
-class TestWorkerStartup:
-    """Tests for worker.py startup logic"""
+class TestWorkerMain:
+    """The __main__ block, run the way forever runs it."""
+
+    def _run_main(self):
+        rq = MagicMock()
+        rq.Connection.return_value.__enter__ = MagicMock()
+        rq.Connection.return_value.__exit__ = MagicMock(return_value=False)
+        with patch.dict(sys.modules, {'rq': rq}), \
+             patch('redis.from_url', return_value=MagicMock()):
+            runpy.run_path(WORKER_PATH, run_name='__main__')
+        return rq
 
     @pytest.mark.unit
-    @patch.dict(os.environ, {'HOME': '/tmp/test-home'})
-    def test_worker_sets_up_path(self):
-        """Test that worker.py sets up the Python path correctly"""
-        worker_path = os.path.join(
-            os.path.dirname(__file__),
-            '..', '..',
-            'worker.py'
-        )
-
-        with open(worker_path, 'r') as f:
-            content = f.read()
-
-        # Check that sys.path is being modified
-        assert 'sys.path.append' in content, \
-            "Worker should add settings path to sys.path"
+    def test_starts_a_worker_inside_a_connection_context(self):
+        # Without the Connection context rq resolves no default connection and
+        # the worker dies on startup.
+        rq = self._run_main()
+        rq.Connection.assert_called_once_with(rq.Connection.call_args[0][0])
+        rq.Connection.return_value.__enter__.assert_called_once()
 
     @pytest.mark.unit
-    @patch.dict(os.environ, {'HOME': '/tmp/test-home'})
-    def test_worker_can_be_instantiated_mock(self):
-        """Test that Worker can be instantiated with mocked dependencies"""
-        # This test verifies the logic flow without actually importing rq
-        # We just check that the code structure is correct
-
-        worker_path = os.path.join(
-            os.path.dirname(__file__),
-            '..', '..',
-            'worker.py'
-        )
-
-        with open(worker_path, 'r') as f:
-            content = f.read()
-
-        # Verify the worker instantiation logic is present
-        assert 'Worker(list(map(Queue, listen)))' in content, \
-            "Worker should be instantiated with mapped queues"
-        assert 'worker.work(with_scheduler=True)' in content, \
-            "Worker should call work() with scheduler enabled"
+    def test_the_worker_is_given_the_listen_queues(self):
+        rq = self._run_main()
+        rq.Queue.assert_called_once_with('default')
+        assert rq.Worker.call_args[0][0] == [rq.Queue.return_value]
 
     @pytest.mark.unit
-    def test_worker_file_exists(self):
-        """Test that worker.py file exists"""
-        worker_path = os.path.join(
-            os.path.dirname(__file__),
-            '..', '..',
-            'worker.py'
-        )
-
-        assert os.path.exists(worker_path), \
-            f"worker.py should exist at {worker_path}"
+    def test_work_is_started_with_the_scheduler(self):
+        # result_ttl=-1 jobs and the nightly sync both rely on the scheduler.
+        rq = self._run_main()
+        rq.Worker.return_value.work.assert_called_once_with(with_scheduler=True)
 
     @pytest.mark.unit
-    def test_worker_file_is_readable(self):
-        """Test that worker.py file is readable"""
-        worker_path = os.path.join(
-            os.path.dirname(__file__),
-            '..', '..',
-            'worker.py'
-        )
+    def test_the_connection_context_wraps_the_redis_handle(self):
+        rq = MagicMock()
+        conn = MagicMock()
+        with patch.dict(sys.modules, {'rq': rq}), \
+             patch('redis.from_url', return_value=conn):
+            runpy.run_path(WORKER_PATH, run_name='__main__')
 
-        try:
-            with open(worker_path, 'r') as f:
-                content = f.read()
-            assert len(content) > 0, "worker.py should not be empty"
-        except Exception as e:
-            pytest.fail(f"Failed to read worker.py: {e}")
+        assert rq.Connection.call_args[0][0] is conn
 
     @pytest.mark.unit
-    def test_worker_has_no_syntax_errors(self):
-        """Test that worker.py has no syntax errors"""
-        worker_path = os.path.join(
-            os.path.dirname(__file__),
-            '..', '..',
-            'worker.py'
-        )
-
-        try:
-            with open(worker_path, 'r') as f:
-                content = f.read()
-
-            # Try to compile the code to check for syntax errors
-            compile(content, worker_path, 'exec')
-        except SyntaxError as e:
-            pytest.fail(f"worker.py has syntax errors: {e}")
-
-
-class TestWorkerRedisConnection:
-    """Tests for worker.py Redis connection logic"""
-
-    @pytest.mark.unit
-    def test_worker_creates_redis_connection(self):
-        """Test that worker creates a redis connection"""
-        worker_path = os.path.join(
-            os.path.dirname(__file__),
-            '..', '..',
-            'worker.py'
-        )
-
-        with open(worker_path, 'r') as f:
-            content = f.read()
-
-        # Check that redis connection is created
-        assert 'redis.from_url' in content or 'Redis(' in content, \
-            "Worker should create a Redis connection"
-
-    @pytest.mark.unit
-    def test_worker_uses_connection_context(self):
-        """Test that worker uses Connection context manager"""
-        worker_path = os.path.join(
-            os.path.dirname(__file__),
-            '..', '..',
-            'worker.py'
-        )
-
-        with open(worker_path, 'r') as f:
-            content = f.read()
-
-        # Check that Connection context manager is used
-        assert 'with Connection' in content, \
-            "Worker should use 'with Connection(conn):' context manager"
-
-
-class TestWorkerQueueSetup:
-    """Tests for worker.py queue setup"""
-
-    @pytest.mark.unit
-    def test_worker_maps_queues(self):
-        """Test that worker maps listen array to Queue objects"""
-        worker_path = os.path.join(
-            os.path.dirname(__file__),
-            '..', '..',
-            'worker.py'
-        )
-
-        with open(worker_path, 'r') as f:
-            content = f.read()
-
-        # Check that queues are mapped
-        assert 'map(Queue, listen)' in content or 'Queue(' in content, \
-            "Worker should map listen queues to Queue objects"
-
-    @pytest.mark.unit
-    def test_worker_starts_with_scheduler(self):
-        """Test that worker starts with scheduler enabled"""
-        worker_path = os.path.join(
-            os.path.dirname(__file__),
-            '..', '..',
-            'worker.py'
-        )
-
-        with open(worker_path, 'r') as f:
-            content = f.read()
-
-        # Check that worker is started with scheduler
-        assert 'worker.work' in content, "Worker should call work() method"
-        assert 'with_scheduler=True' in content, \
-            "Worker should enable scheduler with with_scheduler=True"
-
-
-class TestWorkerEnvironment:
-    """Tests for worker.py environment setup"""
-
-    @pytest.mark.unit
-    def test_worker_reads_home_env(self):
-        """Test that worker reads HOME environment variable"""
-        worker_path = os.path.join(
-            os.path.dirname(__file__),
-            '..', '..',
-            'worker.py'
-        )
-
-        with open(worker_path, 'r') as f:
-            content = f.read()
-
-        # Check that HOME environment variable is used
-        assert "os.environ['HOME']" in content or 'os.environ.get' in content, \
-            "Worker should read HOME environment variable"
-
-    @pytest.mark.unit
-    def test_worker_sets_settings_path(self):
-        """Test that worker sets up settings path"""
-        worker_path = os.path.join(
-            os.path.dirname(__file__),
-            '..', '..',
-            'worker.py'
-        )
-
-        with open(worker_path, 'r') as f:
-            content = f.read()
-
-        # Check that settings_path is configured
-        assert 'settings_path' in content, \
-            "Worker should configure settings_path"
-        assert 'flex-run' in content, \
-            "Worker should use flex-run directory for settings"
-
-
-class TestWorkerImportSmoke:
-    """Smoke tests to ensure worker.py can be imported without errors"""
-
-    @pytest.mark.unit
-    @patch.dict(os.environ, {'HOME': '/tmp/test-home'})
-    @patch('sys.path', ['/tmp/test-home/flex-run'])
-    def test_worker_imports_without_module_errors(self):
-        """Test that importing worker dependencies doesn't cause NameError"""
-        # This test ensures all names used in worker.py are properly imported
-
-        # Mock the required modules
-        mock_redis = MagicMock()
-        mock_redis.from_url = MagicMock(return_value=MagicMock())
-
-        mock_rq = MagicMock()
-
-        # This is the critical part - ensure Connection is available
-        mock_connection = MagicMock()
-        mock_worker = MagicMock()
-        mock_queue = MagicMock()
-
-        mock_rq.Connection = mock_connection
-        mock_rq.Worker = mock_worker
-        mock_rq.Queue = mock_queue
-
-        # Read worker.py and check all used names are imported
-        worker_path = os.path.join(
-            os.path.dirname(__file__),
-            '..', '..',
-            'worker.py'
-        )
-
-        with open(worker_path, 'r') as f:
-            lines = f.readlines()
-
-        # Find all imports
-        imports = []
-        for line in lines:
-            if line.strip().startswith('import ') or line.strip().startswith('from '):
-                imports.append(line.strip())
-
-        # Check that if Connection is used, it's imported
-        content = ''.join(lines)
-        if 'with Connection(' in content or 'Connection(' in content:
-            has_connection_import = any(
-                'Connection' in imp for imp in imports
-            )
-            assert has_connection_import, \
-                "Connection is used but not imported! This will cause: NameError: name 'Connection' is not defined"
-
-    @pytest.mark.unit
-    def test_all_used_names_are_imported(self):
-        """Test that all names used in worker.py are properly imported"""
-        worker_path = os.path.join(
-            os.path.dirname(__file__),
-            '..', '..',
-            'worker.py'
-        )
-
-        with open(worker_path, 'r') as f:
-            content = f.read()
-
-        # Extract import lines
-        import_lines = []
-        for line in content.split('\n'):
-            if line.strip().startswith('import ') or line.strip().startswith('from '):
-                import_lines.append(line)
-
-        imports_text = '\n'.join(import_lines)
-
-        # Check critical names
-        if 'Connection(' in content:
-            assert 'Connection' in imports_text, \
-                "CRITICAL: 'Connection' is used but not imported! " \
-                "Add 'Connection' to the rq import statement."
-
-        if 'Worker(' in content:
-            assert 'Worker' in imports_text, \
-                "'Worker' is used but not imported!"
-
-        if 'Queue(' in content:
-            assert 'Queue' in imports_text, \
-                "'Queue' is used but not imported!"
-
-        if 'redis.from_url' in content or 'Redis(' in content:
-            assert 'redis' in imports_text.lower(), \
-                "'redis' module is used but not imported!"
-
-
-class TestWorkerRegressionTests:
-    """Regression tests for specific bugs found in production"""
-
-    @pytest.mark.unit
-    def test_connection_import_regression(self):
-        """
-        Regression test for: NameError: name 'Connection' is not defined
-
-        This bug was pushed to production when worker.py used Connection
-        but didn't import it from rq module.
-        """
-        worker_path = os.path.join(
-            os.path.dirname(__file__),
-            '..', '..',
-            'worker.py'
-        )
-
-        with open(worker_path, 'r') as f:
-            content = f.read()
-
-        # If Connection is used, it MUST be imported
-        uses_connection = 'Connection(' in content
-
-        if uses_connection:
-            # Check import line includes Connection
-            import_lines = [
-                line for line in content.split('\n')
-                if 'from rq import' in line
-            ]
-
-            has_connection_import = any(
-                'Connection' in line for line in import_lines
-            )
-
-            assert has_connection_import, \
-                "PRODUCTION BUG DETECTED: Connection is used on line 14 but not imported! " \
-                "This will cause 'NameError: name 'Connection' is not defined' " \
-                "Fix: Change 'from rq import Worker, Queue' to 'from rq import Worker, Queue, Connection'"
+    def test_every_name_the_main_block_uses_resolves(self):
+        # The regression this replaces: a name used in the __main__ block but
+        # missing from the imports raised NameError on every start. Executing
+        # the block catches that; grepping the source does not. run_path uses
+        # the module's real globals, so an unimported name raises here.
+        rq = self._run_main()
+        rq.Worker.return_value.work.assert_called_once()
