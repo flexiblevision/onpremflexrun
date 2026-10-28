@@ -125,10 +125,12 @@ def _local_endpoint_moved(configured, expected):
     return not (configured_host in here and expected_host in here)
 
 
-def _client_id_names_another_device():
+def _local_client_id_wrong():
+    # Only a backend- id is trusted with the master's site-scoped topics; an old
+    # bridge-<id> is narrowed to devices/<id>/... and never gets guidance.
     device_id = get_device_id()
     client_id = get_configured_client_id()
-    return bool(device_id and client_id) and not client_id.endswith(device_id)
+    return bool(device_id and client_id) and client_id != f'backend-bridge-{device_id}'
 
 
 def bridge_address_stale() -> bool:
@@ -136,7 +138,7 @@ def bridge_address_stale() -> bool:
     expected = expected_bridge_address()
     configured = get_configured_bridge_address()
     if _is_local_bridge():
-        return _local_endpoint_moved(configured, expected) or _client_id_names_another_device()
+        return _local_endpoint_moved(configured, expected) or _local_client_id_wrong()
     if not expected:
         return False
     return bool(configured) and configured != expected
@@ -222,7 +224,7 @@ def update_local_bridge_config() -> dict:
             )
 
         device_id = get_device_id()
-        if _client_id_names_another_device():
+        if _local_client_id_wrong():
             new_config = re.sub(
                 r'^(vmq_bridge\.tcp\.gke\.client_id)\s*=\s*\S+[ \t]*$',
                 lambda m: f'{m.group(1)} = backend-bridge-{device_id}',

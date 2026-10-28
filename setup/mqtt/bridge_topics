@@ -30,3 +30,8 @@ devices/+/models                              in 0
 devices/+/preset/+                            in 0
 devices/+/timemachine/+                       in 0
 devices/+/system/release                      in 1
+devices/+/system/guidance                     in 1
+
+# local cloud -> master: the published guidance pointer, stamped for its clients.
+# A hosted cloud never publishes it.
+sites/+/guidance/active                       in 1

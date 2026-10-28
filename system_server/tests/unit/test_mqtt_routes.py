@@ -311,6 +311,11 @@ class TestLocalBridgeStale:
                            client_id='backend-bridge-DEV-2', device_id='DEV-1')
 
     @pytest.mark.unit
+    def test_a_token_style_client_id_is_stale(self):
+        assert self._stale('192.168.1.248:31883', '192.168.1.248:31883',
+                           client_id='bridge-DEV-1', device_id='DEV-1')
+
+    @pytest.mark.unit
     def test_an_unknown_device_id_leaves_the_client_id_alone(self):
         assert not self._stale('192.168.1.248:31883', '192.168.1.248:31883',
                                client_id='backend-bridge-DEV-2', device_id=None)
@@ -352,7 +357,7 @@ class TestUpdateLocalBridgeConfig:
              patch.object(mq, 'expected_bridge_address', return_value=expected), \
              patch.object(mq, 'get_device_id', return_value=device_id), \
              patch.object(mq, '_local_endpoint_moved', return_value=moved), \
-             patch.object(mq, '_client_id_names_another_device', return_value=other_device):
+             patch.object(mq, '_local_client_id_wrong', return_value=other_device):
             result = mq.update_local_bridge_config()
         written = ''.join(c.args[0] for c in m().write.call_args_list)
         return result, written
