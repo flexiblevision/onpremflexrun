@@ -1,0 +1,28 @@
+{
+  "schema": "flexrun.addon/v1",
+  "name": "client_mode",
+  "label": "Client Mode",
+  "description": "Point this device at a master server for models and predictions.",
+  "tier": "included",
+  "entitlement": null,
+  "kind": "config",
+  "arches": ["x86", "arm"],
+  "config": {
+    "store": "mongo",
+    "collection": "fvonprem.utils",
+    "selector": {"type": "client_mode"},
+    "read_by": ["cloud_env.py"],
+    "owner": "capdev"
+  },
+  "health": {
+    "type": "config"
+  },
+  "ui": {
+    "icon": "CompareArrows",
+    "order": 60,
+    "manage": "custom"
+  },
+  "legacy_routes": {
+    "manage": "/api/capture/features/client_mode"
+  }
+}

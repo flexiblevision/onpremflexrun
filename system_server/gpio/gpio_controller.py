@@ -1,3 +1,4 @@
+import functools
 import threading
 import os
 import time
@@ -33,6 +34,14 @@ if not os.path.exists(so_file):
 else:
     functions = CDLL(so_file)
 
+# gpio.so has no locking of its own: concurrent callers corrupt register reads
+# and drop writes. This process is its only caller, and every call holds this.
+gpio_lock = threading.RLock()
+
+PASS_PIN = 5
+FAIL_PIN = 6
+PASS_FAIL_HOLD = .5
+
 
 #(<direction>,<pin_index>,<value>)
 # direction - IN  = 0
@@ -61,34 +70,71 @@ class GPIO:
             del self.cur_pin_state['type']
 
         self.last_input_state = "wait"
-        self.debounce_delay   = .001
-        self.last_pin_state   = None 
+        # 10ms is ~25 reads per part at 4 parts/s; 1ms only widened the collision window.
+        self.debounce_delay   = .01
+        self.last_pin_state   = None
         self.set_gpio_func = functions.set_gpio
         self.read_gpi_func = functions.read_gpi
         self.read_gpo_func = functions.read_gpo
-        self.current_output_state = [
-            self.read_gpo_func(1),
-            self.read_gpo_func(2),
-            self.read_gpo_func(3),
-            self.read_gpo_func(4),
-            self.read_gpo_func(5),
-            self.read_gpo_func(6),
-            self.read_gpo_func(7),
-            self.read_gpo_func(8)
-        ]
+        self.current_output_state = [self._read_gpo(pin) for pin in range(1, 9)]
 
 
     def _set_gpio(self, direction, pin_index, value):
         """Wrapper for set_gpio with error handling."""
         if self.set_gpio_func:
-            return self.set_gpio_func(direction, pin_index, value)
+            with gpio_lock:
+                return self.set_gpio_func(direction, pin_index, value)
         return -1 # Indicate failure if function not loaded
 
     def _read_gpi(self, pin_index):
         """Wrapper for read_gpi with error handling."""
         if self.read_gpi_func:
-            return self.read_gpi_func(pin_index)
+            with gpio_lock:
+                return self.read_gpi_func(pin_index)
         return -1 # Indicate failure if function not loaded
+
+    def _read_gpo(self, pin_index):
+        if self.read_gpo_func:
+            with gpio_lock:
+                return self.read_gpo_func(pin_index)
+        return -1
+
+    def _read_all_gpio_locked(self):
+        with gpio_lock:
+            return read_all_gpio_states_as_json()
+
+    def _record_outputs(self, changes):
+        self.cur_pin_state.update(changes)
+        pin_state_ref.update_one(self.state_query, {'$set': changes}, True)
+        self._emit_pin_state_update()
+
+    def set_output_pin(self, pin, on):
+        """Drive an output pin (active low); returns the driver's return code."""
+        rc = self._set_gpio(1, pin, 0 if on else 1)
+        self._record_outputs({f'GPO{pin}': on})
+        return rc
+
+    def toggle_output_pin(self, pin):
+        with gpio_lock:
+            on = self._read_gpo(pin) != 0
+            self._set_gpio(1, pin, 0 if on else 1)
+        self._record_outputs({f'GPO{pin}': on})
+        return on
+
+    def input_asserted(self, pin):
+        return self._read_gpi(pin) == 0
+
+    def pulse_pass_fail(self, verdict):
+        pin = {'PASS': PASS_PIN, 'FAIL': FAIL_PIN}.get(verdict)
+        if pin:
+            self.set_output_pin(pin, True)
+            time.sleep(PASS_FAIL_HOLD)
+        # Both are always released: a pin left asserted latches the reject gate.
+        with gpio_lock:
+            self._set_gpio(1, PASS_PIN, 1)
+            self._set_gpio(1, FAIL_PIN, 1)
+        self._record_outputs({f'GPO{PASS_PIN}': False, f'GPO{FAIL_PIN}': False})
+        return verdict
 
     def get_pass_fail_entry(self, model, version):
         query = {'modelName': model, 'modelVersion': version}
@@ -198,7 +244,7 @@ class GPIO:
         while True:
             cur_pin = None
 
-            gpio_state = read_all_gpio_states_as_json()
+            gpio_state = self._read_all_gpio_locked()
             all_output_state = gpio_state['outputs']
             all_pin_state = gpio_state['inputs']
 
@@ -250,6 +296,78 @@ def handle_connect():
 @socketio.on('disconnect', namespace='/gpio')
 def handle_disconnect():
     print('Client disconnected from /gpio namespace')
+
+
+# --- Pin API: tcp_server and the system server drive pins through here ---
+LOOPBACK = {'127.0.0.1', '::1'}
+
+
+def local_only(view):
+    # Port 1817 is reachable from the plant network; pin writes are not.
+    @functools.wraps(view)
+    def wrapper(*args, **kwargs):
+        if request.remote_addr not in LOOPBACK:
+            return jsonify({'error': 'forbidden'}), 403
+        return view(*args, **kwargs)
+    return wrapper
+
+
+def _pin(value):
+    pin = int(value)
+    if not 1 <= pin <= 8:
+        raise ValueError(f'pin {pin} out of range')
+    return pin
+
+
+def _bad_request(error):
+    return jsonify({'error': str(error)}), 400
+
+
+@app.route('/api/gpio/state', methods=['GET'])
+@local_only
+def api_gpio_state():
+    return jsonify(init_gpio._read_all_gpio_locked())
+
+
+@app.route('/api/gpio/set', methods=['POST'])
+@local_only
+def api_gpio_set():
+    body = request.get_json(silent=True) or {}
+    try:
+        pin = _pin(body['pin'])
+    except (KeyError, TypeError, ValueError) as error:
+        return _bad_request(error)
+    on = body.get('state') == True
+    rc = init_gpio.set_output_pin(pin, on)
+    return jsonify({'state': 'on' if on else 'off', 'rc': rc})
+
+
+@app.route('/api/gpio/toggle', methods=['POST'])
+@local_only
+def api_gpio_toggle():
+    body = request.get_json(silent=True) or {}
+    try:
+        pin = _pin(body['pin'])
+    except (KeyError, TypeError, ValueError) as error:
+        return _bad_request(error)
+    return jsonify({'state': init_gpio.toggle_output_pin(pin)})
+
+
+@app.route('/api/gpio/input/<pin>', methods=['GET'])
+@local_only
+def api_gpio_input(pin):
+    try:
+        pin = _pin(pin)
+    except ValueError as error:
+        return _bad_request(error)
+    return jsonify({'asserted': init_gpio.input_asserted(pin)})
+
+
+@app.route('/api/gpio/pass_fail', methods=['POST'])
+@local_only
+def api_gpio_pass_fail():
+    body = request.get_json(silent=True) or {}
+    return jsonify({'pass_fail': init_gpio.pulse_pass_fail(body.get('pass_fail'))})
 
 
 # --- Main Execution ---

@@ -1,5 +1,15 @@
 requests==2.31.0
+# Transitive via requests, pinned because it is not. 3.3.2 -> 3.5.1 renamed the
+# compiled extensions (md.cpython-38-*.so -> md.abi3.so), and install_dependencies.sh
+# uses --ignore-installed, which skips the uninstall - so both versions' .so files
+# end up in one directory. Python then loads md from the old one and cd from the
+# new one, and `import requests` dies on md.CharInfo. Moving this forward is fine,
+# but do it deliberately and on a device first.
+charset-normalizer==3.3.2
 python-jose==3.1.0
+# release/verify.py checks the release signature with this rather than
+# shelling out to cosign, which is a 141MB binary wanting a transparency log.
+cryptography>=41.0.0
 Flask==2.3.3
 flask-restx==1.3.0
 Flask-Cors==3.0.8
@@ -7,11 +17,12 @@ Flask-Jsonpify==1.5.0
 Flask-SocketIO==5.3.6
 redis==4.3.4
 pymongo==3.10.1
-rq==1.5.0
+# Bracketed: rq.command lands in 1.6, rq.Connection goes in 2.0 (worker.py).
+rq==1.15.1
 itsdangerous==2.1.2
 Werkzeug==3.0.3
 Jinja2==3.1.2
 Markupsafe==2.1.1
 boto3==1.26.96
-#urllib3==1.26.18
+urllib3==1.26.18
 firebase-admin==6.7.0

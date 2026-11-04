@@ -62,7 +62,23 @@ if [ "$AUTOMOUNT" = "Y" ]; then
 	echo "Modifying /etc/fstab to enable on boot"
         SWAPLOCATION=$SWAPDIRECTORY"/swapfile"
         echo $SWAPLOCATION
-	sudo sh -c 'echo "'$SWAPLOCATION' swap swap defaults 0 0" >> /etc/fstab'
+	# Guarded: a second identical swap line makes `mount -a` fail at boot, and
+	# an unguarded >> adds one every time this script runs.
+	for _lib in "$(dirname "$0")/../upgrades/lib/deploy_common.sh" \
+	            "$HOME/flex-run/upgrades/lib/deploy_common.sh"; do
+	    if [ -r "$_lib" ]; then
+	        . "$_lib"
+	        _lib_loaded=1
+	        break
+	    fi
+	done
+	if [ -n "${_lib_loaded:-}" ]; then
+	    ensure_fstab_entry "$SWAPLOCATION swap swap defaults 0 0"
+	elif grep -qE "^[[:space:]]*$SWAPLOCATION[[:space:]]" /etc/fstab; then
+	    echo "fstab already has an entry for $SWAPLOCATION - leaving it alone"
+	else
+	    sudo sh -c 'echo "'$SWAPLOCATION' swap swap defaults 0 0" >> /etc/fstab'
+	fi
 fi
 
 echo "Swap file has been created"

@@ -3,6 +3,14 @@
 # Priority: motherboard serial > product serial > CPU serial > MAC address
 # Prefix: FV-S (ARM), FV-I (VC610), SN- (everything else)
 
+# The first ID resolved is pinned and is this system's ID from then on; the
+# derivation below only runs on a system that has never had one.
+PINNED="${FLEXRUN_DEVICE_ID_PATH:-/etc/flexrun/device_id}"
+if [ -s "$PINNED" ]; then
+    head -n 1 "$PINNED"
+    exit 0
+fi
+
 # Determine prefix based on architecture and hostname
 ARCH=$(uname -m)
 HOSTNAME=$(hostname)

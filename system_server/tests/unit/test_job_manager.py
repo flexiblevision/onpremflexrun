@@ -2,6 +2,7 @@
 Unit tests for job_manager.py worker script
 """
 import pytest
+from testsupport import thread_aware_sleep_mock
 import time
 from unittest.mock import Mock, patch, MagicMock, call
 from datetime import datetime
@@ -115,37 +116,38 @@ class TestGetUnsyncedRecords:
     """Tests for get_unsynced_records function"""
 
     @pytest.mark.unit
-    @patch('worker_scripts.job_manager.mark_as_processing')
     @patch('worker_scripts.job_manager.analytics_coll')
     @patch('worker_scripts.job_manager.util_collection')
     @patch('worker_scripts.job_manager.time_now_ms')
-    @patch('time.sleep')
-    def test_get_unsynced_records_with_sync_obj(self, mock_sleep, mock_time_now_ms,
-                                                  mock_util_collection, mock_analytics_coll,
-                                                  mock_mark_as_processing):
-        """Test getting unsynced records when sync object exists"""
+    @patch('time.sleep', new_callable=thread_aware_sleep_mock)
+    def test_get_unsynced_records_claims_pending_then_stuck(
+            self, mock_sleep, mock_time_now_ms, mock_util_collection,
+            mock_analytics_coll):
+        """Records are claimed one at a time with find_one_and_update.
+
+        Deliberately does not assert on time.sleep. job_manager does
+        `import time`, so patching its sleep patches the global one, which
+        pymongo's monitor threads also call - the observed count ranged from
+        28,000 to 55,000 across runs and made this test nondeterministic. The
+        rate-limiting sleep is an implementation detail; the records returned
+        are the contract.
+        """
         from worker_scripts.job_manager import get_unsynced_records
 
         mock_time_now_ms.return_value = 1000000
         mock_util_collection.find.return_value = [{'type': 'predict_sync'}]
 
-        # Mock both find() calls - first returns list, second returns cursor with limit
-        first_records = [{'id': 'rec1', 'synced': False, 'modified': 950000}]
-        second_records = [{'id': 'rec2', 'synced': 'processing', 'modified': 950000}]
-
-        # First call returns records directly
-        # Second call returns a mock cursor with limit()
-        mock_cursor = MagicMock()
-        mock_cursor.limit.return_value = second_records
-
-        # Setup find() to return different values on consecutive calls
-        mock_analytics_coll.find.side_effect = [first_records, mock_cursor]
+        pending = {'id': 'rec1', 'synced': False, 'modified': 950000}
+        stuck = {'id': 'rec2', 'synced': 'processing', 'modified': 950000}
+        # Pending loop claims rec1 then drains; stuck loop then claims rec2.
+        mock_analytics_coll.find_one_and_update.side_effect = [pending, None, stuck, None]
 
         result = get_unsynced_records()
 
-        assert isinstance(result, list)
-        assert len(result) >= 1
-        mock_sleep.assert_called_once_with(1)
+        assert [r['id'] for r in result] == ['rec1', 'rec2']
+        # Stops at the first empty result rather than burning the whole
+        # 1000-iteration budget on a quiet device.
+        assert mock_analytics_coll.find_one_and_update.call_count == 4
 
     @pytest.mark.unit
     @patch('worker_scripts.job_manager.analytics_coll')
@@ -194,24 +196,70 @@ class TestMarkAsSynced:
 
     @pytest.mark.unit
     @patch('worker_scripts.job_manager.analytics_coll')
-    def test_mark_as_synced(self, mock_analytics_coll):
-        """Test marking a record as synced (removes it)"""
+    @patch('worker_scripts.job_manager.time_now_ms', return_value=1234567890)
+    def test_mark_as_synced(self, mock_time, mock_analytics_coll):
+        """Test marking a record as synced keeps it on the device"""
         from worker_scripts.job_manager import mark_as_synced
 
         record_id = 'test-record-456'
 
         mark_as_synced(record_id)
 
-        mock_analytics_coll.delete_one.assert_called_once_with({"id": record_id})
+        mock_analytics_coll.update_one.assert_called_once_with(
+            {"id": record_id},
+            {"$set": {"synced": True, "modified": 1234567890}}
+        )
+        mock_analytics_coll.delete_one.assert_not_called()
+
+
+class TestPruneSyncedAnalytics:
+    """Tests for prune_synced_analytics function"""
+
+    @staticmethod
+    def _found(mock_coll, docs):
+        mock_coll.find.return_value.sort.return_value.limit.return_value = docs
+
+    @pytest.mark.unit
+    @patch('worker_scripts.job_manager.analytics_coll')
+    def test_prunes_below_the_50th_newest_by_id(self, mock_analytics_coll):
+        from worker_scripts.job_manager import prune_synced_analytics, DESCENDING
+
+        # Time Machine and audio records have no prediction_end_time; _id
+        # must still give a cutoff.
+        docs = [{'_id': n} for n in range(100, 50, -1)]
+        self._found(mock_analytics_coll, docs)
+
+        prune_synced_analytics()
+
+        mock_analytics_coll.find.return_value.sort.assert_called_once_with('_id', DESCENDING)
+        mock_analytics_coll.delete_many.assert_called_once_with(
+            {"synced": True, "_id": {"$lt": 51}})
+
+    @pytest.mark.unit
+    @patch('worker_scripts.job_manager.analytics_coll')
+    def test_keeps_everything_under_50(self, mock_analytics_coll):
+        from worker_scripts.job_manager import prune_synced_analytics
+
+        self._found(mock_analytics_coll, [{'_id': n} for n in range(49)])
+
+        prune_synced_analytics()
+
+        mock_analytics_coll.delete_many.assert_not_called()
 
 
 class TestCloudCall:
     """Tests for cloud_call function"""
 
+    @pytest.fixture(autouse=True)
+    def no_real_prune(self):
+        # analytics_coll is a live client at import; an unstubbed prune deletes from the real collection.
+        with patch('worker_scripts.job_manager.prune_synced_analytics'):
+            yield
+
     @pytest.mark.unit
     @patch('worker_scripts.job_manager.mark_as_synced')
     @patch('requests.post')
-    @patch('time.sleep')
+    @patch('time.sleep', new_callable=thread_aware_sleep_mock)
     def test_cloud_call_success(self, mock_sleep, mock_post, mock_mark_synced):
         """Test successful cloud API call"""
         from worker_scripts.job_manager import cloud_call
@@ -227,9 +275,83 @@ class TestCloudCall:
         result = cloud_call(url, analytics, headers)
 
         assert result is True
-        assert mock_post.call_count == 2  # One for main URL, one for BQ_INGEST_PATH
+        # cloud_call posts to EITHER the passed url (environ == 'local') or
+        # BQ_INGEST_PATH - an if/else, so exactly one request per batch.
+        assert mock_post.call_count == 1
         assert mock_mark_synced.call_count == 2
         mock_sleep.assert_called_once_with(1)
+
+    @pytest.mark.unit
+    @patch('worker_scripts.job_manager.mark_as_synced')
+    @patch('requests.post')
+    @patch('time.sleep', new_callable=thread_aware_sleep_mock)
+    def test_cloud_call_targets_bq_when_not_local(self, mock_sleep, mock_post,
+                                                  mock_mark_synced):
+        """A cloud device sends analytics to the ingest queue, not the domain."""
+        from worker_scripts.job_manager import cloud_call
+
+        mock_post.return_value = MagicMock(status_code=200)
+
+        with patch.dict('worker_scripts.job_manager.config', {'environ': 'cloud'}), \
+                patch('worker_scripts.job_manager.ingest_path', return_value='https://ingest'):
+            cloud_call('http://test.com/api', [{'id': 'rec1'}], {})
+
+        assert mock_post.call_args[0][0] == 'https://ingest'
+
+    @pytest.mark.unit
+    @patch('worker_scripts.job_manager.mark_as_synced')
+    @patch('requests.post')
+    @patch('time.sleep', new_callable=thread_aware_sleep_mock)
+    def test_cloud_call_local_cluster_posts_to_master(self, mock_sleep, mock_post,
+                                                      mock_mark_synced):
+        """A local-cloud device uploads to its master and never resolves ingest."""
+        from worker_scripts.job_manager import cloud_call
+
+        mock_post.return_value = MagicMock(status_code=200)
+        master = 'http://192.168.8.10/api/capture/devices/upload_prediction'
+
+        with patch.dict('worker_scripts.job_manager.config', {'environ': 'local'}), \
+                patch('worker_scripts.job_manager.ingest_path') as ingest:
+            cloud_call(master, [{'id': 'rec1'}], {})
+
+        assert mock_post.call_args[0][0] == master
+        ingest.assert_not_called()
+
+    @pytest.mark.unit
+    @patch('worker_scripts.job_manager.mark_as_synced')
+    @patch('requests.post')
+    @patch('time.sleep', new_callable=thread_aware_sleep_mock)
+    def test_cloud_call_targets_the_url_when_local(self, mock_sleep, mock_post,
+                                                   mock_mark_synced):
+        """A local-cluster device posts to the master it was given."""
+        from worker_scripts.job_manager import cloud_call
+
+        mock_post.return_value = MagicMock(status_code=200)
+
+        with patch.dict('worker_scripts.job_manager.config', {'environ': 'local'}):
+            cloud_call('http://master.local/api', [{'id': 'rec1'}], {})
+
+        assert mock_post.call_args[0][0] == 'http://master.local/api'
+
+    @pytest.mark.unit
+    @patch('worker_scripts.job_manager.analytics_coll')
+    @patch('worker_scripts.job_manager.prune_synced_analytics',
+           side_effect=Exception('socket timeout'))
+    @patch('worker_scripts.job_manager.mark_as_synced')
+    @patch('requests.post')
+    @patch('time.sleep', new_callable=thread_aware_sleep_mock)
+    def test_cloud_call_prune_failure_keeps_batch_synced(
+            self, mock_sleep, mock_post, mock_mark_synced, mock_prune, mock_analytics_coll):
+        """A failed prune must not send an accepted batch back for re-upload"""
+        from worker_scripts.job_manager import cloud_call
+
+        mock_post.return_value = MagicMock(status_code=200)
+
+        result = cloud_call('http://test.com/api', [{'id': 'rec1'}], {})
+
+        assert result is True
+        mock_prune.assert_called_once()
+        mock_analytics_coll.update_one.assert_not_called()
 
     @pytest.mark.unit
     @patch('requests.post')
@@ -244,7 +366,7 @@ class TestCloudCall:
 
     @pytest.mark.unit
     @patch('requests.post')
-    @patch('time.sleep')
+    @patch('time.sleep', new_callable=thread_aware_sleep_mock)
     def test_cloud_call_failure(self, mock_sleep, mock_post):
         """Test cloud call handles request failure"""
         from worker_scripts.job_manager import cloud_call
@@ -262,7 +384,7 @@ class TestCloudCall:
     @pytest.mark.unit
     @patch('worker_scripts.job_manager.mark_as_synced')
     @patch('requests.post')
-    @patch('time.sleep')
+    @patch('time.sleep', new_callable=thread_aware_sleep_mock)
     def test_cloud_call_non_200_status(self, mock_sleep, mock_post, mock_mark_synced):
         """Test cloud call with non-200 status code"""
         from worker_scripts.job_manager import cloud_call
@@ -287,7 +409,7 @@ class TestKinesisCall:
     @pytest.mark.unit
     @patch('worker_scripts.job_manager.mark_as_synced')
     @patch('worker_scripts.job_manager.aws_client')
-    @patch('time.sleep')
+    @patch('time.sleep', new_callable=thread_aware_sleep_mock)
     def test_kinesis_call_success(self, mock_sleep, mock_aws_client, mock_mark_synced):
         """Test successful Kinesis stream call"""
         from worker_scripts.job_manager import kinesis_call
@@ -345,54 +467,12 @@ class TestKinesisCall:
         assert result is False
 
 
-class TestPushAnalyticsToCloudBatch:
-    """Tests for push_analytics_to_cloud_batch function"""
-
-    @pytest.mark.unit
-    @patch('worker_scripts.job_manager.job_queue')
-    @patch('worker_scripts.job_manager.get_unsynced_records')
-    @patch('worker_scripts.job_manager.insert_job')
-    def test_push_analytics_no_records(self, mock_insert_job, mock_get_unsynced,
-                                        mock_job_queue):
-        """Test push when there are no unsynced records"""
-        from worker_scripts.job_manager import push_analytics_to_cloud_batch
-
-        mock_get_unsynced.return_value = []
-
-        result = push_analytics_to_cloud_batch('http://test.com', 'token123')
-
-        assert result is None
-        mock_job_queue.enqueue.assert_not_called()
-
-    @pytest.mark.unit
-    @patch('worker_scripts.job_manager.use_aws', False)
-    @patch('worker_scripts.job_manager.job_queue')
-    @patch('worker_scripts.job_manager.get_unsynced_records')
-    @patch('worker_scripts.job_manager.insert_job')
-    def test_push_analytics_cloud_batch(self, mock_insert_job,
-                                         mock_get_unsynced, mock_job_queue):
-        """Test pushing analytics batch to cloud"""
-        from worker_scripts.job_manager import push_analytics_to_cloud_batch
-
-        mock_job = MagicMock()
-        mock_job.id = 'job-123'
-        mock_job_queue.enqueue.return_value = mock_job
-
-        analytics = [{'id': f'rec{i}', 'modified': 1000 + i} for i in range(15)]
-        mock_get_unsynced.return_value = analytics
-
-        # Note: update_last_sync_on_success is called but not defined in job_manager
-        # This will cause an error but that's a bug in the source code
-        try:
-            result = push_analytics_to_cloud_batch('http://test.com', 'token123')
-            # If the function is fixed, these should pass
-            assert result is True
-            assert mock_job_queue.enqueue.call_count == 2
-            assert mock_insert_job.call_count == 2
-        except NameError:
-            # Expected until update_last_sync_on_success is implemented
-            pass
-
+# TestPushAnalyticsToCloudBatch was removed: it tested
+# push_analytics_to_cloud_batch(), which was never implemented in
+# job_manager.py (checked the full history). The tests could only ever
+# fail on ImportError, and one of them wrapped its assertions in
+# `except NameError: pass` so it asserted nothing. The function that does
+# exist, push_analytics_to_cloud(), is covered by the class below.
 
 class TestPushAnalyticsToCloud:
     """Tests for push_analytics_to_cloud function"""
@@ -445,19 +525,17 @@ class TestPushAnalyticsToCloud:
 
 
 class TestEnableOCR:
-    """Tests for enable_ocr function"""
+    """Tests for the enable_ocr shim"""
 
     @pytest.mark.unit
-    @patch('os.system')
-    @patch.dict('os.environ', {'HOME': '/test/home'})
-    def test_enable_ocr(self, mock_os_system):
-        """Test enabling OCR functionality"""
+    def test_enable_ocr(self):
+        """OCR now deploys through the addon registry, not an install script"""
         from worker_scripts.job_manager import enable_ocr
 
-        enable_ocr()
+        with patch('addons.jobs.enable_addon') as enable:
+            enable_ocr()
 
-        expected_path = '/test/home/flex-run/helpers/install_ocr.sh'
-        mock_os_system.assert_called_once_with(f"sudo sh {expected_path}")
+        enable.assert_called_once_with('ocr')
 
 
 class TestBatchSize:
@@ -472,20 +550,112 @@ class TestBatchSize:
         assert isinstance(BATCH_SIZE, int)
 
 
-class TestBQIngestPath:
-    """Tests for BigQuery ingest path configuration"""
+PROD_CLOUD = 'https://v1.cloud.flexiblevision.com'
+DEV_CLOUD = 'https://clouddeploy.api.flexiblevision.com'
+DEV_TRACK = {'latest_stable_ref': 'latest_stable_version_check_dev'}
+PROD_TRACK = {'latest_stable_ref': 'latest_stable_version'}
+
+
+class TestIngestPath:
+    """ingest_path - analytics go to the cloud the device talks to"""
+
+    @pytest.fixture(autouse=True)
+    def _fresh_probe(self):
+        with patch('worker_scripts.job_manager._lb_reachable', None):
+            yield
+
+    def _resolve(self, domain, track, lb_up=True):
+        from worker_scripts.job_manager import ingest_path
+        probe = patch('worker_scripts.job_manager.requests.get',
+                      side_effect=None if lb_up else Exception('down'))
+        with patch('cloud_env.get_cloud_domain', return_value=domain), \
+                patch('worker_scripts.job_manager.config', track), probe as get:
+            return ingest_path(), get
 
     @pytest.mark.unit
-    @patch('worker_scripts.job_manager.config', {'latest_stable_ref': 'latest_stable_version'})
-    def test_bq_ingest_path_prod(self):
-        """Test BQ ingest path for production"""
-        # This test verifies the module-level logic
-        # In actual implementation, this is set at import time
-        pass
+    def test_dev_track_repointed_to_prod_sends_to_prod(self):
+        """The release track fvconfig.json was installed with must not win
+        over the cloud_env override that repointed the device."""
+        path, _ = self._resolve(PROD_CLOUD, DEV_TRACK)
+        assert path == 'https://functions-proxy.flexiblevision.com/data-enqueue-prod'
 
     @pytest.mark.unit
-    @patch('worker_scripts.job_manager.config', {'latest_stable_ref': 'dev_version'})
-    def test_bq_ingest_path_dev(self):
-        """Test BQ ingest path for development"""
-        # This test verifies the module-level logic
-        pass
+    def test_prod_track_repointed_to_dev_sends_to_dev(self):
+        from worker_scripts.job_manager import INGEST_DIRECT
+        path, get = self._resolve(DEV_CLOUD, PROD_TRACK)
+        assert path == INGEST_DIRECT['dev']
+        get.assert_not_called()
+
+    @pytest.mark.unit
+    def test_prod_falls_back_to_direct_when_lb_unreachable(self):
+        from worker_scripts.job_manager import INGEST_DIRECT
+        path, _ = self._resolve(PROD_CLOUD, PROD_TRACK, lb_up=False)
+        assert path == INGEST_DIRECT['prod']
+
+    @pytest.mark.unit
+    def test_lb_probed_once_per_process(self):
+        from worker_scripts.job_manager import ingest_path
+        with patch('cloud_env.get_cloud_domain', return_value=PROD_CLOUD), \
+                patch('worker_scripts.job_manager.requests.get') as get:
+            ingest_path()
+            ingest_path()
+        assert get.call_count == 1
+
+    @pytest.mark.unit
+    @pytest.mark.parametrize('track, expected', [(PROD_TRACK, 'prod'), (DEV_TRACK, 'dev')])
+    def test_bespoke_cloud_keeps_release_track_rule(self, track, expected):
+        from worker_scripts.job_manager import _ingest_cloud
+        with patch('cloud_env.get_cloud_domain', return_value='https://self-hosted.example'), \
+                patch('worker_scripts.job_manager.config', track):
+            assert _ingest_cloud() == expected
+
+
+class TestBatchRecords:
+    """Tests for batch_records - the publish batcher"""
+
+    @pytest.mark.unit
+    def test_empty_input_yields_nothing(self):
+        from worker_scripts.job_manager import batch_records
+        assert list(batch_records([])) == []
+
+    @pytest.mark.unit
+    def test_splits_on_record_count(self):
+        from worker_scripts.job_manager import batch_records
+
+        records = [{'id': i} for i in range(25)]
+        batches = list(batch_records(records, max_records=10, max_bytes=10**9))
+
+        assert [len(b) for b in batches] == [10, 10, 5]
+        assert sum(len(b) for b in batches) == 25
+
+    @pytest.mark.unit
+    def test_splits_on_payload_size_before_count(self):
+        """A heavy record closes the batch early - the Pub/Sub 10MB cap."""
+        from worker_scripts.job_manager import batch_records
+
+        records = [{'id': i, 'base64': 'x' * 400} for i in range(10)]
+        batches = list(batch_records(records, max_records=10, max_bytes=1000))
+
+        assert len(batches) > 1
+        assert all(len(b) < 10 for b in batches)
+        assert sum(len(b) for b in batches) == 10
+
+    @pytest.mark.unit
+    def test_oversized_record_is_sent_alone_not_dropped(self):
+        """Nothing is silently discarded - an unsplittable record still goes."""
+        from worker_scripts.job_manager import batch_records
+
+        records = [{'id': 'small'}, {'id': 'huge', 'base64': 'x' * 5000}, {'id': 'small2'}]
+        batches = list(batch_records(records, max_records=10, max_bytes=1000))
+
+        assert sum(len(b) for b in batches) == 3
+        huge = [b for b in batches if any(r['id'] == 'huge' for r in b)]
+        assert len(huge) == 1 and len(huge[0]) == 1
+
+    @pytest.mark.unit
+    def test_non_serializable_values_do_not_raise(self):
+        """Records come from json_util and can carry datetimes."""
+        from worker_scripts.job_manager import batch_records
+
+        records = [{'id': 1, 'modified': datetime.now()}]
+        assert [len(b) for b in batch_records(records)] == [1]

@@ -1,0 +1,6 @@
+# Without this, `gcloud functions deploy --source` uploads the whole directory
+# including __pycache__, shipping stale .pyc files alongside the source.
+__pycache__/
+*.py[cod]
+.git/
+.gitignore

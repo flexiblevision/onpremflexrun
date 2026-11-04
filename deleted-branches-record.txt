@@ -1,0 +1,22 @@
+# Remote branches deleted from origin on 2026-08-26T22:43:33Z
+# All were fully merged into origin/master (0 unmerged commits) at deletion.
+# Recover any of them with:  git push origin <sha>:refs/heads/<name>
+
+BRANCH               SHA                                        DATE
+add-visiontools      a72a60603620f70ab47a323403c21c296c5e8127   2023-07-27
+arm-conditionals     901061fd6a5dd2254b26ec61ef6b23fa6f519078   2022-11-08
+aws-dev              0611206afbd6ee374ba5fc3712a92c539bf9a514   2023-07-13
+dev-v1-branch        706cb32c864190ec74ef7f23af73bfb19665007e   2021-09-10
+dev-v2-branch        e4112359359d55f379fba7005d2b73c661a2679b   2021-09-13
+fire-branch          8f5a95d0d5cb4138ece4373d208adf419da87421   2024-04-10
+lma-setup            d709245d7fb27865a5211346fe73ed9d9bf1e432   2023-11-13
+local-cloud-setup    6152746576cd8fe4f60d969ab9bfea9f40dbf073   2024-03-12
+minor-update         7769bc6fa4a6080ecefba871ffe3ad89a518f7a9   2023-09-28
+prod-v2-branch       9aa603fa38bba056aa4dd889e8cc82bfda5a0d30   2022-02-17
+routing-refactor     f29bda778deb764ad362e6f9a799561acf54b2dc   2025-10-10
+test-suite           98211ffb57f76ce71e975328d3619350b4ac4cd4   2025-12-04
+v1.7                 a72a60603620f70ab47a323403c21c296c5e8127   2023-07-27
+v1.8                 1f0d195cb31d807c0ca3b19f643cf51d467a4024   2024-05-14
+v1.9                 fc2cf47288c33d791f1a16a578401ea8f46b9214   2025-07-03
+v1.9.1               a60a6a48f30e49aea6b1581a43f591f29cf82219   2025-07-24
+v1.9.2               196e3ef3f5428dceb47e228735e0919b6796327e   2025-08-28
