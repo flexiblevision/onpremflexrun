@@ -33,9 +33,8 @@ usermod -aG dialout visioncell
 
 sudo rm /etc/xdg/autostart/update-notifier.desktop
 
-dpkg -l | grep -E '^ii.*nvidia' | awk '{print $2}' | xargs -r apt-mark hold
-dpkg -l | grep -E "^ii.*(linux-image|linux-headers)-$(uname -r)" | awk '{print $2}' | xargs -r apt-mark hold
-dpkg -l | grep -E '^ii.*(linux-generic|linux-headers-generic|linux-image-generic)' | awk '{print $2}' | xargs -r apt-mark hold
+bash "$(dirname "$0")/../helpers/pin_kernel.sh"
+bash "$(dirname "$0")/../helpers/install_r8127.sh"
 
 export PYTHONPATH="${PYTHONPATH}:${HOME}/flex-run"
 
