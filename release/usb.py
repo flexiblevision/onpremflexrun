@@ -69,6 +69,9 @@ PYTHONS = {
     'py310': 'python:3.10-slim-bullseye',
     'py312': 'python:3.12-slim-bookworm',
 }
+# The pip each Ubuntu ships. Resolving with a newer one picks wheels the device
+# pip cannot read: 20.0.2 predates manylinux_2_28 tags and rejects cryptography's.
+DEVICE_PIPS = {'py38': '20.0.2', 'py310': '22.0.2', 'py312': '24.0'}
 DOCKER_PLATFORMS = {'x86': 'linux/amd64', 'arm': 'linux/arm64'}
 
 
@@ -293,8 +296,12 @@ def python_packages(root, commit, arch, repo=REPO, runner=run, uid=None, gid=Non
         # which cannot chown, and pip needs somewhere to write its cache.
         runner(['docker', 'run', '--rm', '--platform', DOCKER_PLATFORMS[arch],
                 '--user', '{}:{}'.format(uid, gid), '-e', 'HOME=/tmp',
+                '-e', 'DEVICE_PIP=' + DEVICE_PIPS[name],
                 '-v', '{}:/req.txt:ro'.format(requirements), '-v', '{}:/out'.format(out),
-                image, 'pip', 'download', '--quiet', '--disable-pip-version-check',
+                image, 'sh', '-c',
+                'pip install --quiet --disable-pip-version-check --target /tmp/pip "pip==$DEVICE_PIP"'
+                ' && PYTHONPATH=/tmp/pip exec python -m pip download "$@"', 'sh',
+                '--quiet', '--disable-pip-version-check',
                 '-r', '/req.txt', 'setuptools', 'wheel', '-d', '/out'])
     return sorted(PYTHONS)
 

@@ -292,6 +292,9 @@ class TestWriteBundle:
             assert c[c.index('--user') + 1] == '{}:{}'.format(os.getuid(), os.getgid())
             assert 'setuptools' in c and 'wheel' in c
             assert c[c.index('--platform') + 1] == 'linux/amd64'
+        pips = {next(a for a in c if a.startswith('python:')): next(a for a in c if a.startswith('DEVICE_PIP='))
+                for c in runs}
+        assert pips[usb.PYTHONS['py38']] == 'DEVICE_PIP=20.0.2'
 
     def test_an_image_that_is_not_the_signed_one_stops_the_write(self, stick, release):
         tools = FakeTools({release['ref']: 'sha256:something-else'}, {release['ref']: 1000})
