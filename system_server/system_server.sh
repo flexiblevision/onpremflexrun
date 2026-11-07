@@ -112,8 +112,7 @@ configure_redis
 forever start -c redis-server --daemonize yes
 sudo sh -c 'echo 1000 > /sys/module/usbcore/parameters/usbfs_memory_mb'
 sudo rm /etc/xdg/autostart/update-notifier.desktop
-# Hold installed nvidia packages and kernel to prevent mismatched updates breaking GPU drivers
-dpkg -l | grep -E '^ii.*nvidia' | awk '{print $2}' | xargs -r apt-mark hold
-dpkg -l | grep -E "^ii.*(linux-image|linux-headers)-$(uname -r)" | awk '{print $2}' | xargs -r apt-mark hold
-# Hold kernel metapackages to prevent new kernel versions from being pulled in
-dpkg -l | grep -E '^ii.*(linux-generic|linux-headers-generic|linux-image-generic)' | awk '{print $2}' | xargs -r apt-mark hold
+bash "$(dirname "$0")/../helpers/pin_kernel.sh"
+bash "$(dirname "$0")/../helpers/install_touchscreen_pin.sh"
+# Last, so a failed driver build is the status setup reports.
+bash "$(dirname "$0")/../helpers/install_r8127.sh"
