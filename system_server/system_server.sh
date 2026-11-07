@@ -39,6 +39,8 @@ if pip3 install --help 2>/dev/null | grep -q -- --break-system-packages; then
     PIP_BSP="--break-system-packages"
 fi
 pip3 install $PIP_BSP --ignore-installed -r $HOME/flex-run/requirements.txt
+# A box set up before has the old versions' metadata beside the new ones.
+python3 $HOME/flex-run/deploy.py --repair-deps
 
 chmod +x $HOME/flex-run/scripts/fv_system_server_start.sh
 chmod +x $HOME/flex-run/scripts/worker_server_start.sh
