@@ -35,6 +35,7 @@ sudo rm /etc/xdg/autostart/update-notifier.desktop
 
 bash "$(dirname "$0")/../helpers/pin_kernel.sh"
 bash "$(dirname "$0")/../helpers/install_r8127.sh"
+bash "$(dirname "$0")/../helpers/install_touchscreen_pin.sh"
 
 export PYTHONPATH="${PYTHONPATH}:${HOME}/flex-run"
 
