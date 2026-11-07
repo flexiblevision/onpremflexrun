@@ -113,5 +113,6 @@ forever start -c redis-server --daemonize yes
 sudo sh -c 'echo 1000 > /sys/module/usbcore/parameters/usbfs_memory_mb'
 sudo rm /etc/xdg/autostart/update-notifier.desktop
 bash "$(dirname "$0")/../helpers/pin_kernel.sh"
-bash "$(dirname "$0")/../helpers/install_r8127.sh"
 bash "$(dirname "$0")/../helpers/install_touchscreen_pin.sh"
+# Last, so a failed driver build is the status setup reports.
+bash "$(dirname "$0")/../helpers/install_r8127.sh"

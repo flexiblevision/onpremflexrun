@@ -1,6 +1,6 @@
 #!/bin/bash
 # Installs pin_touchscreen.py and runs it at every GNOME login. Never fails the
-# caller: it is the last line of system_server.sh, whose status setup reports.
+# caller: a touchscreen pin is not worth failing an install or upgrade over.
 
 log() { echo "touchscreen-pin: $*" >&2; logger -t flexrun-touchscreen-pin "$*" 2>/dev/null || true; }
 
