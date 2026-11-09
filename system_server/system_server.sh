@@ -28,7 +28,6 @@ apt-get -y install iw
 apt install -y redis-server
 apt install -y openssh-server
 apt-get -y install isc-dhcp-server
-apt install -y linux-crashdump kdump-tools 2>/dev/null || echo "Warning: kdump not installed (no apt access) — kernel will still panic+reboot on lockups but won't capture crash dumps"
 make install -C $HOME/flex-run/scripts/create_ap
 npm install forever@3.0.0 -g
 
@@ -59,26 +58,6 @@ chmod +x $HOME/flex-run/scripts/configure_network.sh
 
 sudo $HOME/flex-run/scripts/configure_network.sh
 
-# Enable kernel panic on lockups so kdump captures a crash dump instead of silent hang
-cat > /etc/sysctl.d/90-lockup-panic.conf <<'EOF'
-# Soft lockups are often transient under heavy GPU/vision/I-O load, so we do NOT
-# panic on them (avoids false-positive reboots) — but still capture all-CPU
-# backtraces for diagnostics.
-kernel.softlockup_panic = 0
-kernel.softlockup_all_cpu_backtrace = 1
-# Hard lockups are genuine (CPU stuck with IRQs off) — panic.
-kernel.hardlockup_panic = 1
-# Hung tasks: timeout raised to 300s so slow disk/USB/fsync don't trip a false hang.
-kernel.hung_task_panic = 1
-kernel.hung_task_timeout_secs = 300
-# Do NOT panic on kernel Oops — a flaky driver (e.g. nvidia) oopsing would
-# otherwise force a full reboot. The kernel kills the offending task and keeps
-# running (accepted risk: occasional tainted zombies systemd cannot reap).
-kernel.panic_on_oops = 0
-kernel.panic = 10
-EOF
-sysctl --system
-
 # Enable persistent journal so crash logs survive reboot
 mkdir -p /var/log/journal
 systemd-tmpfiles --create --prefix /var/log/journal
@@ -86,12 +65,6 @@ systemctl restart systemd-journald
 
 # Disable WiFi power save to prevent ath10k_pci (QCA6174) kernel lockups
 printf '[connection]\nwifi.powersave = 2\n' > /etc/NetworkManager/conf.d/no-powersave.conf
-
-# Enable kdump to write crash dumps on panic (if installed)
-if [ -f /etc/default/kdump-tools ]; then
-    sed -i 's/^USE_KDUMP=.*/USE_KDUMP=1/' /etc/default/kdump-tools
-    systemctl enable kdump-tools 2>/dev/null || true
-fi
 
 # Root crontab, installed atomically from the shared block in
 # upgrades/lib/deploy_common.sh (same block the upgrade path uses). This
@@ -114,6 +87,7 @@ configure_redis
 forever start -c redis-server --daemonize yes
 sudo sh -c 'echo 1000 > /sys/module/usbcore/parameters/usbfs_memory_mb'
 sudo rm /etc/xdg/autostart/update-notifier.desktop
+bash "$(dirname "$0")/../helpers/remove_freeze_tooling.sh"
 bash "$(dirname "$0")/../helpers/pin_kernel.sh"
 bash "$(dirname "$0")/../helpers/install_touchscreen_pin.sh"
 # Last, so a failed driver build is the status setup reports.

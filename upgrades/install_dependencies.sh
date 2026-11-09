@@ -22,17 +22,12 @@ apt-get -y install jq
 # unmanaged, which leaves the device with no wifi client.
 apt-get -y install iw
 apt-get -y --only-upgrade install google-chrome-stable
-# linux-crashdump pulls in kexec-tools, which fires an interactive debconf prompt
-# ("Should kexec-tools handle reboots?") that hangs the script even with -y.
-# Preseed it to "no" (bootloader handles normal reboots; kdump uses kexec only on
-# panic) and force the noninteractive frontend so apt never blocks on input.
-echo "kexec-tools kexec-tools/load_kexec boolean false" | debconf-set-selections
-DEBIAN_FRONTEND=noninteractive apt install -y linux-crashdump kdump-tools 2>/dev/null || echo "Warning: kdump not installed (no apt access) — kernel will still panic+reboot on lockups but won't capture crash dumps"
 fi
 usermod -aG dialout visioncell
 
 sudo rm /etc/xdg/autostart/update-notifier.desktop
 
+bash "$(dirname "$0")/../helpers/remove_freeze_tooling.sh"
 bash "$(dirname "$0")/../helpers/pin_kernel.sh"
 bash "$(dirname "$0")/../helpers/install_r8127.sh"
 bash "$(dirname "$0")/../helpers/install_touchscreen_pin.sh"
