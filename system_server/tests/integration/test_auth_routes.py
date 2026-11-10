@@ -74,6 +74,7 @@ class TestAuthTokenPost:
         config = {'environ': 'local', 'cloud_domain': 'https://old.example'}
         with patch('settings.config', config), \
              patch.object(auth_routes, 'write_settings_to_config') as write, \
+             patch.object(auth_routes.utils_db, 'update_one'), \
              patch('os.system'):
             client.post('/auth_token',
                         json={'refresh_token': 'abc', 'obj': {'server_ip': '10.0.0.5'}})
@@ -82,16 +83,35 @@ class TestAuthTokenPost:
         write.assert_called_once()
 
     @pytest.mark.integration
+    def test_a_local_master_repoints_client_mode(self, client, home):
+        # client_mode.master_ip outranks cloud_domain, so leaving it would keep
+        # the bridge and every service on the previous master.
+        config = {'environ': 'local', 'cloud_domain': 'http://192.168.2.161'}
+        with patch('settings.config', config), \
+             patch.object(auth_routes, 'write_settings_to_config'), \
+             patch.object(auth_routes.utils_db, 'update_one') as update, \
+             patch('os.system'):
+            client.post('/auth_token',
+                        json={'refresh_token': 'abc',
+                              'obj': {'server_ip': 'http://192.168.20.10/'}})
+
+        update.assert_called_once_with(
+            {'type': 'client_mode'},
+            {'$set': {'config.master_ip': '192.168.20.10'}})
+
+    @pytest.mark.integration
     def test_a_scheme_already_present_is_preserved(self, client, home):
         config = {'environ': 'local'}
         with patch('settings.config', config), \
              patch.object(auth_routes, 'write_settings_to_config'), \
+             patch.object(auth_routes.utils_db, 'update_one') as update, \
              patch('os.system'):
             client.post('/auth_token',
                         json={'refresh_token': 'abc',
                               'obj': {'server_ip': 'https://master.local'}})
 
         assert config['cloud_domain'] == 'https://master.local'
+        assert update.call_args[0][1] == {'$set': {'config.master_ip': 'master.local'}}
 
     @pytest.mark.integration
     def test_a_cloud_device_never_rewrites_the_domain(self, client, home):
@@ -100,23 +120,27 @@ class TestAuthTokenPost:
         config = {'environ': 'cloud', 'cloud_domain': 'https://clouddeploy.example'}
         with patch('settings.config', config), \
              patch.object(auth_routes, 'write_settings_to_config') as write, \
+             patch.object(auth_routes.utils_db, 'update_one') as update, \
              patch('os.system'):
             client.post('/auth_token',
                         json={'refresh_token': 'abc', 'obj': {'server_ip': '10.0.0.5'}})
 
         assert config['cloud_domain'] == 'https://clouddeploy.example'
         write.assert_not_called()
+        update.assert_not_called()
 
     @pytest.mark.integration
     def test_a_local_device_without_a_server_ip_does_not_rewrite(self, client, home):
         config = {'environ': 'local', 'cloud_domain': 'https://old.example'}
         with patch('settings.config', config), \
              patch.object(auth_routes, 'write_settings_to_config') as write, \
+             patch.object(auth_routes.utils_db, 'update_one') as update, \
              patch('os.system'):
             client.post('/auth_token', json={'refresh_token': 'abc', 'obj': {}})
 
         assert config['cloud_domain'] == 'https://old.example'
         write.assert_not_called()
+        update.assert_not_called()
 
 
 class TestDeAuthorize:
