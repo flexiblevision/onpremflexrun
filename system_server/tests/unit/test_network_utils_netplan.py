@@ -104,6 +104,24 @@ class TestBuildSetNetplan:
         assert 'addresses: [192.168.20.1/24]' in written
         assert written.count('mtu: 9000') == 2
 
+    def _mtus_passed(self, interfaces):
+        with patch.object(nu.interfaces_db, 'find', return_value=interfaces), \
+             patch.object(nu.os.path, 'exists', return_value=True), \
+             patch.object(nu, 'remove_conflicting_netplans'), \
+             patch.object(nu, 'apply_netplan') as apply:
+            nu.build_set_netplan()
+        return [s['mtu'] for s in apply.call_args[0][0]]
+
+    @pytest.mark.unit
+    def test_a_fallback_from_the_current_probe_is_kept(self):
+        assert self._mtus_passed([{'iname': 'enp9s0', 'ip_string': '[]', 'mtu': 1500,
+                                   'mtu_probe': nu.MTU_PROBE}]) == [1500]
+
+    @pytest.mark.unit
+    def test_a_fallback_from_an_older_probe_is_tested_again(self):
+        # Stored before cameras were told apart from links that drop jumbo.
+        assert self._mtus_passed([{'iname': 'enp7s0', 'ip_string': '[]', 'mtu': 1500}]) == [None]
+
     @pytest.mark.unit
     def test_conflicting_configs_are_cleared_first(self):
         # Applying on top of a conflicting config leaves the interface owned by
@@ -145,11 +163,12 @@ class TestBuildSetNetplan:
 
 
 class TestApplyNetplan:
-    def _run(self, stanzas, max_mtu=9194, peers=(), jumbo=True, small=True):
+    def _run(self, stanzas, max_mtu=9194, peers=(), jumbo=True, small=True, standard=True):
         writes = []
 
         def ping(cmd, **kw):
-            ok = jumbo if '-M' in cmd else small
+            size = int(cmd[cmd.index('-s') + 1]) if '-s' in cmd else None
+            ok = {None: small, nu.STANDARD_PROBE: standard, nu.JUMBO_PROBE: jumbo}[size]
             return MagicMock(returncode=0 if ok else 1)
 
         with patch.object(nu, 'max_mtu', return_value=max_mtu), \
@@ -188,7 +207,17 @@ class TestApplyNetplan:
         writes, update = self._run([{'iname': 'enp9s0', 'ip_string': '[]'}],
                                    peers=['192.168.9.20'], jumbo=False)
         assert writes == [[9000], [1500]]
-        update.assert_called_once_with({'iname': 'enp9s0'}, {'$set': {'mtu': 1500}})
+        update.assert_called_once_with({'iname': 'enp9s0'},
+                                       {'$set': {'mtu': 1500, 'mtu_probe': nu.MTU_PROBE}})
+
+    @pytest.mark.unit
+    def test_a_camera_that_ignores_large_pings_keeps_jumbo(self):
+        # Basler GigE cameras answer neither probe but stream jumbo frames. The
+        # old probe dropped their port to 1500 and the camera stopped streaming.
+        writes, update = self._run([{'iname': 'enp7s0', 'ip_string': '[]'}],
+                                   peers=['192.168.9.50'], standard=False, jumbo=False)
+        assert writes == [[9000]]
+        update.assert_not_called()
 
     @pytest.mark.unit
     def test_an_unreachable_peer_says_nothing_about_the_mtu(self):
