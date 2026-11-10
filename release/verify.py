@@ -110,6 +110,7 @@ def local_verify(manifest_path, signature_path, public_key_path):
     """
     try:
         from cryptography.exceptions import InvalidSignature
+        from cryptography.hazmat.backends import default_backend
         from cryptography.hazmat.primitives import hashes, serialization
         from cryptography.hazmat.primitives.asymmetric import ec
     except ImportError as exc:
@@ -119,7 +120,8 @@ def local_verify(manifest_path, signature_path, public_key_path):
 
     try:
         with open(public_key_path, 'rb') as handle:
-            public_key = serialization.load_pem_public_key(handle.read())
+            # backend is required by the cryptography 2.8 a USB install starts on.
+            public_key = serialization.load_pem_public_key(handle.read(), backend=default_backend())
         with open(signature_path, 'rb') as handle:
             signature = base64.b64decode(handle.read().strip())
         with open(manifest_path, 'rb') as handle:

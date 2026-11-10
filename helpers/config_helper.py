@@ -137,9 +137,26 @@ def interface_is_up(name):
         return False
 
 
+def default_route_ports():
+    """Ports a default route leaves by: the plant network, where a second DHCP
+    server hands out addresses that take other machines off it."""
+    try:
+        out = subprocess.run(['ip', '-j', 'route', 'show', 'default'],
+                             capture_output=True, text=True, timeout=5).stdout
+        return {r['dev'] for r in json.loads(out or '[]') if r.get('dev')}
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return set()
+
+
 def set_dhcp():
     res = interfaces_db.find({'dhcp': True})
     interfaces = json.loads(json_util.dumps(res))
+
+    uplinks = default_route_ports()
+    refused = [i.get('iname') for i in interfaces if i.get('iname') in uplinks]
+    if refused:
+        print('dhcp: not serving {} - default route leaves by it'.format(', '.join(refused)))
+    interfaces = [i for i in interfaces if i.get('iname') not in uplinks]
 
     # The stored setting is left alone: a port keeps "serve DHCP here" while
     # its cable is out, and serves again when it is plugged back in. Only what

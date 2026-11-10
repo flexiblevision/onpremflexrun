@@ -41,6 +41,51 @@ class TestRemoveConflictingNetplans:
         remove.assert_not_called()
 
     @pytest.mark.unit
+    def test_a_hand_written_uplink_is_preserved(self, tmp_path):
+        # The only gateway and DNS on a microk8s master; fv-net-init cannot
+        # reproduce them.
+        uplink = tmp_path / '02-kubedns.yaml'
+        uplink.write_text(
+            'network:\n  version: 2\n  ethernets:\n    eno1:\n      dhcp4: False\n'
+            '      addresses: [192.168.10.45/24]\n      gateway4: 192.168.10.1\n'
+            '      nameservers:\n              addresses: [127.0.0.1,8.8.8.8]\n')
+
+        with patch.object(nu.os.path, 'exists', return_value=True), \
+             patch.object(nu.os, 'listdir', return_value=[uplink.name]), \
+             patch.object(nu.os.path, 'join', return_value=str(uplink)), \
+             patch.object(nu.os, 'remove') as remove:
+            nu.remove_conflicting_netplans()
+
+        remove.assert_not_called()
+
+    @pytest.mark.unit
+    @pytest.mark.parametrize('key', ['routes:', 'gateway6:'])
+    def test_any_routing_key_preserves_the_file(self, tmp_path, key):
+        f = tmp_path / '00-installer-config.yaml'
+        f.write_text('network:\n  ethernets:\n    eth0:\n      {}\n'.format(key))
+
+        with patch.object(nu.os.path, 'exists', return_value=True), \
+             patch.object(nu.os, 'listdir', return_value=[f.name]), \
+             patch.object(nu.os.path, 'join', return_value=str(f)), \
+             patch.object(nu.os, 'remove') as remove:
+            nu.remove_conflicting_netplans()
+
+        remove.assert_not_called()
+
+    @pytest.mark.unit
+    def test_a_renderer_only_config_is_preserved(self, tmp_path):
+        renderer = tmp_path / '01-network-manager-all.yaml'
+        renderer.write_text('network:\n  version: 2\n  renderer: NetworkManager\n')
+
+        with patch.object(nu.os.path, 'exists', return_value=True), \
+             patch.object(nu.os, 'listdir', return_value=[renderer.name]), \
+             patch.object(nu.os.path, 'join', return_value=str(renderer)), \
+             patch.object(nu.os, 'remove') as remove:
+            nu.remove_conflicting_netplans()
+
+        remove.assert_not_called()
+
+    @pytest.mark.unit
     def test_the_generated_config_is_never_removed(self):
         with patch.object(nu.os.path, 'exists', return_value=True), \
              patch.object(nu.os, 'listdir', return_value=['fv-net-init.yaml']), \

@@ -1239,9 +1239,29 @@ class TestServiceControl:
 class TestSetDhcp:
     @pytest.fixture(autouse=True)
     def ports_up(self, config_helper):
-        # Otherwise the result depends on this machine's /sys/class/net.
-        with patch.object(config_helper, 'interface_is_up', return_value=True):
+        # Otherwise the result depends on this machine's /sys/class/net and routes.
+        with patch.object(config_helper, 'interface_is_up', return_value=True), \
+             patch.object(config_helper, 'default_route_ports', return_value=set()):
             yield
+
+    @pytest.mark.unit
+    def test_the_port_carrying_the_default_route_is_never_served(self, config_helper):
+        # A k8s master stored its plant uplink with dhcp on; serving it puts a
+        # rogue DHCP server on the plant network.
+        uplink = {'iname': 'eno1', 'ip': '192.168.10.45'}
+        cameras = {'iname': 'ens1f1', 'ip': '192.168.13.10'}
+        with patch.object(config_helper.interfaces_db, 'find', return_value=[uplink, cameras]), \
+             patch.object(config_helper, 'default_route_ports', return_value={'eno1'}), \
+             patch.object(config_helper, 'add_ports_to_env') as env, \
+             patch.object(config_helper, 'write_interfaces_config'), \
+             patch.object(config_helper, 'setup_port_subnets') as subnets, \
+             patch.object(config_helper, 'restart_service'), \
+             patch.object(config_helper, 'stop_service'):
+            config_helper.set_dhcp()
+
+        env.assert_called_once_with([cameras])
+        subnets.assert_called_once_with([cameras])
+
 
     @pytest.mark.unit
     def test_a_port_that_is_down_is_not_handed_to_dhcpd(self, config_helper):
@@ -1317,6 +1337,19 @@ class TestSetDhcp:
             config_helper.set_dhcp()
 
         find.assert_called_once_with({'dhcp': True})
+
+
+class TestDefaultRoutePorts:
+    @pytest.mark.unit
+    def test_default_route_ports_reads_ip_route(self, config_helper):
+        out = '[{"dst":"default","gateway":"192.168.10.1","dev":"eno1"}]'
+        with patch.object(config_helper.subprocess, 'run', return_value=MagicMock(stdout=out)):
+            assert config_helper.default_route_ports() == {'eno1'}
+
+    @pytest.mark.unit
+    def test_default_route_ports_is_empty_when_ip_fails(self, config_helper):
+        with patch.object(config_helper.subprocess, 'run', side_effect=OSError):
+            assert config_helper.default_route_ports() == set()
 
 
 # --------------------------------------------------------------------------

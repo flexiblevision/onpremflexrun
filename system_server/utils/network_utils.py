@@ -34,8 +34,12 @@ def get_interface_name_ref():
         interface_name = get_eth_port_names()[-1]
     return interface_name
 
+# fv-net-init.yaml writes only addresses and MTU, so a file carrying any of
+# these is the machine's uplink and deleting it strands the box.
+UPLINK_KEYS = ('gateway4:', 'gateway6:', 'routes:', 'nameservers:')
+
 def remove_conflicting_netplans():
-    """Remove conflicting ethernet netplan configs, preserving wifi configs."""
+    """Remove conflicting ethernet netplan configs, preserving wifi and uplink configs."""
     netplan_dir = '/etc/netplan/'
     if not os.path.exists(netplan_dir):
         return
@@ -45,7 +49,10 @@ def remove_conflicting_netplans():
             try:
                 with open(filepath, 'r') as fh:
                     contents = fh.read()
-                if 'wifis:' in contents:
+                if 'wifis:' in contents or 'ethernets:' not in contents:
+                    continue
+                if any(key in contents for key in UPLINK_KEYS):
+                    print(f'Kept netplan with routing or DNS: {filepath}')
                     continue
                 os.remove(filepath)
                 print(f'Removed conflicting netplan: {filepath}')
