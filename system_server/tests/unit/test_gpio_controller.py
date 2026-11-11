@@ -447,6 +447,17 @@ class TestDefaultPinState:
 
     @pytest.mark.unit
     @pytest.mark.gpio
+    def test_an_output_left_on_by_the_last_run_is_recorded_off(self, gpio, pins):
+        pins.find_one.return_value = {'type': 'gpio_pin_state', 'GPO3': True}
+        gpio.cur_pin_state['GPO3'] = True
+
+        gpio.default_pin_state()
+
+        assert gpio.cur_pin_state['GPO3'] is False
+        assert pins.update_one.call_args[0][1]['$set']['GPO3'] is False
+
+    @pytest.mark.unit
+    @pytest.mark.gpio
     def test_the_view_is_notified(self, gpio, emit):
         gpio.default_pin_state()
         emit.assert_called()

@@ -221,7 +221,8 @@ class GPIO:
         for gpi in range(1,9):
             self.cur_pin_state['GPI'+str(gpi)] = False
 
-        self.cur_pin_state = pin_state_ref.find_one(self.state_query) or self.cur_pin_state
+        # Save the reset rather than reload the last run: reloading kept outputs
+        # recorded on that had just been driven off.
         pin_state_ref.update_one(self.state_query, {'$set': self.cur_pin_state}, True)
         self._emit_pin_state_update() # Emit update to frontend
 
