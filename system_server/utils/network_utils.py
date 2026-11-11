@@ -152,10 +152,12 @@ def set_static_ips(network=None):
     apply_netplan([{'iname': interface_name, 'ip_string': ip_string}])
 
 def set_ips(settings):
+    from helpers.config_helper import interface_is_up, set_dhcp
     store_netplan_settings(settings)
+    # Read before netplan apply resets them: after it, every port looks unplugged.
+    linked = [n for n in get_eth_port_names() if interface_is_up(n)]
     build_set_netplan()
-    from helpers.config_helper import set_dhcp
-    set_dhcp()
+    set_dhcp(wait_for=linked)
 
 def build_set_netplan():
     import json

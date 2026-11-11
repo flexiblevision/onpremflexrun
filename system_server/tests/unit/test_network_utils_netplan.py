@@ -292,11 +292,32 @@ class TestSetIps:
                           side_effect=lambda c: order.append('store')), \
              patch.object(nu, 'build_set_netplan',
                           side_effect=lambda: order.append('build')), \
+             patch.object(nu, 'get_eth_port_names', return_value=['enp1s0']), \
+             patch('helpers.config_helper.interface_is_up', return_value=True), \
              patch('helpers.config_helper.set_dhcp',
-                   side_effect=lambda: order.append('dhcp')):
+                   side_effect=lambda **k: order.append('dhcp')):
             nu.set_ips({'lanPort': 'enp1s0', 'ip': '192.168.20.1', 'dhcp': False})
 
         assert order == ['store', 'build', 'dhcp']
+
+    @pytest.mark.unit
+    def test_dhcp_waits_for_the_ports_that_were_linked_before_the_apply(self):
+        # netplan apply drops every link; judged straight after, they all look
+        # unplugged and dhcpd was written with no ports.
+        linked = {'enp7s0': True, 'enp8s0': True, 'enp6s0': False}
+        state = {'applied': False}
+
+        def is_up(name):
+            return linked[name] and not state['applied']
+
+        with patch.object(nu, 'store_netplan_settings'), \
+             patch.object(nu, 'build_set_netplan', side_effect=lambda: state.update(applied=True)), \
+             patch.object(nu, 'get_eth_port_names', return_value=list(linked)), \
+             patch('helpers.config_helper.interface_is_up', side_effect=is_up), \
+             patch('helpers.config_helper.set_dhcp') as set_dhcp:
+            nu.set_ips({'lanPort': 'enp8s0', 'ip': '192.168.10.10', 'dhcp': True})
+
+        set_dhcp.assert_called_once_with(wait_for=['enp7s0', 'enp8s0'])
 
 
 class TestGetLanIps:
