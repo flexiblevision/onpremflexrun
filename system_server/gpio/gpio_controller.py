@@ -115,8 +115,10 @@ class GPIO:
         return rc
 
     def toggle_output_pin(self, pin):
+        # Flip the recorded state, not read_gpo: on some boards (VC610) the output
+        # readback is always 1, so every toggle drove the pin on and none drove it off.
         with gpio_lock:
-            on = self._read_gpo(pin) != 0
+            on = not self.cur_pin_state.get(f'GPO{pin}', False)
             self._set_gpio(1, pin, 0 if on else 1)
         self._record_outputs({f'GPO{pin}': on})
         return on
