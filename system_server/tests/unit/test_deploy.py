@@ -552,6 +552,12 @@ class TestStep3:
 
 
 class TestMain:
+    # Real dependency repair would run pip under sudo against this machine.
+    @pytest.fixture(autouse=True)
+    def _deps_ok(self):
+        with patch.object(deploy, 'ensure_python_deps', return_value=0):
+            yield
+
     @pytest.mark.unit
     def test_runs_all_three_steps_on_linux(self):
         with patch('platform.system', return_value='Linux'), \
@@ -734,6 +740,35 @@ class TestAsRoot:
 
 
 class TestEnsurePythonDeps:
+    @pytest.fixture(autouse=True)
+    def _no_real_site_dirs(self):
+        with patch.object(deploy, '_pip_site_dirs', return_value=[]):
+            yield
+
+    @pytest.mark.unit
+    def test_stale_metadata_is_pruned_even_when_imports_work(self, tmp_path):
+        """The .14 failure: pip installed werkzeug 3.0.3 cleanly, but the 1.0.1
+        dist-info it left made flask-restx import BaseResponse. Imports of the
+        probe can succeed while the server still dies, so prune first."""
+        old = tmp_path / 'Werkzeug-1.0.1.dist-info'
+        new = tmp_path / 'werkzeug-3.0.3.dist-info'
+        old.mkdir()
+        new.mkdir()
+        os.utime(old, (1000, 1000))
+
+        with patch.object(deploy, '_pip_site_dirs', return_value=[str(tmp_path)]), \
+             patch.object(deploy, 'probe_python_deps', return_value=(True, '')), \
+             patch.object(deploy.os, 'geteuid', return_value=0):
+            assert deploy.ensure_python_deps() == 0
+
+        assert not old.exists()
+        assert new.exists()
+
+    @pytest.mark.unit
+    def test_the_probe_imports_what_the_server_imports(self):
+        imported = {m.strip() for m in deploy.DEPS_PROBE.replace('import', '').split(',')}
+        assert {'requests', 'flask', 'flask_restx'} <= imported
+
     @pytest.mark.unit
     def test_a_working_environment_installs_nothing(self):
         with patch.object(deploy, 'probe_python_deps', return_value=(True, '')), \
@@ -873,6 +908,62 @@ class TestPurgePackages:
         assert not (tmp_path / 'charset_normalizer').exists()
         assert not list(tmp_path.glob('charset_normalizer-*.dist-info'))
         assert (tmp_path / 'requests').exists()
+
+
+class TestStaleMetadata:
+    def _meta(self, site_dir, name, mtime):
+        path = site_dir / name
+        path.mkdir()
+        os.utime(path, (mtime, mtime))
+        return str(path)
+
+    @pytest.mark.unit
+    def test_the_newest_install_wins_not_the_highest_version(self, tmp_path):
+        """charset-normalizer is pinned below what was there before. Keeping
+        the higher version would leave metadata for files no longer on disk."""
+        older = self._meta(tmp_path, 'charset_normalizer-3.4.1.dist-info', 1000)
+        self._meta(tmp_path, 'charset_normalizer-3.3.2.dist-info', 2000)
+
+        assert deploy.stale_metadata([str(tmp_path)]) == [older]
+
+    @pytest.mark.unit
+    def test_names_match_across_case_and_separators(self, tmp_path):
+        stale = [self._meta(tmp_path, 'Werkzeug-1.0.1.dist-info', 1000),
+                 self._meta(tmp_path, 'Flask_RESTful-0.3.6-py3.8.egg-info', 1000)]
+        self._meta(tmp_path, 'werkzeug-3.0.3.dist-info', 2000)
+        self._meta(tmp_path, 'flask-restful-0.3.7.dist-info', 2000)
+
+        assert deploy.stale_metadata([str(tmp_path)]) == sorted(stale)
+
+    @pytest.mark.unit
+    def test_single_installs_and_other_packages_are_left_alone(self, tmp_path):
+        self._meta(tmp_path, 'flask-2.3.3.dist-info', 1000)
+        self._meta(tmp_path, 'flask_restx-1.3.0.dist-info', 1000)
+        self._meta(tmp_path, 'flask_cors-3.0.8.dist-info', 1000)
+        self._meta(tmp_path, 'mypkg.egg-info', 1000)
+        (tmp_path / 'flask').mkdir()
+
+        assert deploy.stale_metadata([str(tmp_path)]) == []
+
+    @pytest.mark.unit
+    def test_duplicates_in_different_directories_are_not_stale(self, tmp_path):
+        """/usr/local shadowing an apt copy in /usr/lib is normal."""
+        local, system = tmp_path / 'local', tmp_path / 'system'
+        local.mkdir()
+        system.mkdir()
+        self._meta(local, 'requests-2.31.0.dist-info', 2000)
+        self._meta(system, 'requests-2.22.0.egg-info', 1000)
+
+        assert deploy.stale_metadata([str(local), str(system)]) == []
+
+    @pytest.mark.unit
+    def test_prune_skips_dpkg_owned_directories(self):
+        with patch.object(deploy, '_pip_site_dirs',
+                          return_value=['/usr/lib/python3/dist-packages']), \
+             patch.object(deploy, 'stale_metadata', return_value=[]) as stale:
+            deploy.prune_stale_metadata()
+
+        stale.assert_called_once_with([])
 
 
 class TestEnsurePip:

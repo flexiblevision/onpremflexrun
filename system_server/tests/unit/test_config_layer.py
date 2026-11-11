@@ -15,7 +15,7 @@ import os
 import subprocess
 import sys
 import pytest
-from unittest.mock import patch, MagicMock, call
+from unittest.mock import patch, MagicMock, call, mock_open
 
 import cloud_env
 
@@ -1236,19 +1236,45 @@ class TestServiceControl:
         ]
 
 
+@pytest.fixture
+def dhcp_host(config_helper, tmp_path, monkeypatch):
+    # Otherwise the result depends on this machine's /sys/class/net and routes.
+    monkeypatch.setattr(config_helper, 'LOCK_PATH', str(tmp_path / 'dhcp.lock'))
+    with patch.object(config_helper, 'port_ready', return_value=True), \
+         patch.object(config_helper, 'default_route_ports', return_value=set()):
+        yield
+
+
 class TestSetDhcp:
     @pytest.fixture(autouse=True)
-    def ports_up(self, config_helper):
-        # Otherwise the result depends on this machine's /sys/class/net.
-        with patch.object(config_helper, 'interface_is_up', return_value=True):
-            yield
+    def ports_up(self, dhcp_host):
+        yield
+
+    @pytest.mark.unit
+    def test_the_port_carrying_the_default_route_is_never_served(self, config_helper):
+        # A k8s master stored its plant uplink with dhcp on; serving it puts a
+        # rogue DHCP server on the plant network.
+        uplink = {'iname': 'eno1', 'ip': '192.168.10.45'}
+        cameras = {'iname': 'ens1f1', 'ip': '192.168.13.10'}
+        with patch.object(config_helper.interfaces_db, 'find', return_value=[uplink, cameras]), \
+             patch.object(config_helper, 'default_route_ports', return_value={'eno1'}), \
+             patch.object(config_helper, 'add_ports_to_env') as env, \
+             patch.object(config_helper, 'write_interfaces_config'), \
+             patch.object(config_helper, 'setup_port_subnets') as subnets, \
+             patch.object(config_helper, 'restart_service'), \
+             patch.object(config_helper, 'stop_service'):
+            config_helper.set_dhcp()
+
+        env.assert_called_once_with([cameras])
+        subnets.assert_called_once_with([cameras])
+
 
     @pytest.mark.unit
     def test_a_port_that_is_down_is_not_handed_to_dhcpd(self, config_helper):
         up = {'iname': 'enp1s0', 'ip': '192.168.20.1'}
         down = {'iname': 'enp2s0', 'ip': '192.168.30.1'}
         with patch.object(config_helper.interfaces_db, 'find', return_value=[up, down]), \
-             patch.object(config_helper, 'interface_is_up', side_effect=lambda n: n == 'enp1s0'), \
+             patch.object(config_helper, 'port_ready', side_effect=lambda n: n == 'enp1s0'), \
              patch.object(config_helper, 'add_ports_to_env') as env, \
              patch.object(config_helper, 'write_interfaces_config'), \
              patch.object(config_helper, 'setup_port_subnets') as subnets, \
@@ -1264,7 +1290,7 @@ class TestSetDhcp:
     def test_all_ports_down_stops_rather_than_restarts(self, config_helper):
         with patch.object(config_helper.interfaces_db, 'find',
                           return_value=[{'iname': 'enp1s0', 'ip': '192.168.20.1'}]), \
-             patch.object(config_helper, 'interface_is_up', return_value=False), \
+             patch.object(config_helper, 'port_ready', return_value=False), \
              patch.object(config_helper, 'add_ports_to_env'), \
              patch.object(config_helper, 'write_interfaces_config'), \
              patch.object(config_helper, 'setup_port_subnets'), \
@@ -1317,6 +1343,165 @@ class TestSetDhcp:
             config_helper.set_dhcp()
 
         find.assert_called_once_with({'dhcp': True})
+
+    @pytest.mark.unit
+    def test_only_expected_dhcp_ports_are_waited_for(self, config_helper):
+        stored = [{'iname': 'enp7s0', 'ip': '192.168.9.10'},
+                  {'iname': 'enp6s0', 'ip': '192.168.8.10'}]
+        with patch.object(config_helper.interfaces_db, 'find', return_value=stored), \
+             patch.object(config_helper, 'wait_for_ports', return_value=True) as wait, \
+             patch.object(config_helper, '_serve') as serve:
+            config_helper.set_dhcp(wait_for=['enp7s0', 'enp3s0'])
+
+        wait.assert_called_once_with(['enp7s0'])
+        serve.assert_called_once_with(stored)
+
+    @pytest.mark.unit
+    def test_no_wait_when_no_dhcp_port_had_a_link(self, config_helper):
+        with patch.object(config_helper.interfaces_db, 'find',
+                          return_value=[{'iname': 'enp6s0', 'ip': '192.168.8.10'}]), \
+             patch.object(config_helper, 'wait_for_ports') as wait, \
+             patch.object(config_helper, '_serve'):
+            config_helper.set_dhcp(wait_for=['enp3s0'])
+
+        wait.assert_not_called()
+
+    @pytest.mark.unit
+    def test_a_port_that_never_returns_is_still_written_without_it(self, config_helper):
+        with patch.object(config_helper.interfaces_db, 'find',
+                          return_value=[{'iname': 'enp7s0', 'ip': '192.168.9.10'}]), \
+             patch.object(config_helper, 'wait_for_ports', return_value=False), \
+             patch.object(config_helper, '_serve') as serve:
+            config_helper.set_dhcp(wait_for=['enp7s0'])
+
+        serve.assert_called_once()
+
+
+class TestWaitForPorts:
+    @pytest.fixture
+    def clock(self, config_helper):
+        now = {'t': 0.0}
+        with patch.object(config_helper.time, 'monotonic', side_effect=lambda: now['t']), \
+             patch.object(config_helper.time, 'sleep',
+                          side_effect=lambda s: now.__setitem__('t', now['t'] + s)):
+            yield now
+
+    @pytest.mark.unit
+    def test_returns_once_ports_have_stayed_ready(self, config_helper, clock):
+        with patch.object(config_helper, 'port_ready', return_value=True):
+            assert config_helper.wait_for_ports(['enp7s0'], timeout=20, settle=3) is True
+        assert 3 <= clock['t'] < 4
+
+    @pytest.mark.unit
+    def test_a_flap_restarts_the_settle_window(self, config_helper, clock):
+        # Seen on site: up, down a second later, back 3s after that.
+        def ready(name):
+            return not (1 <= clock['t'] < 4)
+
+        with patch.object(config_helper, 'port_ready', side_effect=ready):
+            assert config_helper.wait_for_ports(['enp7s0'], timeout=20, settle=3) is True
+        assert clock['t'] >= 7
+
+    @pytest.mark.unit
+    def test_gives_up_at_the_timeout(self, config_helper, clock):
+        with patch.object(config_helper, 'port_ready', return_value=False):
+            assert config_helper.wait_for_ports(['enp7s0'], timeout=5, settle=3) is False
+        assert clock['t'] <= 6
+
+
+class TestPortReady:
+    @pytest.mark.unit
+    def test_an_address_on_the_port_counts(self, config_helper):
+        out = '[{"ifname":"enp7s0","addr_info":[{"family":"inet","local":"192.168.9.10"}]}]'
+        with patch.object(config_helper.subprocess, 'run', return_value=MagicMock(stdout=out)):
+            assert config_helper.has_ipv4('enp7s0') is True
+
+    @pytest.mark.unit
+    def test_a_port_stripped_of_its_address_does_not(self, config_helper):
+        out = '[{"ifname":"enp6s0","addr_info":[]}]'
+        with patch.object(config_helper.subprocess, 'run', return_value=MagicMock(stdout=out)):
+            assert config_helper.has_ipv4('enp6s0') is False
+
+    @pytest.mark.unit
+    def test_link_up_without_an_address_is_not_ready(self, config_helper):
+        with patch.object(config_helper, 'interface_is_up', return_value=True), \
+             patch.object(config_helper, 'has_ipv4', return_value=False):
+            assert config_helper.port_ready('enp6s0') is False
+
+
+class TestReconcileDhcp:
+    CAMERAS = [{'iname': 'enp7s0', 'ip': '192.168.9.10'},
+               {'iname': 'enp8s0', 'ip': '192.168.10.10'}]
+
+    @pytest.fixture(autouse=True)
+    def host(self, dhcp_host):
+        yield
+
+    def _run(self, config_helper, served, active, stored=None):
+        with patch.object(config_helper.interfaces_db, 'find',
+                          return_value=self.CAMERAS if stored is None else stored), \
+             patch.object(config_helper, 'served_ports', return_value=served), \
+             patch.object(config_helper, 'service_active', return_value=active), \
+             patch.object(config_helper, '_serve') as serve:
+            acted = config_helper.reconcile_dhcp()
+        return acted, serve
+
+    @pytest.mark.unit
+    def test_does_nothing_while_every_ready_port_is_served(self, config_helper):
+        acted, serve = self._run(config_helper, {'enp7s0', 'enp8s0'}, True)
+        assert acted is False
+        serve.assert_not_called()
+
+    @pytest.mark.unit
+    def test_serves_a_ready_port_that_dhcpd_was_written_without(self, config_helper):
+        # The state a site was left in: links back, dhcpd stopped with no ports.
+        acted, serve = self._run(config_helper, set(), False)
+        assert acted is True
+        serve.assert_called_once_with(self.CAMERAS)
+
+    @pytest.mark.unit
+    def test_restarts_a_stopped_service_even_if_the_files_are_right(self, config_helper):
+        acted, _ = self._run(config_helper, {'enp7s0', 'enp8s0'}, False)
+        assert acted is True
+
+    @pytest.mark.unit
+    def test_a_port_without_a_usable_subnet_does_not_cause_restarts(self, config_helper):
+        acted, _ = self._run(config_helper, set(), False,
+                             stored=[{'iname': 'enp7s0', 'ip': 'garbage'}])
+        assert acted is False
+
+    @pytest.mark.unit
+    def test_steps_aside_while_a_save_holds_the_lock(self, config_helper):
+        with config_helper.dhcp_lock():
+            acted, serve = self._run(config_helper, set(), False)
+        assert acted is False
+        serve.assert_not_called()
+
+
+class TestServedPorts:
+    @pytest.mark.unit
+    def test_reads_the_interfaces_dhcpd_was_given(self, config_helper):
+        body = '# Defaults\n\nINTERFACESv4="enp7s0 enp8s0"\nINTERFACESv6=""'
+        with patch('builtins.open', mock_open(read_data=body)):
+            assert config_helper.served_ports() == {'enp7s0', 'enp8s0'}
+
+    @pytest.mark.unit
+    def test_an_empty_list_is_no_ports(self, config_helper):
+        with patch('builtins.open', mock_open(read_data='INTERFACESv4=""\n')):
+            assert config_helper.served_ports() == set()
+
+
+class TestDefaultRoutePorts:
+    @pytest.mark.unit
+    def test_default_route_ports_reads_ip_route(self, config_helper):
+        out = '[{"dst":"default","gateway":"192.168.10.1","dev":"eno1"}]'
+        with patch.object(config_helper.subprocess, 'run', return_value=MagicMock(stdout=out)):
+            assert config_helper.default_route_ports() == {'eno1'}
+
+    @pytest.mark.unit
+    def test_default_route_ports_is_empty_when_ip_fails(self, config_helper):
+        with patch.object(config_helper.subprocess, 'run', side_effect=OSError):
+            assert config_helper.default_route_ports() == set()
 
 
 # --------------------------------------------------------------------------
