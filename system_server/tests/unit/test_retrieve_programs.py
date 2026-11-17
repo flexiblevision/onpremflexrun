@@ -151,10 +151,29 @@ class TestRetrievePrograms:
         retrieve_programs(resp_data, 'test_token')
 
         # Verify URL construction with pagination and use_latest flag
-        expected_url = f'{CLOUD_DOMAIN}/api/capture/programs/project123/0/9999?use_latest=true'
+        expected_url = f'{CLOUD_DOMAIN}/api/capture/programs/project123/0/99?use_latest=true'
         mock_get.assert_called_once()
         call_args = mock_get.call_args[0]
         assert expected_url in str(call_args)
+
+    @pytest.mark.unit
+    @patch('worker_scripts.retrieve_programs.programs_collection')
+    @patch('requests.get')
+    def test_retrieve_programs_pages_past_the_cloud_cap(self, mock_get, mock_programs_collection):
+        from worker_scripts.retrieve_programs import retrieve_programs
+
+        programs = [{'id': 'p%d' % i, 'model': 'M'} for i in range(150)]
+        first, second = MagicMock(), MagicMock()
+        first.json.return_value = {'count': 150, 'records': programs[:99]}
+        second.json.return_value = {'count': 150, 'records': programs[99:]}
+        mock_get.side_effect = [first, second]
+
+        retrieve_programs({'models': {'project1': {}}}, 'test_token')
+
+        assert mock_programs_collection.update_one.call_count == 150
+        urls = [c[0][0] for c in mock_get.call_args_list]
+        assert urls[0].endswith('/project1/0/99?use_latest=true')
+        assert urls[1].endswith('/project1/99/99?use_latest=true')
 
     @pytest.mark.unit
     @patch('worker_scripts.retrieve_programs.programs_collection')
@@ -436,9 +455,8 @@ class TestPaginationAndFiltering:
 
         retrieve_programs(resp_data, 'test_token')
 
-        # Check URL includes pagination (0/9999)
         call_args = str(mock_get.call_args)
-        assert '/0/9999' in call_args
+        assert '/0/99?' in call_args
 
     @pytest.mark.unit
     @patch('worker_scripts.retrieve_programs.programs_collection')

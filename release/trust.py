@@ -33,12 +33,15 @@ def fingerprint(pem_bytes):
     re-wrapping or a changed trailing newline does not change the id.
     """
     try:
+        from cryptography.hazmat.backends import default_backend
         from cryptography.hazmat.primitives import serialization
     except ImportError as exc:
         raise TrustError('cryptography is required to read keys: {}'.format(exc))
 
     try:
-        key = serialization.load_pem_public_key(pem_bytes)
+        # Keys are provisioned before pip runs, under Ubuntu 20.04's cryptography
+        # 2.8, which requires backend.
+        key = serialization.load_pem_public_key(pem_bytes, backend=default_backend())
         der = key.public_bytes(serialization.Encoding.DER,
                                serialization.PublicFormat.SubjectPublicKeyInfo)
     except (ValueError, TypeError) as exc:

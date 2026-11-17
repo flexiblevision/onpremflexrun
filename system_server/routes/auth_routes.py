@@ -44,6 +44,10 @@ class AuthToken(Resource):
                     server_ip = 'http://' + server_ip
                 settings.config['cloud_domain'] = server_ip
                 write_settings_to_config()
+                # cloud_env reads client_mode.master_ip ahead of cloud_domain, so a
+                # stale one would keep the device on the old master.
+                utils_db.update_one({'type': 'client_mode'},
+                                    {'$set': {'config.master_ip': server_ip.split('://', 1)[1].rstrip('/')}})
             os.system('echo '+j['refresh_token']+' > '+os.environ['HOME']+'/flex-run/system_server/creds.txt')
             return True
         return False

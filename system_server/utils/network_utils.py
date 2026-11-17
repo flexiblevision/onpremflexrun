@@ -10,8 +10,11 @@ interfaces_db = client["fvonprem"]["interfaces"]
 
 JUMBO_MTU = 9000
 STANDARD_MTU = 1500
-# ICMP payload that fills a jumbo frame: 20 bytes IP header, 8 ICMP
+# ICMP payloads that fill a frame: 20 bytes IP header, 8 ICMP
 JUMBO_PROBE = JUMBO_MTU - 28
+STANDARD_PROBE = STANDARD_MTU - 28
+# Stored with a fallback. Fallbacks from an older probe are tested again.
+MTU_PROBE = 2
 
 def is_valid_ip(ip):
     if not ip: return False
@@ -31,8 +34,12 @@ def get_interface_name_ref():
         interface_name = get_eth_port_names()[-1]
     return interface_name
 
+# fv-net-init.yaml writes only addresses and MTU, so a file carrying any of
+# these is the machine's uplink and deleting it strands the box.
+UPLINK_KEYS = ('gateway4:', 'gateway6:', 'routes:', 'nameservers:')
+
 def remove_conflicting_netplans():
-    """Remove conflicting ethernet netplan configs, preserving wifi configs."""
+    """Remove conflicting ethernet netplan configs, preserving wifi and uplink configs."""
     netplan_dir = '/etc/netplan/'
     if not os.path.exists(netplan_dir):
         return
@@ -42,7 +49,10 @@ def remove_conflicting_netplans():
             try:
                 with open(filepath, 'r') as fh:
                     contents = fh.read()
-                if 'wifis:' in contents:
+                if 'wifis:' in contents or 'ethernets:' not in contents:
+                    continue
+                if any(key in contents for key in UPLINK_KEYS):
+                    print(f'Kept netplan with routing or DNS: {filepath}')
                     continue
                 os.remove(filepath)
                 print(f'Removed conflicting netplan: {filepath}')
@@ -80,6 +90,11 @@ def carries_jumbo(iname, peer):
     # A peer that does not answer at all says nothing about the MTU. Retried
     # because the link renegotiates after netplan apply.
     if not _ping(iname, peer, tries=5):
+        return True
+    # Basler GigE cameras ignore pings past a few hundred bytes yet stream
+    # jumbo frames, so only a peer that echoes a full standard frame can show
+    # the link drops jumbo.
+    if not _ping(iname, peer, STANDARD_PROBE, tries=2):
         return True
     return _ping(iname, peer, JUMBO_PROBE, tries=2)
 
@@ -119,7 +134,8 @@ def apply_netplan(stanzas):
         print('{} drops jumbo frames, using MTU {}'.format(s['iname'], STANDARD_MTU))
         s['mtu'] = STANDARD_MTU
         # Stored so the next rebuild does not go back to 9000 and break the link again.
-        interfaces_db.update_one({'iname': s['iname']}, {'$set': {'mtu': STANDARD_MTU}})
+        interfaces_db.update_one({'iname': s['iname']},
+                                 {'$set': {'mtu': STANDARD_MTU, 'mtu_probe': MTU_PROBE}})
     _write_netplan(stanzas)
 
 def set_static_ips(network=None):
@@ -136,10 +152,12 @@ def set_static_ips(network=None):
     apply_netplan([{'iname': interface_name, 'ip_string': ip_string}])
 
 def set_ips(settings):
+    from helpers.config_helper import interface_is_up, set_dhcp
     store_netplan_settings(settings)
+    # Read before netplan apply resets them: after it, every port looks unplugged.
+    linked = [n for n in get_eth_port_names() if interface_is_up(n)]
     build_set_netplan()
-    from helpers.config_helper import set_dhcp
-    set_dhcp()
+    set_dhcp(wait_for=linked)
 
 def build_set_netplan():
     import json
@@ -151,7 +169,8 @@ def build_set_netplan():
 
     if os.path.exists('/etc/netplan/'):
         remove_conflicting_netplans()
-        apply_netplan([{'iname': i['iname'], 'ip_string': i['ip_string'], 'mtu': i.get('mtu')}
+        apply_netplan([{'iname': i['iname'], 'ip_string': i['ip_string'],
+                        'mtu': i.get('mtu') if i.get('mtu_probe') == MTU_PROBE else None}
                        for i in interfaces])
     else:
         print('netplan path does not exist')

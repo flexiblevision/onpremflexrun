@@ -8,6 +8,7 @@ import os
 import json
 import time
 import platform
+import re
 from setup.management import generate_environment_config
 
 def clear_text_color():
@@ -458,7 +459,9 @@ def setup_wifi():
 REQUIREMENTS = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                             'requirements.txt')
 
-DEPS_PROBE = 'import requests'
+# What the system server and workers import at startup.
+DEPS_PROBE = ('import requests, flask, flask_restx, flask_cors, flask_socketio, '
+              'redis, rq')
 
 DEPS_FAILED = 25
 
@@ -548,6 +551,48 @@ def purge_packages(packages):
     return removed
 
 
+_METADATA_RE = re.compile(
+    r'^(?P<name>.+?)-(?P<version>\d[^-]*)(-py\d[^-]*)?\.(dist|egg)-info$')
+
+
+def stale_metadata(site_dirs):
+    """Metadata a later install of the same package in the same dir replaced.
+
+    --ignore-installed never uninstalls, so importlib.metadata can report the
+    old version (flask-restx then imports werkzeug's removed BaseResponse).
+    Newest wins, not highest: a pin may have moved backwards.
+    """
+    stale = []
+    for site_dir in site_dirs:
+        groups = {}
+        for entry in os.listdir(site_dir):
+            match = _METADATA_RE.match(entry)
+            if not match:
+                continue
+            key = re.sub(r'[-_.]+', '-', match.group('name')).lower()
+            groups.setdefault(key, []).append(os.path.join(site_dir, entry))
+        for paths in groups.values():
+            if len(paths) > 1:
+                paths.sort(key=os.path.getmtime)
+                stale.extend(paths[:-1])
+    return sorted(stale)
+
+
+def prune_stale_metadata():
+    # dpkg owns /usr/lib; pip never writes there as root on these devices.
+    site_dirs = [d for d in _pip_site_dirs() if not d.startswith('/usr/lib/')]
+    removed = []
+    for path in stale_metadata(site_dirs):
+        if subprocess.call(_as_root(['rm', '-rf', path])) == 0:
+            removed.append(path)
+    if removed:
+        print("\033[0;33mRemoved metadata left by replaced package versions:")
+        for path in removed:
+            print("\033[0;33m  - {}".format(path))
+        clear_text_color()
+    return removed
+
+
 def pip_argv():
     """pip as this interpreter, with --break-system-packages where supported."""
     argv = [sys.executable, '-m', 'pip', 'install']
@@ -583,6 +628,7 @@ def ensure_pip():
 
 def ensure_python_deps():
     """Install what step_2 imports, before step_2 imports it."""
+    prune_stale_metadata()
     ok, detail = probe_python_deps()
     if ok:
         return 0
@@ -610,6 +656,7 @@ def ensure_python_deps():
         clear_text_color()
         return DEPS_FAILED
 
+    prune_stale_metadata()
     ok, detail = probe_python_deps()
     if ok:
         print("\033[0;32mDependencies installed.")
@@ -631,6 +678,7 @@ def ensure_python_deps():
 
         code = subprocess.call(_as_root(pip_argv() + ['-r', REQUIREMENTS]))
         if code == 0:
+            prune_stale_metadata()
             ok, detail = probe_python_deps()
             if ok:
                 print("\033[0;32mDependencies repaired.")

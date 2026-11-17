@@ -245,17 +245,20 @@ class TestOutputCommands:
 
     @pytest.mark.unit
     @pytest.mark.gpio
-    def test_toggle_flips_the_hardware_state(self, gpio, driver, pins, emit):
+    def test_toggle_flips_the_recorded_state(self, gpio, driver, pins, emit):
+        # The VC610 reads every output back as 1 whatever was written.
+        driver.read_gpo.return_value = 1
+        gpio.cur_pin_state['GPO4'] = False
         driver.set_gpio.reset_mock()
-        driver.read_gpo.return_value = 1  # high = off
 
         assert gpio.toggle_output_pin(4) is True
         driver.set_gpio.assert_called_once_with(1, 4, 0)
+        assert gpio.cur_pin_state['GPO4'] is True
 
         driver.set_gpio.reset_mock()
-        driver.read_gpo.return_value = 0
         assert gpio.toggle_output_pin(4) is False
         driver.set_gpio.assert_called_once_with(1, 4, 1)
+        assert gpio.cur_pin_state['GPO4'] is False
 
     @pytest.mark.unit
     @pytest.mark.gpio
@@ -441,6 +444,17 @@ class TestDefaultPinState:
 
         assert pins.update_one.call_args[0][0] == {'type': 'gpio_pin_state'}
         assert pins.update_one.call_args[0][2] is True
+
+    @pytest.mark.unit
+    @pytest.mark.gpio
+    def test_an_output_left_on_by_the_last_run_is_recorded_off(self, gpio, pins):
+        pins.find_one.return_value = {'type': 'gpio_pin_state', 'GPO3': True}
+        gpio.cur_pin_state['GPO3'] = True
+
+        gpio.default_pin_state()
+
+        assert gpio.cur_pin_state['GPO3'] is False
+        assert pins.update_one.call_args[0][1]['$set']['GPO3'] is False
 
     @pytest.mark.unit
     @pytest.mark.gpio

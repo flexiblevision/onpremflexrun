@@ -41,6 +41,51 @@ class TestRemoveConflictingNetplans:
         remove.assert_not_called()
 
     @pytest.mark.unit
+    def test_a_hand_written_uplink_is_preserved(self, tmp_path):
+        # The only gateway and DNS on a microk8s master; fv-net-init cannot
+        # reproduce them.
+        uplink = tmp_path / '02-kubedns.yaml'
+        uplink.write_text(
+            'network:\n  version: 2\n  ethernets:\n    eno1:\n      dhcp4: False\n'
+            '      addresses: [192.168.10.45/24]\n      gateway4: 192.168.10.1\n'
+            '      nameservers:\n              addresses: [127.0.0.1,8.8.8.8]\n')
+
+        with patch.object(nu.os.path, 'exists', return_value=True), \
+             patch.object(nu.os, 'listdir', return_value=[uplink.name]), \
+             patch.object(nu.os.path, 'join', return_value=str(uplink)), \
+             patch.object(nu.os, 'remove') as remove:
+            nu.remove_conflicting_netplans()
+
+        remove.assert_not_called()
+
+    @pytest.mark.unit
+    @pytest.mark.parametrize('key', ['routes:', 'gateway6:'])
+    def test_any_routing_key_preserves_the_file(self, tmp_path, key):
+        f = tmp_path / '00-installer-config.yaml'
+        f.write_text('network:\n  ethernets:\n    eth0:\n      {}\n'.format(key))
+
+        with patch.object(nu.os.path, 'exists', return_value=True), \
+             patch.object(nu.os, 'listdir', return_value=[f.name]), \
+             patch.object(nu.os.path, 'join', return_value=str(f)), \
+             patch.object(nu.os, 'remove') as remove:
+            nu.remove_conflicting_netplans()
+
+        remove.assert_not_called()
+
+    @pytest.mark.unit
+    def test_a_renderer_only_config_is_preserved(self, tmp_path):
+        renderer = tmp_path / '01-network-manager-all.yaml'
+        renderer.write_text('network:\n  version: 2\n  renderer: NetworkManager\n')
+
+        with patch.object(nu.os.path, 'exists', return_value=True), \
+             patch.object(nu.os, 'listdir', return_value=[renderer.name]), \
+             patch.object(nu.os.path, 'join', return_value=str(renderer)), \
+             patch.object(nu.os, 'remove') as remove:
+            nu.remove_conflicting_netplans()
+
+        remove.assert_not_called()
+
+    @pytest.mark.unit
     def test_the_generated_config_is_never_removed(self):
         with patch.object(nu.os.path, 'exists', return_value=True), \
              patch.object(nu.os, 'listdir', return_value=['fv-net-init.yaml']), \
@@ -104,6 +149,24 @@ class TestBuildSetNetplan:
         assert 'addresses: [192.168.20.1/24]' in written
         assert written.count('mtu: 9000') == 2
 
+    def _mtus_passed(self, interfaces):
+        with patch.object(nu.interfaces_db, 'find', return_value=interfaces), \
+             patch.object(nu.os.path, 'exists', return_value=True), \
+             patch.object(nu, 'remove_conflicting_netplans'), \
+             patch.object(nu, 'apply_netplan') as apply:
+            nu.build_set_netplan()
+        return [s['mtu'] for s in apply.call_args[0][0]]
+
+    @pytest.mark.unit
+    def test_a_fallback_from_the_current_probe_is_kept(self):
+        assert self._mtus_passed([{'iname': 'enp9s0', 'ip_string': '[]', 'mtu': 1500,
+                                   'mtu_probe': nu.MTU_PROBE}]) == [1500]
+
+    @pytest.mark.unit
+    def test_a_fallback_from_an_older_probe_is_tested_again(self):
+        # Stored before cameras were told apart from links that drop jumbo.
+        assert self._mtus_passed([{'iname': 'enp7s0', 'ip_string': '[]', 'mtu': 1500}]) == [None]
+
     @pytest.mark.unit
     def test_conflicting_configs_are_cleared_first(self):
         # Applying on top of a conflicting config leaves the interface owned by
@@ -145,11 +208,12 @@ class TestBuildSetNetplan:
 
 
 class TestApplyNetplan:
-    def _run(self, stanzas, max_mtu=9194, peers=(), jumbo=True, small=True):
+    def _run(self, stanzas, max_mtu=9194, peers=(), jumbo=True, small=True, standard=True):
         writes = []
 
         def ping(cmd, **kw):
-            ok = jumbo if '-M' in cmd else small
+            size = int(cmd[cmd.index('-s') + 1]) if '-s' in cmd else None
+            ok = {None: small, nu.STANDARD_PROBE: standard, nu.JUMBO_PROBE: jumbo}[size]
             return MagicMock(returncode=0 if ok else 1)
 
         with patch.object(nu, 'max_mtu', return_value=max_mtu), \
@@ -188,7 +252,17 @@ class TestApplyNetplan:
         writes, update = self._run([{'iname': 'enp9s0', 'ip_string': '[]'}],
                                    peers=['192.168.9.20'], jumbo=False)
         assert writes == [[9000], [1500]]
-        update.assert_called_once_with({'iname': 'enp9s0'}, {'$set': {'mtu': 1500}})
+        update.assert_called_once_with({'iname': 'enp9s0'},
+                                       {'$set': {'mtu': 1500, 'mtu_probe': nu.MTU_PROBE}})
+
+    @pytest.mark.unit
+    def test_a_camera_that_ignores_large_pings_keeps_jumbo(self):
+        # Basler GigE cameras answer neither probe but stream jumbo frames. The
+        # old probe dropped their port to 1500 and the camera stopped streaming.
+        writes, update = self._run([{'iname': 'enp7s0', 'ip_string': '[]'}],
+                                   peers=['192.168.9.50'], standard=False, jumbo=False)
+        assert writes == [[9000]]
+        update.assert_not_called()
 
     @pytest.mark.unit
     def test_an_unreachable_peer_says_nothing_about_the_mtu(self):
@@ -218,11 +292,32 @@ class TestSetIps:
                           side_effect=lambda c: order.append('store')), \
              patch.object(nu, 'build_set_netplan',
                           side_effect=lambda: order.append('build')), \
+             patch.object(nu, 'get_eth_port_names', return_value=['enp1s0']), \
+             patch('helpers.config_helper.interface_is_up', return_value=True), \
              patch('helpers.config_helper.set_dhcp',
-                   side_effect=lambda: order.append('dhcp')):
+                   side_effect=lambda **k: order.append('dhcp')):
             nu.set_ips({'lanPort': 'enp1s0', 'ip': '192.168.20.1', 'dhcp': False})
 
         assert order == ['store', 'build', 'dhcp']
+
+    @pytest.mark.unit
+    def test_dhcp_waits_for_the_ports_that_were_linked_before_the_apply(self):
+        # netplan apply drops every link; judged straight after, they all look
+        # unplugged and dhcpd was written with no ports.
+        linked = {'enp7s0': True, 'enp8s0': True, 'enp6s0': False}
+        state = {'applied': False}
+
+        def is_up(name):
+            return linked[name] and not state['applied']
+
+        with patch.object(nu, 'store_netplan_settings'), \
+             patch.object(nu, 'build_set_netplan', side_effect=lambda: state.update(applied=True)), \
+             patch.object(nu, 'get_eth_port_names', return_value=list(linked)), \
+             patch('helpers.config_helper.interface_is_up', side_effect=is_up), \
+             patch('helpers.config_helper.set_dhcp') as set_dhcp:
+            nu.set_ips({'lanPort': 'enp8s0', 'ip': '192.168.10.10', 'dhcp': True})
+
+        set_dhcp.assert_called_once_with(wait_for=['enp7s0', 'enp8s0'])
 
 
 class TestGetLanIps:
