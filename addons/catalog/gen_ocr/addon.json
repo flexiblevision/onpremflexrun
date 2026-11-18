@@ -1,0 +1,35 @@
+{
+  "schema": "flexrun.addon/v1",
+  "name": "gen_ocr",
+  "label": "General OCR",
+  "description": "Reads printed, stamped and dot-peen text out of the box - no training needed. Used by the General OCR node in Nodecreator.",
+  "tier": "enterprise",
+  "entitlement": "ocr",
+  "kind": "container",
+  "arches": ["x86"],
+  "component": "gen-ocr",
+  "container": {
+    "name": "gen_ocr",
+    "default_tag": "prod",
+    "restart": "unless-stopped",
+    "gpu": "optional",
+    "ports": [{"host": 5003, "container": 5003}],
+    "log_opts": {"max-size": "50m", "max-file": "5"}
+  },
+  "health": {
+    "type": "http",
+    "host": "172.17.0.1",
+    "port": 5003,
+    "path": "/health",
+    "timeout": 2
+  },
+  "ui": {
+    "icon": "Translate",
+    "order": 11,
+    "manage": "toggle"
+  },
+  "legacy_routes": {
+    "manage": "/manage_gen_ocr",
+    "status": "/gen_ocr_status"
+  }
+}

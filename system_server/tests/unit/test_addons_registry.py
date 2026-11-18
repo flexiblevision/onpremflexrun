@@ -47,7 +47,8 @@ class TestShippedCatalog:
     def test_every_shipped_descriptor_is_valid(self):
         addons = registry.load()
         assert set(addons) == {'anomaly_audio', 'anomaly_visual', 'assembly',
-                               'client_mode', 'ftp', 'ocr', 'timemachine'}
+                               'client_mode', 'ftp', 'gen_ocr', 'ocr',
+                               'timemachine'}
 
     @pytest.mark.unit
     def test_the_release_components_are_the_container_addons(self):
@@ -56,6 +57,7 @@ class TestShippedCatalog:
             'anomaly_audio': 'waveform-service',
             'anomaly_visual': 'anomaly-server',
             'assembly': 'assembly-client',
+            'gen_ocr': 'gen-ocr',
             'ocr': 'ocr',
         }
 

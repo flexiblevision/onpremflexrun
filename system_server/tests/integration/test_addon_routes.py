@@ -114,7 +114,7 @@ class TestAddonList:
 
         assert {entry['name'] for entry in body} == {
             'anomaly_audio', 'anomaly_visual', 'assembly', 'client_mode',
-            'ftp', 'ocr', 'timemachine'}
+            'ftp', 'gen_ocr', 'ocr', 'timemachine'}
 
     @pytest.mark.integration
     def test_an_addon_with_no_image_for_this_arch_is_not_offered(self, client):
@@ -123,6 +123,7 @@ class TestAddonList:
 
         names = {entry['name'] for entry in body}
         assert 'ocr' not in names
+        assert 'gen_ocr' not in names
         # no arm-anomaly-server image is published either
         assert 'anomaly_visual' not in names
 

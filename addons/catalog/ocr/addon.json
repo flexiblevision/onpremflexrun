@@ -1,8 +1,8 @@
 {
   "schema": "flexrun.addon/v1",
   "name": "ocr",
-  "label": "OCR",
-  "description": "Optical character recognition service for capture pipelines.",
+  "label": "Custom OCR",
+  "description": "Reads text using an OCR model trained on your own parts. Used by OCR inspection projects.",
   "tier": "enterprise",
   "entitlement": "ocr",
   "kind": "container",
